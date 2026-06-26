@@ -9,7 +9,11 @@ const fa = {
     records: 'سوابق',
     settings: 'تنظیمات',
     admin: 'مدیریت',
-    logSheets: 'Log Sheet ها'
+    masterData: 'اطلاعات پایه',
+    logSheets: 'Log Sheet ها',
+    logSheetActive: 'لاگ شیت‌های باز',
+    logSheetHistory: 'سوابق لاگ شیت‌ها',
+    logSheetTemplates: 'قالب‌های Log Sheet'
   },
   nfc: {
     title: 'شناسایی Asset',
@@ -63,7 +67,7 @@ const fa = {
     saving: 'در حال ذخیره...'
   },
   admin: {
-    title: 'مدیریت',
+    title: 'اطلاعات پایه',
     assetTypes: 'کلاس‌ها',
     assetRegistry: 'Asset ها',
     addAssetType: 'افزودن کلاس',

@@ -1,8 +1,6 @@
 import {
   Box,
   Typography,
-  Tabs,
-  Tab,
   Card,
   CardContent,
   Button,
@@ -33,7 +31,8 @@ import {
   ListItemText,
   Radio,
   RadioGroup,
-  FormLabel
+  FormLabel,
+  Pagination
 } from '@mui/material'
 import Autocomplete from '@mui/material/Autocomplete'
 import AddIcon from '@mui/icons-material/Add'
@@ -44,13 +43,11 @@ import LocationOnIcon from '@mui/icons-material/LocationOn'
 import SettingsIcon from '@mui/icons-material/Settings'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import LabelIcon from '@mui/icons-material/Label'
-import AssignmentIcon from '@mui/icons-material/Assignment'
 import SearchIcon from '@mui/icons-material/Search'
 import { useState, useEffect } from 'react'
+import { useParams } from 'react-router-dom'
 import { useAssetClasses, useAssetEntries } from '@/hooks/useAssets'
 import { useLocations, usePlantSystems, useMainFunctions, useSubFunctions } from '@/hooks/useHierarchy'
-import { useLogSheetTemplates } from '@/hooks/useLogSheets'
-import { getAssetsInScope } from '@/services/storage'
 import { t } from '@/i18n'
 import type {
   AssetClass,
@@ -60,8 +57,7 @@ import type {
   Location,
   PlantSystem,
   MainFunction,
-  SubFunction,
-  LogSheetTemplate
+  SubFunction
 } from '@/types'
 
 const FIELD_TYPES: { value: FormFieldType; label: string }[] = [
@@ -364,11 +360,23 @@ function AssetClassDialog({ open, initial, onSave, onClose }: AssetClassDialogPr
 // Asset Classes tab (was AssetTypesTab)
 // ---------------------------------------------------------------------------
 
+const PAGE_SIZE = 20
+
 function AssetClassesTab() {
   const { assetClasses, addAssetClass, editAssetClass, removeAssetClass } = useAssetClasses()
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<AssetClass | undefined>()
   const [deleteTarget, setDeleteTarget] = useState<AssetClass | undefined>()
+
+  useEffect(() => setPage(1), [search])
+
+  const filtered = assetClasses.filter(cls =>
+    cls.name.toLowerCase().includes(search.toLowerCase())
+  )
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   const handleSave = async (data: { name: string; fields: FormField[] }) => {
     if (editing) {
@@ -392,11 +400,29 @@ function AssetClassesTab() {
         </Button>
       </Box>
 
+      <TextField
+        size="small"
+        placeholder="جستجو در نام کلاس..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        fullWidth
+        sx={{ mb: 1 }}
+        InputProps={{
+          startAdornment: <SearchIcon fontSize="small" sx={{ ml: 0.5, color: 'text.disabled', mr: 0.5 }} />
+        }}
+      />
+      <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+        {filtered.length} مورد{search ? ` از ${assetClasses.length}` : ''}
+      </Typography>
+
       {assetClasses.length === 0 ? (
         <Alert severity="info">{t.admin.noAssetTypes}</Alert>
+      ) : filtered.length === 0 ? (
+        <Alert severity="info">نتیجه‌ای یافت نشد</Alert>
       ) : (
+        <>
         <Stack spacing={1.5}>
-          {assetClasses.map(cls => (
+          {paginated.map(cls => (
             <Card
               key={cls.id}
               variant="outlined"
@@ -452,6 +478,13 @@ function AssetClassesTab() {
             </Card>
           ))}
         </Stack>
+
+        {totalPages > 1 && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+            <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+          </Box>
+        )}
+        </>
       )}
 
       <AssetClassDialog
@@ -631,12 +664,33 @@ function AssetRegistryTab() {
   const { assetClasses } = useAssetClasses()
   const { assetEntries, addAssetEntry, editAssetEntry, removeAssetEntry } = useAssetEntries()
   const { subFunctions } = useSubFunctions()
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<AssetEntry | undefined>()
   const [deleteTarget, setDeleteTarget] = useState<AssetEntry | undefined>()
 
+  useEffect(() => setPage(1), [search])
+
   const findClassName = (id: string) => assetClasses.find(c => c.id === id)?.name ?? t.common.unknown
   const findSubFunction = (id: string) => subFunctions.find(sf => sf.id === id)
+
+  const filtered = assetEntries.filter(entry => {
+    const q = search.toLowerCase()
+    if (!q) return true
+    const cls = findClassName(entry.classId).toLowerCase()
+    const sf = findSubFunction(entry.subFunctionId)
+    return (
+      entry.assetName.toLowerCase().includes(q) ||
+      entry.nfcTagId.toLowerCase().includes(q) ||
+      cls.includes(q) ||
+      (sf?.code.toLowerCase().includes(q) ?? false) ||
+      (sf?.tag.toLowerCase().includes(q) ?? false)
+    )
+  })
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   const handleSave = async (data: Omit<AssetEntry, 'id' | 'createdAt' | 'updatedAt'>) => {
     if (editing) {
@@ -663,7 +717,7 @@ function AssetRegistryTab() {
 
       {assetClasses.length === 0 && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          ابتدا یک کلاس در تب «کلاس‌ها» تعریف کنید.
+          ابتدا یک کلاس در بخش «کلاس‌ها» تعریف کنید.
         </Alert>
       )}
       {subFunctions.length === 0 && assetClasses.length > 0 && (
@@ -672,11 +726,29 @@ function AssetRegistryTab() {
         </Alert>
       )}
 
+      <TextField
+        size="small"
+        placeholder="جستجو در نام، تگ NFC، کلاس یا SubFunction..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        fullWidth
+        sx={{ mb: 1 }}
+        InputProps={{
+          startAdornment: <SearchIcon fontSize="small" sx={{ ml: 0.5, color: 'text.disabled', mr: 0.5 }} />
+        }}
+      />
+      <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+        {filtered.length} مورد{search ? ` از ${assetEntries.length}` : ''}
+      </Typography>
+
       {assetEntries.length === 0 ? (
         <Alert severity="info">{t.admin.noAssetEntries}</Alert>
+      ) : filtered.length === 0 ? (
+        <Alert severity="info">نتیجه‌ای یافت نشد</Alert>
       ) : (
+        <>
         <Stack spacing={1.5}>
-          {assetEntries.map(entry => {
+          {paginated.map(entry => {
             const sf = findSubFunction(entry.subFunctionId)
             return (
               <Card
@@ -748,6 +820,13 @@ function AssetRegistryTab() {
             )
           })}
         </Stack>
+
+        {totalPages > 1 && (
+          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+            <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+          </Box>
+        )}
+        </>
       )}
 
       <AssetEntryDialog
@@ -1259,7 +1338,9 @@ function SubFunctionDialog({ open, initial, locations, systems, mainFunctions, o
 // Hierarchy tab — Accordion structure with search/filter
 // ---------------------------------------------------------------------------
 
-function HierarchyTab() {
+type HierarchySectionType = 'locations' | 'systems' | 'functions' | 'subfunctions'
+
+function HierarchyTab({ section }: { section?: HierarchySectionType }) {
   const { locations, addLocation, editLocation, removeLocation } = useLocations()
   const { systems, addSystem, editSystem, removeSystem } = usePlantSystems()
   const { mainFunctions, addMainFunction, editMainFunction, removeMainFunction } = useMainFunctions()
@@ -1291,6 +1372,10 @@ function HierarchyTab() {
   const [editingSf, setEditingSf] = useState<SubFunction | undefined>()
   const [deleteSfTarget, setDeleteSfTarget] = useState<SubFunction | undefined>()
 
+  // Pagination
+  const [page, setPage] = useState(1)
+  useEffect(() => setPage(1), [section, locSearch, sysSearch, mfSearch, sfSearch])
+
   // Filtered lists
   const filteredLocations = locations.filter(loc =>
     loc.code.toLowerCase().includes(locSearch.toLowerCase()) ||
@@ -1309,6 +1394,12 @@ function HierarchyTab() {
     sf.name.toLowerCase().includes(sfSearch.toLowerCase()) ||
     sf.tag.toLowerCase().includes(sfSearch.toLowerCase())
   )
+
+  // Paginated lists
+  const paginatedLocations = filteredLocations.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const paginatedSystems = filteredSystems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const paginatedMainFunctions = filteredMainFunctions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const paginatedSubFunctions = filteredSubFunctions.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   // Helpers to resolve parent names
   const resolveLocParent = (loc: Location) => {
@@ -1329,10 +1420,15 @@ function HierarchyTab() {
     return t.common.unknown
   }
 
+  const showLocations = !section || section === 'locations'
+  const showSystems = !section || section === 'systems'
+  const showMainFunctions = !section || section === 'functions'
+  const showSubFunctions = !section || section === 'subfunctions'
+
   return (
     <Box>
       {/* ---------- Locations ---------- */}
-      <Accordion defaultExpanded>
+      {showLocations && <Accordion defaultExpanded>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
             <LocationOnIcon color="primary" fontSize="small" />
@@ -1368,8 +1464,9 @@ function HierarchyTab() {
           ) : filteredLocations.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>موردی یافت نشد</Typography>
           ) : (
+            <>
             <List dense disablePadding>
-              {filteredLocations.map(loc => {
+              {paginatedLocations.map(loc => {
                 const parentName = resolveLocParent(loc)
                 return (
                   <ListItem
@@ -1400,12 +1497,18 @@ function HierarchyTab() {
                 )
               })}
             </List>
+            {Math.ceil(filteredLocations.length / PAGE_SIZE) > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+                <Pagination count={Math.ceil(filteredLocations.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+              </Box>
+            )}
+            </>
           )}
         </AccordionDetails>
-      </Accordion>
+      </Accordion>}
 
       {/* ---------- Systems ---------- */}
-      <Accordion>
+      {showSystems && <Accordion>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
             <SettingsIcon color="secondary" fontSize="small" />
@@ -1445,8 +1548,9 @@ function HierarchyTab() {
           ) : filteredSystems.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>موردی یافت نشد</Typography>
           ) : (
+            <>
             <List dense disablePadding>
-              {filteredSystems.map(sys => (
+              {paginatedSystems.map(sys => (
                 <ListItem
                   key={sys.id}
                   disableGutters
@@ -1474,12 +1578,18 @@ function HierarchyTab() {
                 </ListItem>
               ))}
             </List>
+            {Math.ceil(filteredSystems.length / PAGE_SIZE) > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+                <Pagination count={Math.ceil(filteredSystems.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+              </Box>
+            )}
+            </>
           )}
         </AccordionDetails>
-      </Accordion>
+      </Accordion>}
 
       {/* ---------- Main Functions ---------- */}
-      <Accordion>
+      {showMainFunctions && <Accordion>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
             <AccountTreeIcon color="action" fontSize="small" />
@@ -1516,8 +1626,9 @@ function HierarchyTab() {
           ) : filteredMainFunctions.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>موردی یافت نشد</Typography>
           ) : (
+            <>
             <List dense disablePadding>
-              {filteredMainFunctions.map(mf => (
+              {paginatedMainFunctions.map(mf => (
                 <ListItem
                   key={mf.id}
                   disableGutters
@@ -1545,12 +1656,18 @@ function HierarchyTab() {
                 </ListItem>
               ))}
             </List>
+            {Math.ceil(filteredMainFunctions.length / PAGE_SIZE) > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+                <Pagination count={Math.ceil(filteredMainFunctions.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+              </Box>
+            )}
+            </>
           )}
         </AccordionDetails>
-      </Accordion>
+      </Accordion>}
 
       {/* ---------- Sub Functions ---------- */}
-      <Accordion>
+      {showSubFunctions && <Accordion>
         <AccordionSummary expandIcon={<ExpandMoreIcon />}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
             <LabelIcon color="action" fontSize="small" />
@@ -1586,8 +1703,9 @@ function HierarchyTab() {
           ) : filteredSubFunctions.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ py: 1 }}>موردی یافت نشد</Typography>
           ) : (
+            <>
             <List dense disablePadding>
-              {filteredSubFunctions.map(sf => (
+              {paginatedSubFunctions.map(sf => (
                 <ListItem
                   key={sf.id}
                   disableGutters
@@ -1616,9 +1734,15 @@ function HierarchyTab() {
                 </ListItem>
               ))}
             </List>
+            {Math.ceil(filteredSubFunctions.length / PAGE_SIZE) > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+                <Pagination count={Math.ceil(filteredSubFunctions.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+              </Box>
+            )}
+            </>
           )}
         </AccordionDetails>
-      </Accordion>
+      </Accordion>}
 
       {/* ---- Dialogs ---- */}
       <LocationDialog
@@ -1725,341 +1849,36 @@ function HierarchyTab() {
 }
 
 // ---------------------------------------------------------------------------
-// Log Sheet Template dialog
-// ---------------------------------------------------------------------------
-
-interface LogSheetTemplateDialogProps {
-  open: boolean
-  initial?: LogSheetTemplate
-  locations: Location[]
-  systems: PlantSystem[]
-  mainFunctions: MainFunction[]
-  onSave: (data: Omit<LogSheetTemplate, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>
-  onClose: () => void
-}
-
-function LogSheetTemplateDialog({
-  open, initial, locations, systems, mainFunctions, onSave, onClose
-}: LogSheetTemplateDialogProps) {
-  const [name, setName] = useState(initial?.name ?? '')
-  const [description, setDescription] = useState(initial?.description ?? '')
-  const [scopeType, setScopeType] = useState<'location' | 'system' | 'mainFunction'>(
-    initial?.scopeType ?? 'location'
-  )
-  const [scopeId, setScopeId] = useState(initial?.scopeId ?? '')
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-  const [assetCount, setAssetCount] = useState<number | null>(null)
-  const [loadingAssets, setLoadingAssets] = useState(false)
-
-  useEffect(() => {
-    setName(initial?.name ?? '')
-    setDescription(initial?.description ?? '')
-    setScopeType(initial?.scopeType ?? 'location')
-    setScopeId(initial?.scopeId ?? '')
-    setSaveError(null)
-    setAssetCount(null)
-  }, [open, initial])
-
-  // When scopeType changes, reset scopeId
-  const handleScopeTypeChange = (newType: 'location' | 'system' | 'mainFunction') => {
-    setScopeType(newType)
-    setScopeId('')
-    setAssetCount(null)
-  }
-
-  // When scopeId changes, load asset count
-  useEffect(() => {
-    if (!scopeId) {
-      setAssetCount(null)
-      return
-    }
-    setLoadingAssets(true)
-    getAssetsInScope(scopeType, scopeId)
-      .then(assets => setAssetCount(assets.length))
-      .catch(() => setAssetCount(null))
-      .finally(() => setLoadingAssets(false))
-  }, [scopeType, scopeId])
-
-  const scopeItems =
-    scopeType === 'location' ? locations :
-    scopeType === 'system' ? systems :
-    mainFunctions
-
-  const selectedScopeItem = scopeItems.find(item => item.id === scopeId) ?? null
-
-  const canSave = name.trim() !== '' && scopeId !== ''
-
-  const handleSave = async () => {
-    if (!canSave) return
-    setSaving(true)
-    setSaveError(null)
-    try {
-      await onSave({
-        name: name.trim(),
-        description: description.trim() || undefined,
-        scopeType,
-        scopeId
-      })
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'خطا در ذخیره اطلاعات')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onClose={saving ? undefined : onClose} dir="rtl" fullWidth maxWidth="sm">
-      <DialogTitle>{initial ? t.logSheet.editTemplate : t.logSheet.addTemplate}</DialogTitle>
-      <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 3 }}>
-        {initial && (
-          <Box sx={{ display: 'flex', gap: 3, p: 1.5, bgcolor: 'grey.50', borderRadius: 1 }}>
-            <Typography variant="caption" color="text.secondary">
-              ثبت: <strong>{formatDate(initial.createdAt)}</strong>
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              آخرین ویرایش: <strong>{formatDate(initial.updatedAt)}</strong>
-            </Typography>
-          </Box>
-        )}
-
-        <TextField
-          label={t.logSheet.templateName}
-          value={name}
-          onChange={e => setName(e.target.value)}
-          fullWidth
-          autoFocus={!initial}
-          required
-        />
-        <TextField
-          label={t.logSheet.templateDesc}
-          value={description}
-          onChange={e => setDescription(e.target.value)}
-          fullWidth
-          multiline
-          rows={2}
-        />
-
-        <Box>
-          <FormLabel component="legend" sx={{ mb: 1, fontSize: '0.85rem' }}>{t.logSheet.scopeType}</FormLabel>
-          <RadioGroup
-            row
-            value={scopeType}
-            onChange={e => handleScopeTypeChange(e.target.value as 'location' | 'system' | 'mainFunction')}
-          >
-            <FormControlLabel value="location" control={<Radio size="small" />} label={t.logSheet.scopeLocation} />
-            <FormControlLabel value="system" control={<Radio size="small" />} label={t.logSheet.scopeSystem} />
-            <FormControlLabel value="mainFunction" control={<Radio size="small" />} label={t.logSheet.scopeMainFunction} />
-          </RadioGroup>
-        </Box>
-
-        <Autocomplete
-          options={scopeItems}
-          getOptionLabel={item => `[${item.code}] ${item.name}`}
-          value={selectedScopeItem}
-          onChange={(_, v) => setScopeId(v?.id ?? '')}
-          renderInput={(params) => (
-            <TextField {...params} label={t.logSheet.selectScope} required />
-          )}
-          noOptionsText="موردی یافت نشد"
-          clearText="پاک کردن"
-        />
-
-        {scopeId && (
-          <Box sx={{ p: 1.5, bgcolor: 'info.50', borderRadius: 1, border: '1px solid', borderColor: 'info.200' }}>
-            {loadingAssets ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CircularProgress size={14} />
-                <Typography variant="caption">در حال شمارش Asset ها...</Typography>
-              </Box>
-            ) : (
-              <Typography variant="body2" color="info.main">
-                تعداد Asset ها: <strong>{assetCount ?? 0}</strong>
-              </Typography>
-            )}
-          </Box>
-        )}
-
-        {saveError && <Alert severity="error">{saveError}</Alert>}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} disabled={saving}>{t.common.cancel}</Button>
-        <Button
-          variant="contained"
-          onClick={() => void handleSave()}
-          disabled={!canSave || saving}
-          startIcon={saving ? <CircularProgress size={16} color="inherit" /> : undefined}
-        >
-          {saving ? 'در حال ذخیره...' : t.common.save}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Log Sheet Templates tab (4th tab)
-// ---------------------------------------------------------------------------
-
-function LogSheetTemplatesTab() {
-  const { templates, addTemplate, editTemplate, removeTemplate } = useLogSheetTemplates()
-  const { locations } = useLocations()
-  const { systems } = usePlantSystems()
-  const { mainFunctions } = useMainFunctions()
-
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editing, setEditing] = useState<LogSheetTemplate | undefined>()
-  const [deleteTarget, setDeleteTarget] = useState<LogSheetTemplate | undefined>()
-
-  const resolveScopeName = (tmpl: LogSheetTemplate) => {
-    if (tmpl.scopeType === 'location') {
-      const loc = locations.find(l => l.id === tmpl.scopeId)
-      return loc ? `مکان: [${loc.code}] ${loc.name}` : `مکان: ${tmpl.scopeId}`
-    }
-    if (tmpl.scopeType === 'system') {
-      const sys = systems.find(s => s.id === tmpl.scopeId)
-      return sys ? `سیستم: [${sys.code}] ${sys.name}` : `سیستم: ${tmpl.scopeId}`
-    }
-    const mf = mainFunctions.find(m => m.id === tmpl.scopeId)
-    return mf ? `فانکشن: [${mf.code}] ${mf.name}` : `فانکشن: ${tmpl.scopeId}`
-  }
-
-  const handleSave = async (data: Omit<LogSheetTemplate, 'id' | 'createdAt' | 'updatedAt'>) => {
-    if (editing) {
-      await editTemplate(editing.id, data)
-    } else {
-      await addTemplate(data)
-    }
-    setDialogOpen(false)
-    setEditing(undefined)
-  }
-
-  return (
-    <>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => { setEditing(undefined); setDialogOpen(true) }}
-        >
-          {t.logSheet.addTemplate}
-        </Button>
-      </Box>
-
-      {templates.length === 0 ? (
-        <Alert severity="info">{t.logSheet.noTemplates}</Alert>
-      ) : (
-        <Stack spacing={1.5}>
-          {templates.map(tmpl => (
-            <Card
-              key={tmpl.id}
-              variant="outlined"
-              sx={{ borderRight: '4px solid', borderRightColor: 'info.main' }}
-            >
-              <CardContent sx={{ pb: '8px !important' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
-                  <Typography variant="subtitle1" fontWeight={700} sx={{ flex: 1 }}>
-                    {tmpl.name}
-                  </Typography>
-                  <Tooltip title={t.common.edit}>
-                    <IconButton size="small" onClick={() => { setEditing(tmpl); setDialogOpen(true) }}>
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={t.common.delete}>
-                    <IconButton size="small" color="error" onClick={() => setDeleteTarget(tmpl)}>
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-
-                {tmpl.description && (
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
-                    {tmpl.description}
-                  </Typography>
-                )}
-
-                <Chip
-                  size="small"
-                  label={resolveScopeName(tmpl)}
-                  variant="outlined"
-                  color="info"
-                  sx={{ fontSize: '0.72rem', mb: 0.75 }}
-                />
-
-                <Divider sx={{ my: 0.75 }} />
-                <Box sx={{ display: 'flex', gap: 3 }}>
-                  <Typography variant="caption" color="text.disabled">
-                    ثبت: {formatDate(tmpl.createdAt)}
-                  </Typography>
-                  <Typography variant="caption" color="text.disabled">
-                    ویرایش: {formatDate(tmpl.updatedAt)}
-                  </Typography>
-                </Box>
-              </CardContent>
-            </Card>
-          ))}
-        </Stack>
-      )}
-
-      <LogSheetTemplateDialog
-        open={dialogOpen}
-        initial={editing}
-        locations={locations}
-        systems={systems}
-        mainFunctions={mainFunctions}
-        onSave={handleSave}
-        onClose={() => { setDialogOpen(false); setEditing(undefined) }}
-      />
-
-      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(undefined)} dir="rtl">
-        <DialogTitle>{t.common.delete}</DialogTitle>
-        <DialogContent>
-          <DialogContentText>{t.admin.deleteConfirm}</DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteTarget(undefined)}>{t.common.cancel}</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={() => { void removeTemplate(deleteTarget!.id); setDeleteTarget(undefined) }}
-          >
-            {t.common.delete}
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
+type MasterDataSection = 'locations' | 'systems' | 'functions' | 'subfunctions' | 'classes' | 'assets'
+
+const SECTION_TITLES: Record<MasterDataSection, string> = {
+  locations: t.hierarchy.locations,
+  systems: t.hierarchy.systems,
+  functions: t.hierarchy.mainFunctions,
+  subfunctions: t.hierarchy.subFunctions,
+  classes: t.admin.assetTypes,
+  assets: t.admin.assetRegistry,
+}
+
 export function AdminPage() {
-  const [tab, setTab] = useState(0)
+  const { section = 'locations' } = useParams<{ section: string }>()
+  const s = section as MasterDataSection
+  const title = SECTION_TITLES[s] ?? t.admin.title
 
   return (
     <Box sx={{ maxWidth: 720, mx: 'auto' }}>
-      <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
-        {t.admin.title}
+      <Typography variant="h5" fontWeight={700} sx={{ mb: 3 }}>
+        {title}
       </Typography>
 
-      <Tabs
-        value={tab}
-        onChange={(_, v) => setTab(v as number)}
-        sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}
-      >
-        <Tab label={t.hierarchy.title} />
-        <Tab label={t.admin.assetTypes} />
-        <Tab label={t.admin.assetRegistry} />
-        <Tab label={t.logSheet.templates} icon={<AssignmentIcon fontSize="small" />} iconPosition="start" />
-      </Tabs>
-
-      {tab === 0 && <HierarchyTab />}
-      {tab === 1 && <AssetClassesTab />}
-      {tab === 2 && <AssetRegistryTab />}
-      {tab === 3 && <LogSheetTemplatesTab />}
+      {(s === 'locations' || s === 'systems' || s === 'functions' || s === 'subfunctions') && (
+        <HierarchyTab section={s as HierarchySectionType} />
+      )}
+      {s === 'classes' && <AssetClassesTab />}
+      {s === 'assets' && <AssetRegistryTab />}
     </Box>
   )
 }

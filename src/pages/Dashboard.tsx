@@ -8,8 +8,8 @@ import {
   Button,
   Chip
 } from '@mui/material'
-import NfcIcon from '@mui/icons-material/Nfc'
-import ListAltIcon from '@mui/icons-material/ListAlt'
+import FactCheckIcon from '@mui/icons-material/FactCheck'
+import HistoryIcon from '@mui/icons-material/History'
 import SyncIcon from '@mui/icons-material/Sync'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
@@ -114,9 +114,9 @@ export function Dashboard() {
           <StatCard
             title={t.dashboard.totalRecords}
             value={records.length}
-            icon={<ListAltIcon />}
+            icon={<FactCheckIcon />}
             color="primary"
-            onClick={() => navigate('/records')}
+            onClick={() => navigate('/logsheets/active')}
           />
         </Grid>
         <Grid item xs={6} sm={3}>
@@ -155,20 +155,20 @@ export function Dashboard() {
             <Button
               variant="contained"
               size="large"
-              startIcon={<NfcIcon />}
-              onClick={() => navigate('/collect')}
+              startIcon={<FactCheckIcon />}
+              onClick={() => navigate('/logsheets/active')}
               sx={{ flex: 1, minWidth: 160 }}
             >
-              {t.dashboard.quickCollect}
+              {t.nav.logSheetActive}
             </Button>
             <Button
               variant="outlined"
               size="large"
-              startIcon={<ListAltIcon />}
-              onClick={() => navigate('/records')}
+              startIcon={<HistoryIcon />}
+              onClick={() => navigate('/logsheets/history')}
               sx={{ flex: 1, minWidth: 160 }}
             >
-              {t.nav.records}
+              {t.nav.logSheetHistory}
             </Button>
           </Box>
         </CardContent>

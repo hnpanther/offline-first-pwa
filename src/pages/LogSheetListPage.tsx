@@ -18,17 +18,23 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  IconButton
+  IconButton,
+  TextField,
+  Pagination
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import DeleteIcon from '@mui/icons-material/Delete'
-import { useState } from 'react'
+import SearchIcon from '@mui/icons-material/Search'
+import SyncIcon from '@mui/icons-material/Sync'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLogSheetTemplates, useLogSheets } from '@/hooks/useLogSheets'
 import { getAssetsInScope, getAllSubFunctions, getSettings } from '@/services/storage'
 import { t } from '@/i18n'
 import type { LogSheetTemplate, LogSheetEntryData, LogSheet } from '@/types'
+
+const PAGE_SIZE = 20
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
@@ -71,9 +77,7 @@ function CreateLogSheetDialog({ open, templates, onClose, onCreate }: CreateLogS
       dir="rtl"
       fullWidth
       maxWidth="xs"
-      TransitionProps={{
-        onExited: () => { setSelectedTemplateId(''); setError(null) }
-      }}
+      TransitionProps={{ onExited: () => { setSelectedTemplateId(''); setError(null) } }}
     >
       <DialogTitle>ایجاد Log Sheet از قالب</DialogTitle>
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 3 }}>
@@ -112,27 +116,49 @@ function CreateLogSheetDialog({ open, templates, onClose, onCreate }: CreateLogS
 // Page
 // ---------------------------------------------------------------------------
 
-export function LogSheetListPage() {
+interface LogSheetListPageProps {
+  mode: 'active' | 'history'
+}
+
+export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const navigate = useNavigate()
-  const { templates, loading: templatesLoading } = useLogSheetTemplates()
-  const { logs, loading: logsLoading, addLogSheet, removeLogSheet } = useLogSheets()
+  const { templates } = useLogSheetTemplates()
+  const { logs, loading, addLogSheet, removeLogSheet } = useLogSheets()
+
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<LogSheet | undefined>()
 
+  // Reset page when search or mode changes
+  useEffect(() => setPage(1), [search, mode])
+
+  // Filter by mode then by search
+  const modeFiltered = logs.filter(log =>
+    mode === 'active' ? log.status === 'draft' : log.status === 'submitted'
+  )
+
+  const filtered = modeFiltered.filter(log => {
+    const q = search.toLowerCase()
+    if (!q) return true
+    return (
+      log.templateName.toLowerCase().includes(q) ||
+      log.scopeSummary.toLowerCase().includes(q) ||
+      (log.operatorName ?? '').toLowerCase().includes(q)
+    )
+  })
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
   const createLogSheetFromTemplate = async (template: LogSheetTemplate) => {
-    // 1. Get assets in scope
     const assets = await getAssetsInScope(template.scopeType, template.scopeId)
+    if (assets.length === 0) throw new Error(t.logSheet.noAssets)
 
-    if (assets.length === 0) {
-      throw new Error(t.logSheet.noAssets)
-    }
-
-    // 2. Load all subFunctions for lookup
     const allSubFunctions = await getAllSubFunctions()
     const sfMap = new Map(allSubFunctions.map(sf => [sf.id, sf]))
 
-    // 3. Build entries — use classId (from AssetEntry.classId)
     const entries: LogSheetEntryData[] = assets.map(asset => {
       const sf = sfMap.get(asset.subFunctionId)
       return {
@@ -145,23 +171,15 @@ export function LogSheetListPage() {
       }
     })
 
-    // 4. Get operator name from settings
     const settings = await getSettings()
-
-    // 5. Build scope summary
-    const scopeSummary = template.name
-
-    // 6. Save log sheet
     const newLogSheet = await addLogSheet({
       templateId: template.id,
       templateName: template.name,
-      scopeSummary,
+      scopeSummary: template.name,
       operatorName: settings.operatorName || undefined,
       status: 'draft',
       entries
     })
-
-    // 7. Navigate to fill page
     navigate(`/logsheets/${newLogSheet.localId}`)
   }
 
@@ -175,34 +193,42 @@ export function LogSheetListPage() {
     }
   }
 
-  const statusLabel = (status: 'draft' | 'submitted') =>
-    status === 'submitted' ? t.logSheet.submitted : t.logSheet.draft
+  const syncStatusColor = (log: LogSheet) => {
+    if (log.syncStatus === 'synced') return 'success'
+    if (log.syncStatus === 'failed') return 'error'
+    if (log.syncStatus === 'syncing') return 'info'
+    return 'warning'
+  }
 
-  const statusColor = (status: 'draft' | 'submitted') =>
-    status === 'submitted' ? 'success' : 'warning'
-
-  const loading = templatesLoading || logsLoading
+  const syncStatusLabel = (log: LogSheet) => {
+    if (log.syncStatus === 'synced') return 'ارسال شده'
+    if (log.syncStatus === 'failed') return 'خطا در ارسال'
+    if (log.syncStatus === 'syncing') return 'در حال ارسال'
+    return 'در انتظار ارسال'
+  }
 
   return (
     <Box sx={{ maxWidth: 720, mx: 'auto' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant="h5" fontWeight={700}>
-          {t.logSheet.list}
+          {mode === 'active' ? t.nav.logSheetActive : t.nav.logSheetHistory}
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setCreateDialogOpen(true)}
-          disabled={templates.length === 0}
-        >
-          {t.logSheet.createFromTemplate}
-        </Button>
+        {mode === 'active' && (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setCreateDialogOpen(true)}
+            disabled={templates.length === 0}
+          >
+            {t.logSheet.createFromTemplate}
+          </Button>
+        )}
       </Box>
 
-      {loading && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-          <CircularProgress />
-        </Box>
+      {mode === 'active' && templates.length === 0 && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          ابتدا یک قالب در بخش «قالب‌های Log Sheet» تعریف کنید.
+        </Alert>
       )}
 
       {createError && (
@@ -211,123 +237,123 @@ export function LogSheetListPage() {
         </Alert>
       )}
 
-      {/* Templates section */}
-      {!loading && templates.length > 0 && (
-        <Box sx={{ mb: 4 }}>
-          <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5 }}>
-            {t.logSheet.templates}
-          </Typography>
-          <Stack spacing={1}>
-            {templates.map(tmpl => (
-              <Card key={tmpl.id} variant="outlined">
+      {/* Search */}
+      <TextField
+        size="small"
+        placeholder="جستجو در نام قالب، محدوده یا اپراتور..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        fullWidth
+        sx={{ mb: 1 }}
+        InputProps={{
+          startAdornment: <SearchIcon fontSize="small" sx={{ ml: 0.5, color: 'text.disabled', mr: 0.5 }} />
+        }}
+      />
+      <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+        {filtered.length} مورد{search ? ` از ${modeFiltered.length}` : ''}
+      </Typography>
+
+      {loading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <CircularProgress />
+        </Box>
+      ) : filtered.length === 0 ? (
+        <Alert severity="info">
+          {search ? 'نتیجه‌ای یافت نشد' : t.logSheet.noLogSheets}
+        </Alert>
+      ) : (
+        <>
+          <Stack spacing={1.5}>
+            {paginated.map(log => (
+              <Card
+                key={log.localId}
+                variant="outlined"
+                sx={{
+                  borderRight: '4px solid',
+                  borderRightColor: mode === 'active' ? 'warning.main' : 'success.main'
+                }}
+              >
                 <CardContent sx={{ pb: '8px !important' }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
                     <Box sx={{ flex: 1 }}>
-                      <Typography variant="body1" fontWeight={600}>{tmpl.name}</Typography>
-                      {tmpl.description && (
-                        <Typography variant="body2" color="text.secondary">{tmpl.description}</Typography>
-                      )}
+                      <Typography variant="subtitle1" fontWeight={700}>
+                        {log.templateName}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {log.scopeSummary}
+                      </Typography>
                     </Box>
+                    {mode === 'history' && (
+                      <Chip
+                        label={syncStatusLabel(log)}
+                        size="small"
+                        color={syncStatusColor(log)}
+                        variant="outlined"
+                        icon={log.syncStatus === 'syncing' ? <SyncIcon fontSize="small" /> : undefined}
+                      />
+                    )}
                     <Button
                       size="small"
                       variant="outlined"
-                      startIcon={<AddIcon />}
-                      onClick={() => void handleCreateFromTemplate(tmpl)}
+                      startIcon={<OpenInNewIcon />}
+                      onClick={() => navigate(`/logsheets/${log.localId}`)}
                     >
-                      ایجاد
+                      باز کردن
                     </Button>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      aria-label={t.common.delete}
+                      onClick={() => setDeleteTarget(log)}
+                    >
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+
+                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 0.5 }}>
+                    {log.operatorName && (
+                      <Typography variant="body2" color="text.secondary">
+                        اپراتور: {log.operatorName}
+                      </Typography>
+                    )}
+                    <Typography variant="body2" color="text.secondary">
+                      {log.entries.length} Asset
+                    </Typography>
+                  </Box>
+
+                  <Divider sx={{ my: 0.75 }} />
+                  <Box sx={{ display: 'flex', gap: 3 }}>
+                    <Typography variant="caption" color="text.disabled">
+                      ثبت: {formatDate(log.createdAt)}
+                    </Typography>
+                    {log.submittedAt && (
+                      <Typography variant="caption" color="text.disabled">
+                        ارسال: {formatDate(log.submittedAt)}
+                      </Typography>
+                    )}
+                    {log.syncedAt && (
+                      <Typography variant="caption" color="text.disabled">
+                        همگام‌سازی: {formatDate(log.syncedAt)}
+                      </Typography>
+                    )}
                   </Box>
                 </CardContent>
               </Card>
             ))}
           </Stack>
-        </Box>
-      )}
 
-      {!loading && templates.length === 0 && (
-        <Alert severity="info" sx={{ mb: 3 }}>
-          {t.logSheet.noTemplates} — ابتدا یک قالب در بخش مدیریت تعریف کنید.
-        </Alert>
-      )}
-
-      {/* Log Sheets section */}
-      <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5 }}>
-        {t.logSheet.list}
-      </Typography>
-
-      {!loading && logs.length === 0 ? (
-        <Alert severity="info">{t.logSheet.noLogSheets}</Alert>
-      ) : (
-        <Stack spacing={1.5}>
-          {logs.map(log => (
-            <Card
-              key={log.localId}
-              variant="outlined"
-              sx={{ borderRight: '4px solid', borderRightColor: log.status === 'submitted' ? 'success.main' : 'warning.main' }}
-            >
-              <CardContent sx={{ pb: '8px !important' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="subtitle1" fontWeight={700}>
-                      {log.templateName}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {log.scopeSummary}
-                    </Typography>
-                  </Box>
-                  <Chip
-                    label={statusLabel(log.status)}
-                    size="small"
-                    color={statusColor(log.status)}
-                    variant="outlined"
-                  />
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<OpenInNewIcon />}
-                    onClick={() => navigate(`/logsheets/${log.localId}`)}
-                  >
-                    باز کردن
-                  </Button>
-                  <IconButton
-                    size="small"
-                    color="error"
-                    aria-label={t.common.delete}
-                    onClick={e => {
-                      e.stopPropagation()
-                      setDeleteTarget(log)
-                    }}
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </Box>
-
-                <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 0.5 }}>
-                  {log.operatorName && (
-                    <Typography variant="body2" color="text.secondary">
-                      اپراتور: {log.operatorName}
-                    </Typography>
-                  )}
-                  <Typography variant="body2" color="text.secondary">
-                    {log.entries.length} Asset
-                  </Typography>
-                </Box>
-
-                <Divider sx={{ my: 0.75 }} />
-                <Box sx={{ display: 'flex', gap: 3 }}>
-                  <Typography variant="caption" color="text.disabled">
-                    ثبت: {formatDate(log.createdAt)}
-                  </Typography>
-                  {log.submittedAt && (
-                    <Typography variant="caption" color="text.disabled">
-                      ارسال: {formatDate(log.submittedAt)}
-                    </Typography>
-                  )}
-                </Box>
-              </CardContent>
-            </Card>
-          ))}
-        </Stack>
+          {totalPages > 1 && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+              <Pagination
+                count={totalPages}
+                page={page}
+                onChange={(_, p) => setPage(p)}
+                size="small"
+                color="primary"
+              />
+            </Box>
+          )}
+        </>
       )}
 
       <CreateLogSheetDialog
@@ -342,9 +368,7 @@ export function LogSheetListPage() {
         <DialogContent>
           <DialogContentText>
             {t.logSheet.deleteConfirm}
-            {deleteTarget && (
-              <> ({deleteTarget.templateName})</>
-            )}
+            {deleteTarget && <> ({deleteTarget.templateName})</>}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -352,10 +376,7 @@ export function LogSheetListPage() {
           <Button
             color="error"
             variant="contained"
-            onClick={() => {
-              void removeLogSheet(deleteTarget!.localId)
-              setDeleteTarget(undefined)
-            }}
+            onClick={() => { void removeLogSheet(deleteTarget!.localId); setDeleteTarget(undefined) }}
           >
             {t.common.delete}
           </Button>
