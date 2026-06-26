@@ -337,17 +337,15 @@ export function LogSheetTemplatePage() {
             ))}
           </Stack>
 
-          {totalPages > 1 && (
-            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
-              <Pagination
-                count={totalPages}
-                page={page}
-                onChange={(_, p) => setPage(p)}
-                size="small"
-                color="primary"
-              />
-            </Box>
-          )}
+          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+            <Pagination
+              count={totalPages}
+              page={page}
+              onChange={(_, p) => setPage(p)}
+              size="small"
+              color="primary"
+            />
+          </Box>
         </>
       )}
 

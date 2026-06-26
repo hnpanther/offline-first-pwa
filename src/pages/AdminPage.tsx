@@ -479,11 +479,9 @@ function AssetClassesTab() {
           ))}
         </Stack>
 
-        {totalPages > 1 && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
-            <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
-          </Box>
-        )}
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+          <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+        </Box>
         </>
       )}
 
@@ -821,11 +819,9 @@ function AssetRegistryTab() {
           })}
         </Stack>
 
-        {totalPages > 1 && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
-            <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
-          </Box>
-        )}
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+          <Pagination count={totalPages} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+        </Box>
         </>
       )}
 
@@ -1497,11 +1493,9 @@ function HierarchyTab({ section }: { section?: HierarchySectionType }) {
                 )
               })}
             </List>
-            {Math.ceil(filteredLocations.length / PAGE_SIZE) > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
-                <Pagination count={Math.ceil(filteredLocations.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
-              </Box>
-            )}
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+              <Pagination count={Math.ceil(filteredLocations.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+            </Box>
             </>
           )}
         </AccordionDetails>
@@ -1578,11 +1572,9 @@ function HierarchyTab({ section }: { section?: HierarchySectionType }) {
                 </ListItem>
               ))}
             </List>
-            {Math.ceil(filteredSystems.length / PAGE_SIZE) > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
-                <Pagination count={Math.ceil(filteredSystems.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
-              </Box>
-            )}
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+              <Pagination count={Math.ceil(filteredSystems.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+            </Box>
             </>
           )}
         </AccordionDetails>
@@ -1656,11 +1648,9 @@ function HierarchyTab({ section }: { section?: HierarchySectionType }) {
                 </ListItem>
               ))}
             </List>
-            {Math.ceil(filteredMainFunctions.length / PAGE_SIZE) > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
-                <Pagination count={Math.ceil(filteredMainFunctions.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
-              </Box>
-            )}
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+              <Pagination count={Math.ceil(filteredMainFunctions.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+            </Box>
             </>
           )}
         </AccordionDetails>
@@ -1734,11 +1724,9 @@ function HierarchyTab({ section }: { section?: HierarchySectionType }) {
                 </ListItem>
               ))}
             </List>
-            {Math.ceil(filteredSubFunctions.length / PAGE_SIZE) > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
-                <Pagination count={Math.ceil(filteredSubFunctions.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
-              </Box>
-            )}
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1 }}>
+              <Pagination count={Math.ceil(filteredSubFunctions.length / PAGE_SIZE)} page={page} onChange={(_, p) => setPage(p)} size="small" color="primary" />
+            </Box>
             </>
           )}
         </AccordionDetails>
