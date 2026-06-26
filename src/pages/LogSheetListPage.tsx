@@ -13,19 +13,22 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  DialogContentText,
   FormControl,
   InputLabel,
   Select,
-  MenuItem
+  MenuItem,
+  IconButton
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import DeleteIcon from '@mui/icons-material/Delete'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLogSheetTemplates, useLogSheets } from '@/hooks/useLogSheets'
 import { getAssetsInScope, getAllSubFunctions, getSettings } from '@/services/storage'
 import { t } from '@/i18n'
-import type { LogSheetTemplate, LogSheetEntryData } from '@/types'
+import type { LogSheetTemplate, LogSheetEntryData, LogSheet } from '@/types'
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
@@ -112,9 +115,10 @@ function CreateLogSheetDialog({ open, templates, onClose, onCreate }: CreateLogS
 export function LogSheetListPage() {
   const navigate = useNavigate()
   const { templates, loading: templatesLoading } = useLogSheetTemplates()
-  const { logs, loading: logsLoading, addLogSheet } = useLogSheets()
+  const { logs, loading: logsLoading, addLogSheet, removeLogSheet } = useLogSheets()
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<LogSheet | undefined>()
 
   const createLogSheetFromTemplate = async (template: LogSheetTemplate) => {
     // 1. Get assets in scope
@@ -285,6 +289,17 @@ export function LogSheetListPage() {
                   >
                     باز کردن
                   </Button>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    aria-label={t.common.delete}
+                    onClick={e => {
+                      e.stopPropagation()
+                      setDeleteTarget(log)
+                    }}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
                 </Box>
 
                 <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 0.5 }}>
@@ -321,6 +336,31 @@ export function LogSheetListPage() {
         onClose={() => setCreateDialogOpen(false)}
         onCreate={handleCreateFromTemplate}
       />
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(undefined)} dir="rtl">
+        <DialogTitle>{t.common.delete}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {t.logSheet.deleteConfirm}
+            {deleteTarget && (
+              <> ({deleteTarget.templateName})</>
+            )}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(undefined)}>{t.common.cancel}</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              void removeLogSheet(deleteTarget!.localId)
+              setDeleteTarget(undefined)
+            }}
+          >
+            {t.common.delete}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

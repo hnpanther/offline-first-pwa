@@ -8,12 +8,32 @@
 import { db } from './db'
 import { Repository } from './repository'
 import type { FieldDefinition } from '@/types/sync'
+import type { FormField } from '@/types'
 
 const repo = new Repository<FieldDefinition>(db.fieldDefinitions, 'field_definition')
 
 /** Sorted by order, excludes soft-deleted entries. */
 export async function getFieldsForClass(classId: string): Promise<FieldDefinition[]> {
-  const fields = await repo.findWhere('classId', classId)
+  let fields = await repo.findWhere('classId', classId)
+  const assetClass = await db.assetClasses.get(classId)
+
+  if (assetClass?.fields) {
+    const classKeys = assetClass.fields.map(f => f.name)
+    const defKeys = fields.map(f => f.key)
+    const needsSync =
+      classKeys.length !== defKeys.length ||
+      classKeys.some((k, i) => k !== defKeys[i]) ||
+      assetClass.fields.some((f, i) => {
+        const def = fields[i]
+        return !def || def.label !== f.label || def.dataType !== f.type
+      })
+
+    if (needsSync) {
+      await syncClassFieldsFromFormFields(classId, assetClass.fields)
+      fields = await repo.findWhere('classId', classId)
+    }
+  }
+
   return fields.sort((a, b) => a.order - b.order)
 }
 
@@ -49,6 +69,64 @@ export async function reorderFieldDefinitions(
   await Promise.all(
     orderedIds.map((id, index) => repo.update(id, { classId, order: index }))
   )
+}
+
+function formFieldToDefinitionData(
+  field: FormField,
+  classId: string,
+  order: number
+): Omit<FieldDefinition, 'id' | 'createdAt' | 'updatedAt' | 'version' | 'deleted' | 'synced'> {
+  return {
+    classId,
+    key: field.name,
+    label: field.label,
+    dataType: field.type as FieldDefinition['dataType'],
+    unit: field.unit,
+    required: field.required ?? false,
+    validation: {
+      min: field.min,
+      max: field.max,
+      options: field.options,
+    },
+    order,
+  }
+}
+
+/**
+ * Keep fieldDefinitions in sync with AssetClass.fields[].
+ * Admin UI still edits the embedded fields array; LogSheet reads fieldDefinitions.
+ */
+export async function syncClassFieldsFromFormFields(
+  classId: string,
+  fields: FormField[]
+): Promise<void> {
+  const existing = await repo.findWhere('classId', classId)
+  const existingByKey = new Map(existing.map(f => [f.key, f]))
+  const newKeys = new Set(fields.map(f => f.name))
+
+  await Promise.all(
+    fields.map(async (field, index) => {
+      const data = formFieldToDefinitionData(field, classId, index)
+      const match = existingByKey.get(field.name)
+      if (match) {
+        await repo.update(match.id, data)
+      } else {
+        await repo.create(data)
+      }
+    })
+  )
+
+  await Promise.all(
+    existing
+      .filter(f => !newKeys.has(f.key))
+      .map(f => repo.softDelete(f.id))
+  )
+}
+
+/** Soft-delete all field definitions belonging to a class. */
+export async function deleteFieldsForClass(classId: string): Promise<void> {
+  const existing = await repo.findWhere('classId', classId)
+  await Promise.all(existing.map(f => repo.softDelete(f.id)))
 }
 
 /** Clone all field definitions from one class to a new class. */

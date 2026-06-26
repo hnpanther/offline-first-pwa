@@ -36,13 +36,16 @@ import {
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
+import { useSettings } from '@/hooks/useSettings'
+import { useAppStore } from '@/store'
+import { t } from '@/i18n'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
 
 // ---------------------------------------------------------------------------
-// Asset fill dialog — single asset, its own form, opened by NFC or tap
+// Asset fill dialog — view on tap, edit only via NFC / tag ID
 // ---------------------------------------------------------------------------
 
 interface AssetFillDialogProps {
@@ -163,6 +166,8 @@ function AssetFillDialog({
 export function LogSheetFillPage() {
   const { localId } = useParams<{ localId: string }>()
   const navigate = useNavigate()
+  const { settings } = useSettings()
+  const allowManualEntry = settings.allowManualEntry
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
@@ -170,14 +175,16 @@ export function LogSheetFillPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
 
   // NFC
-  const { isScanning, isSupported, lastTag, startScan, stopScan } = useNFC()
+  const { isScanning, isSupported, lastTag, error: nfcScanError, startScan, stopScan } = useNFC()
+  const setNFCError = useAppStore(s => s.setNFCError)
   const [manualTagId, setManualTagId] = useState('')
   const [nfcError, setNfcError] = useState<string | null>(null)
   const lastProcessedTag = useRef<string | null>(null)
 
-  // Dialog
+  // Dialog — tap = view-only, NFC / tag ID = editable
   const [activeEntry, setActiveEntry] = useState<LogSheetEntryData | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [dialogEditable, setDialogEditable] = useState(false)
 
   // Save / submit
   const [saving, setSaving] = useState(false)
@@ -235,22 +242,45 @@ export function LogSheetFillPage() {
       }
 
       setActiveEntry(entry)
+      setDialogEditable(true)
       setDialogOpen(true)
     },
     [logSheet]
   )
 
-  // Auto-open when NFC tag is detected
+  const openEntryForView = (entry: LogSheetEntryData) => {
+    setActiveEntry(entry)
+    setDialogEditable(false)
+    setDialogOpen(true)
+  }
+
+  const closeDialog = () => {
+    setDialogOpen(false)
+    setDialogEditable(false)
+    lastProcessedTag.current = null
+  }
+
+  const handleStartNfcScan = () => {
+    lastProcessedTag.current = null
+    setNfcError(null)
+    setNFCError(null)
+    void startScan()
+  }
+
+  // Fill tag ID field when NFC tag is detected, then open asset for edit
   const lastTagSerial = lastTag?.serialNumber
   useEffect(() => {
     if (!lastTagSerial) return
     if (lastTagSerial === lastProcessedTag.current) return
     lastProcessedTag.current = lastTagSerial
-    void handleTagId(lastTagSerial)
+
+    setManualTagId(lastTagSerial)
     stopScan()
+    void handleTagId(lastTagSerial)
   }, [lastTagSerial, handleTagId, stopScan])
 
   const handleManualSubmit = () => {
+    if (!allowManualEntry) return
     const trimmed = manualTagId.trim()
     if (!trimmed) return
     void handleTagId(trimmed)
@@ -289,7 +319,7 @@ export function LogSheetFillPage() {
       await updateLogSheet(localId, { entries: updatedEntries })
       const refreshed = await getLogSheet(localId)
       if (refreshed) setLogSheet(refreshed)
-      setDialogOpen(false)
+      closeDialog()
       setSavedMessage('اطلاعات ذخیره شد')
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'خطا در ذخیره')
@@ -424,59 +454,92 @@ export function LogSheetFillPage() {
                 fontWeight={isScanning ? 600 : 400}
               >
                 {isScanning
-                  ? 'در حال اسکن... تگ NFC را به دستگاه نزدیک کنید'
-                  : 'تگ NFC Asset را اسکن کنید یا شناسه را وارد کنید'}
+                  ? t.nfc.waitingForTag
+                  : isSupported
+                  ? 'برای ویرایش Asset، دکمه اسکن NFC را بزنید'
+                  : t.nfc.notSupported}
               </Typography>
               {isScanning && (
                 <CircularProgress size={14} sx={{ ml: 'auto' }} />
               )}
             </Box>
 
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-              <TextField
-                size="small"
-                placeholder="شناسه تگ..."
-                value={manualTagId}
-                onChange={e => setManualTagId(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleManualSubmit()}
-                dir="ltr"
-                sx={{ flex: 1 }}
-                inputProps={{ style: { fontFamily: 'monospace' } }}
-              />
+            {isSupported && (
               <Button
-                variant="outlined"
-                size="small"
-                onClick={handleManualSubmit}
-                disabled={!manualTagId.trim()}
-                sx={{ height: 40, minWidth: 60 }}
+                variant={isScanning ? 'contained' : 'outlined'}
+                color={isScanning ? 'error' : 'primary'}
+                fullWidth
+                startIcon={isScanning ? <CircularProgress size={16} color="inherit" /> : <NfcIcon />}
+                onClick={isScanning ? stopScan : handleStartNfcScan}
+                sx={{ mb: 1.5, height: 44 }}
               >
-                تأیید
+                {isScanning ? t.nfc.stopScan : t.nfc.startScan}
               </Button>
-              {isSupported && (
-                <Button
-                  variant={isScanning ? 'contained' : 'outlined'}
-                  color={isScanning ? 'error' : 'primary'}
-                  size="small"
-                  startIcon={<NfcIcon />}
-                  onClick={isScanning ? stopScan : () => void startScan()}
-                  sx={{ height: 40, whiteSpace: 'nowrap' }}
-                >
-                  {isScanning ? 'توقف' : 'اسکن NFC'}
-                </Button>
-              )}
-            </Box>
+            )}
 
-            {nfcError && (
+            {allowManualEntry ? (
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  label={t.nfc.serialNumber}
+                  placeholder="شناسه تگ..."
+                  value={manualTagId}
+                  onChange={e => setManualTagId(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleManualSubmit()}
+                  dir="ltr"
+                  sx={{ flex: 1 }}
+                  inputProps={{ style: { fontFamily: 'monospace' }, readOnly: isScanning }}
+                />
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={handleManualSubmit}
+                  disabled={!manualTagId.trim() || isScanning}
+                  sx={{ height: 40, minWidth: 72 }}
+                >
+                  تأیید
+                </Button>
+              </Box>
+            ) : (
+              <>
+                {manualTagId && (
+                  <Chip
+                    label={`${t.nfc.serialNumber}: ${manualTagId}`}
+                    variant="outlined"
+                    color="success"
+                    sx={{ mb: 1, fontFamily: 'monospace', direction: 'ltr' }}
+                  />
+                )}
+                {!isSupported && (
+                  <Alert severity="error" sx={{ mt: manualTagId ? 0 : undefined }}>
+                    {t.nfc.manualEntryDisabled}
+                  </Alert>
+                )}
+              </>
+            )}
+
+            {(nfcError || nfcScanError) && (
               <Alert
                 severity="warning"
                 sx={{ mt: 1.5 }}
-                onClose={() => setNfcError(null)}
+                onClose={() => {
+                  setNfcError(null)
+                  setNFCError(null)
+                }}
               >
-                {nfcError}
+                {nfcError ?? nfcScanError}
               </Alert>
             )}
           </CardContent>
         </Card>
+      )}
+
+      {!isSubmitted && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {allowManualEntry
+            ? 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، تگ NFC را اسکن کنید یا شناسه را دستی وارد کنید.'
+            : 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، فقط از اسکن NFC استفاده کنید.'}
+        </Alert>
       )}
 
       {isSubmitted && (
@@ -504,10 +567,7 @@ export function LogSheetFillPage() {
             <Card
               key={entry.assetId}
               variant="outlined"
-              onClick={() => {
-                setActiveEntry(entry)
-                setDialogOpen(true)
-              }}
+              onClick={() => openEntryForView(entry)}
               sx={{
                 cursor: 'pointer',
                 transition: 'box-shadow 0.15s',
@@ -616,8 +676,8 @@ export function LogSheetFillPage() {
         entry={activeEntry}
         assetClass={activeEntry ? getAssetClass(activeEntry.classId) : undefined}
         open={dialogOpen}
-        readOnly={isSubmitted}
-        onClose={() => setDialogOpen(false)}
+        readOnly={isSubmitted || !dialogEditable}
+        onClose={closeDialog}
         onSave={handleSaveEntry}
       />
 

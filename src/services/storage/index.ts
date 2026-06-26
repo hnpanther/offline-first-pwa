@@ -13,6 +13,10 @@ import type {
   LogSheet
 } from '@/types'
 import { v4 as uuidv4 } from 'uuid'
+import {
+  syncClassFieldsFromFormFields,
+  deleteFieldsForClass,
+} from './fieldDefinitions'
 
 // ---------------------------------------------------------------------------
 // Records
@@ -113,6 +117,7 @@ export async function saveAssetClass(
   const now = Date.now()
   const assetClass: AssetClass = { ...data, id: uuidv4(), createdAt: now, updatedAt: now }
   await db.assetClasses.add(assetClass)
+  await syncClassFieldsFromFormFields(assetClass.id, data.fields)
   return assetClass
 }
 
@@ -121,9 +126,13 @@ export async function updateAssetClass(
   updates: Partial<Omit<AssetClass, 'id' | 'createdAt'>>
 ): Promise<void> {
   await db.assetClasses.update(id, { ...updates, updatedAt: Date.now() })
+  if (updates.fields) {
+    await syncClassFieldsFromFormFields(id, updates.fields)
+  }
 }
 
 export async function deleteAssetClass(id: string): Promise<void> {
+  await deleteFieldsForClass(id)
   await db.assetClasses.delete(id)
 }
 

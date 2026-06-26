@@ -154,6 +154,7 @@ const fa = {
     saveDraft: 'ذخیره پیش‌نویس',
     noAssets: 'هیچ Asset ای در این محدوده یافت نشد',
     noLogSheets: 'هیچ Log Sheet ای ثبت نشده',
+    deleteConfirm: 'آیا از حذف این Log Sheet مطمئن هستید؟',
     assetValues: 'مقادیر Asset',
     scopeSummary: 'محدوده'
   },
