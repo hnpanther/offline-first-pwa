@@ -1,10 +1,26 @@
+/**
+ * SyncManager — handles all outbound data synchronization.
+ *
+ * Responsibilities:
+ *  1. Push approved DataRecords to /api/records/batch
+ *  2. Push submitted LogSheets to /api/log-sheets/batch
+ *  3. Retry failed items on reconnect or on schedule
+ *  4. Emit events for the UI (SyncStatusBar, useSync hook)
+ *
+ * NOT responsible for:
+ *  - Pulling master data from the server (→ pullMasterData.ts)
+ *  - Outbox-based entity sync (→ future push.ts)
+ */
+
 import {
   getPendingRecords,
   updateRecordSyncStatus,
-  getPendingCount
+  getPendingCount,
+  getAllLogSheets,
+  updateLogSheet,
 } from '@/services/storage'
-import { submitRecordsBatch } from '@/services/api'
-import type { DataRecord } from '@/types'
+import { submitRecordsBatch, submitLogSheetsBatch } from '@/services/api'
+import type { DataRecord, LogSheet } from '@/types'
 
 export type SyncEventType = 'start' | 'progress' | 'complete' | 'error'
 
@@ -18,12 +34,6 @@ export interface SyncEvent {
 
 type SyncListener = (event: SyncEvent) => void
 
-/**
- * SyncManager handles all background synchronization.
- * - Watches for online/offline changes
- * - Periodically retries pending records
- * - Emits events so the UI can show sync status
- */
 class SyncManager {
   private listeners: Set<SyncListener> = new Set()
   private isSyncing = false
@@ -39,7 +49,6 @@ class SyncManager {
     if (intervalMs) this.intervalMs = intervalMs
     this.setupOnlineListener()
     this.scheduleInterval()
-    // Try immediately on start
     void this.sync()
   }
 
@@ -53,7 +62,7 @@ class SyncManager {
   }
 
   // -------------------------------------------------------------------------
-  // Listeners (pub/sub for React hooks)
+  // Pub/sub
   // -------------------------------------------------------------------------
 
   subscribe(listener: SyncListener): () => void {
@@ -66,61 +75,110 @@ class SyncManager {
   }
 
   // -------------------------------------------------------------------------
-  // Sync logic
+  // Sync — records + log sheets
   // -------------------------------------------------------------------------
 
   async sync(): Promise<void> {
     if (this.isSyncing || !navigator.onLine) return
 
-    const pending = await getPendingRecords()
-    if (pending.length === 0) return
+    const [pendingRecords, pendingLogSheets] = await Promise.all([
+      getPendingRecords(),
+      this.getPendingLogSheets(),
+    ])
+
+    const totalPending = pendingRecords.length + pendingLogSheets.length
+    if (totalPending === 0) return
 
     this.isSyncing = true
     this.abortController = new AbortController()
-    this.emit({ type: 'start', pendingCount: pending.length })
-
-    // Mark all as "syncing" so the UI shows correct state
-    await Promise.all(
-      pending.map(r => updateRecordSyncStatus(r.localId, 'syncing'))
-    )
+    this.emit({ type: 'start', pendingCount: totalPending })
 
     let syncedCount = 0
     let failedCount = 0
 
     try {
-      const results = await submitRecordsBatch(pending, this.abortController.signal)
+      // --- 1. Push DataRecords ---
+      if (pendingRecords.length > 0) {
+        await Promise.all(
+          pendingRecords.map(r => updateRecordSyncStatus(r.localId, 'syncing'))
+        )
 
-      for (const result of results) {
-        const record = pending.find((r: DataRecord) => r.localId === result.localId)
-        if (!record) continue
+        const recordResults = await submitRecordsBatch(pendingRecords, this.abortController.signal)
 
-        if (result.serverId) {
-          await updateRecordSyncStatus(record.localId, 'synced', {
-            serverId: result.serverId,
-            syncedAt: Date.now()
-          })
-          syncedCount++
-        } else {
-          await updateRecordSyncStatus(record.localId, 'failed', {
-            syncError: result.error ?? 'خطای ناشناخته'
-          })
-          failedCount++
+        for (const result of recordResults) {
+          const record = pendingRecords.find((r: DataRecord) => r.localId === result.localId)
+          if (!record) continue
+
+          if (result.serverId) {
+            await updateRecordSyncStatus(record.localId, 'synced', {
+              serverId: result.serverId,
+              syncedAt: Date.now(),
+            })
+            syncedCount++
+          } else {
+            await updateRecordSyncStatus(record.localId, 'failed', {
+              syncError: result.error ?? 'خطای ناشناخته',
+            })
+            failedCount++
+          }
+        }
+      }
+
+      // --- 2. Push LogSheets ---
+      if (pendingLogSheets.length > 0) {
+        // Mark as syncing (re-use syncStatus field on LogSheet)
+        await Promise.all(
+          pendingLogSheets.map(ls =>
+            updateLogSheet(ls.localId, { syncStatus: 'syncing' as const })
+          )
+        )
+
+        const lsResults = await submitLogSheetsBatch(pendingLogSheets, this.abortController.signal)
+
+        for (const result of lsResults) {
+          const ls = pendingLogSheets.find((l: LogSheet) => l.localId === result.localId)
+          if (!ls) continue
+
+          if (result.serverId) {
+            await updateLogSheet(ls.localId, {
+              syncStatus: 'synced',
+              syncedAt: Date.now(),
+              serverId: result.serverId,
+            })
+            syncedCount++
+          } else {
+            await updateLogSheet(ls.localId, {
+              syncStatus: 'failed',
+              syncError: result.error ?? 'خطای ناشناخته',
+            })
+            failedCount++
+          }
         }
       }
 
       this.emit({ type: 'complete', syncedCount, failedCount })
     } catch (err) {
-      // Revert all to "failed" so they retry next cycle
-      await Promise.all(
-        pending.map(r =>
+      // On network error: revert all to 'failed' so they retry next cycle
+      await Promise.all([
+        ...pendingRecords.map(r =>
           updateRecordSyncStatus(r.localId, 'failed', {
-            syncError: err instanceof Error ? err.message : 'خطا در ارتباط با سرور'
+            syncError: err instanceof Error ? err.message : 'خطا در ارتباط با سرور',
           })
-        )
-      )
-      failedCount = pending.length
-      const errorMsg = err instanceof Error ? err.message : 'خطا در همگام‌سازی'
-      this.emit({ type: 'error', failedCount, error: errorMsg })
+        ),
+        ...pendingLogSheets.map(ls =>
+          updateLogSheet(ls.localId, {
+            syncStatus: 'failed',
+            syncError: err instanceof Error ? err.message : 'خطا در ارتباط با سرور',
+          })
+        ),
+      ])
+
+      failedCount = totalPending
+      this.emit({
+        type: 'error',
+        failedCount,
+        error: err instanceof Error ? err.message : 'خطا در همگام‌سازی',
+      })
     } finally {
       this.isSyncing = false
       this.abortController = null
@@ -128,12 +186,24 @@ class SyncManager {
   }
 
   async getPendingCount(): Promise<number> {
-    return getPendingCount()
+    const [records, logSheets] = await Promise.all([
+      getPendingCount(),
+      this.getPendingLogSheets(),
+    ])
+    return records + logSheets.length
   }
 
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /** Submitted log sheets that haven't been synced yet */
+  private async getPendingLogSheets(): Promise<LogSheet[]> {
+    const all = await getAllLogSheets()
+    return all.filter(
+      ls => ls.status === 'submitted' && ls.syncStatus !== 'synced'
+    )
+  }
 
   private handleOnline = (): void => {
     void this.sync()
@@ -145,11 +215,8 @@ class SyncManager {
 
   private scheduleInterval(): void {
     if (this.intervalId !== null) clearInterval(this.intervalId)
-    this.intervalId = setInterval(() => {
-      void this.sync()
-    }, this.intervalMs)
+    this.intervalId = setInterval(() => void this.sync(), this.intervalMs)
   }
 }
 
-// Singleton — import and use anywhere
 export const syncManager = new SyncManager()

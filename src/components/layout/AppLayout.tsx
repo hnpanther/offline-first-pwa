@@ -5,15 +5,17 @@ import { Header } from './Header'
 import { Sidebar } from './Sidebar'
 import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { useSyncManager } from '@/hooks/useSync'
+import { useMasterDataSync } from '@/hooks/useMasterDataSync'
 
 const DRAWER_WIDTH = 240
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  // Initialize global hooks that must run for the lifetime of the app
+  // Global hooks — must run for the lifetime of the app
   useOnlineStatus()
   useSyncManager()
+  useMasterDataSync() // pulls config from server when online / stale
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>

@@ -184,6 +184,9 @@ export interface LogSheet {
   operatorName?: string
   status: 'draft' | 'submitted'
   syncStatus: SyncStatus
+  syncedAt?: number
+  syncError?: string
+  serverId?: string
   entries: LogSheetEntryData[]
   submittedAt?: number
   createdAt: number
