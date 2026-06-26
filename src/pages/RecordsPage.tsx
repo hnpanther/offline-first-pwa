@@ -26,10 +26,10 @@ import SaveIcon from '@mui/icons-material/Save'
 import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useRecords } from '@/hooks/useRecords'
-import { useAssetTypes } from '@/hooks/useAssets'
+import { useAssetClasses } from '@/hooks/useAssets'
 import { DynamicFormField } from '@/components/forms/DynamicFormField'
 import { t } from '@/i18n'
-import type { DataRecord, SyncStatus, RecordStatus, FormField, AssetType } from '@/types'
+import type { DataRecord, SyncStatus, RecordStatus, FormField, AssetClass } from '@/types'
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
@@ -61,14 +61,14 @@ function RecordStatusChip({ status }: { status: RecordStatus }) {
 
 interface DraftEditDialogProps {
   record: DataRecord
-  assetType: AssetType | undefined
+  assetClass: AssetClass | undefined
   open: boolean
   onClose: () => void
   editRecord: (localId: string, updates: Partial<DataRecord>) => Promise<void>
   refresh: () => Promise<void>
 }
 
-function DraftEditDialog({ record, assetType, open, onClose, editRecord, refresh }: DraftEditDialogProps) {
+function DraftEditDialog({ record, assetClass, open, onClose, editRecord, refresh }: DraftEditDialogProps) {
   const { control, handleSubmit, formState: { errors }, reset } = useForm({
     defaultValues: (record.formData ?? {}) as Record<string, unknown>
   })
@@ -112,12 +112,12 @@ function DraftEditDialog({ record, assetType, open, onClose, editRecord, refresh
         </Box>
       </DialogTitle>
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 3 }}>
-        {!assetType ? (
-          <Alert severity="warning">تعریف نوع دستگاه یافت نشد</Alert>
-        ) : assetType.fields.length === 0 ? (
-          <Alert severity="info">این نوع دستگاه فیلدی ندارد</Alert>
+        {!assetClass ? (
+          <Alert severity="warning">تعریف کلاس Asset یافت نشد</Alert>
+        ) : assetClass.fields.length === 0 ? (
+          <Alert severity="info">این کلاس Asset پارامتری ندارد</Alert>
         ) : (
-          assetType.fields.map(field => (
+          assetClass.fields.map(field => (
             <DynamicFormField
               key={field.name}
               field={field}
@@ -310,19 +310,17 @@ function RecordDetailDialog({ record, fields, open, onClose, onApprove, onDelete
 function RecordCard({
   record,
   fields,
-  assetType,
+  assetClass,
   onDelete,
   onApprove,
-  onEdit,
   editRecord,
   refresh
 }: {
   record: DataRecord
   fields: FormField[]
-  assetType: AssetType | undefined
+  assetClass: AssetClass | undefined
   onDelete: () => void
   onApprove: () => void
-  onEdit: () => void
   editRecord: (localId: string, updates: Partial<DataRecord>) => Promise<void>
   refresh: () => Promise<void>
 }) {
@@ -392,7 +390,7 @@ function RecordCard({
 
       <DraftEditDialog
         record={record}
-        assetType={assetType}
+        assetClass={assetClass}
         open={editOpen}
         onClose={() => setEditOpen(false)}
         editRecord={editRecord}
@@ -408,7 +406,7 @@ function RecordCard({
 
 export function RecordsPage() {
   const { records, isLoading, refresh, removeRecord, confirmRecord, editRecord } = useRecords()
-  const { findAssetType } = useAssetTypes()
+  const { findAssetClass } = useAssetClasses()
   const [tab, setTab] = useState(0)
 
   const drafts = records.filter(r => r.recordStatus === 'draft')
@@ -417,8 +415,9 @@ export function RecordsPage() {
   const displayRecords = tab === 0 ? records : tab === 1 ? drafts : approved
 
   const getFields = (record: DataRecord): FormField[] => {
+    // Use assetTypeId (legacy field on DataRecord) to look up the class
     if (!record.assetTypeId) return []
-    return findAssetType(record.assetTypeId)?.fields ?? []
+    return findAssetClass(record.assetTypeId)?.fields ?? []
   }
 
   const emptyMessage =
@@ -456,10 +455,9 @@ export function RecordsPage() {
               key={record.localId}
               record={record}
               fields={getFields(record)}
-              assetType={record.assetTypeId ? findAssetType(record.assetTypeId) : undefined}
+              assetClass={record.assetTypeId ? findAssetClass(record.assetTypeId) : undefined}
               onDelete={() => void removeRecord(record.localId)}
               onApprove={() => void confirmRecord(record.localId)}
-              onEdit={() => {}}
               editRecord={editRecord}
               refresh={refresh}
             />

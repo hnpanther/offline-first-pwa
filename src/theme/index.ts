@@ -78,7 +78,8 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           borderRadius: 12,
-          boxShadow: '0 2px 12px rgba(0,0,0,0.08)'
+          boxShadow: '0 1px 6px rgba(0,0,0,0.07)',
+          transition: 'box-shadow 0.2s'
         }
       }
     },
@@ -94,6 +95,41 @@ export const theme = createTheme({
         root: {
           borderRadius: 8,
           minHeight: 48
+        }
+      }
+    },
+    MuiAccordion: {
+      styleOverrides: {
+        root: {
+          borderRadius: '10px !important',
+          '&:before': { display: 'none' },
+          boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+          marginBottom: 8
+        }
+      }
+    },
+    MuiAccordionSummary: {
+      styleOverrides: {
+        root: {
+          minHeight: 56,
+          borderRadius: 10,
+          '&.Mui-expanded': { minHeight: 56 }
+        }
+      }
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: {
+          minHeight: 48,
+          fontSize: '0.9rem',
+          fontWeight: 500
+        }
+      }
+    },
+    MuiDrawer: {
+      styleOverrides: {
+        paper: {
+          borderRadius: 0
         }
       }
     }

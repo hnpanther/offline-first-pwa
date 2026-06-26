@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
-import type { AssetInfo, DataRecord, NFCTagData, AppSettings } from '@/types'
+import type { AssetEntry, DataRecord, NFCTagData, AppSettings } from '@/types'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 
 // ---------------------------------------------------------------------------
@@ -19,10 +19,10 @@ interface NFCSlice {
 // Asset slice
 // ---------------------------------------------------------------------------
 interface AssetSlice {
-  currentAsset: AssetInfo | null
+  currentAsset: AssetEntry | null
   assetLoading: boolean
   assetError: string | null
-  setCurrentAsset: (asset: AssetInfo | null) => void
+  setCurrentAsset: (asset: AssetEntry | null) => void
   setAssetLoading: (v: boolean) => void
   setAssetError: (err: string | null) => void
 }

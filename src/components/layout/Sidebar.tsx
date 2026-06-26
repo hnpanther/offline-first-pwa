@@ -11,10 +11,10 @@ import {
   useTheme
 } from '@mui/material'
 import DashboardIcon from '@mui/icons-material/Dashboard'
-import AssignmentIcon from '@mui/icons-material/Assignment'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import SettingsIcon from '@mui/icons-material/Settings'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
+import FactCheckIcon from '@mui/icons-material/FactCheck'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { t } from '@/i18n'
 
@@ -22,8 +22,8 @@ const DRAWER_WIDTH = 240
 
 const navItems = [
   { path: '/', label: t.nav.dashboard, icon: <DashboardIcon /> },
-  { path: '/collect', label: t.nav.collect, icon: <AssignmentIcon /> },
   { path: '/records', label: t.nav.records, icon: <ListAltIcon /> },
+  { path: '/logsheets', label: t.nav.logSheets, icon: <FactCheckIcon /> },
   { path: '/admin', label: t.nav.admin, icon: <AdminPanelSettingsIcon /> },
   { path: '/settings', label: t.nav.settings, icon: <SettingsIcon /> }
 ]

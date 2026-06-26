@@ -8,12 +8,10 @@ import {
   Checkbox,
   FormControlLabel,
   FormGroup,
-  Radio,
-  RadioGroup,
   FormLabel,
   Box
 } from '@mui/material'
-import { Controller, type Control } from 'react-hook-form'
+import { Controller, type Control, type RegisterOptions } from 'react-hook-form'
 import type { FormField } from '@/types'
 
 interface DynamicFormFieldProps {
@@ -21,10 +19,22 @@ interface DynamicFormFieldProps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   control: Control<any>
   error?: string
+  /**
+   * Override react-hook-form validation rules.
+   * When provided (e.g. from DynamicClassForm), these replace the default
+   * required-only rule that was inferred from field.required.
+   */
+  rules?: RegisterOptions
 }
 
-export function DynamicFormField({ field, control, error }: DynamicFormFieldProps) {
+export function DynamicFormField({ field, control, error, rules }: DynamicFormFieldProps) {
   const label = field.required ? `${field.label} *` : field.label
+
+  // If caller passes explicit rules (from DynamicClassForm), use them.
+  // Otherwise fall back to a simple required check from field.required.
+  const effectiveRules: RegisterOptions = rules ?? (
+    field.required ? { required: 'این فیلد الزامی است' } : {}
+  )
 
   switch (field.type) {
     case 'text':
@@ -35,6 +45,7 @@ export function DynamicFormField({ field, control, error }: DynamicFormFieldProp
           name={field.name}
           control={control}
           defaultValue={field.defaultValue ?? ''}
+          rules={effectiveRules}
           render={({ field: f }) => (
             <TextField
               {...f}
@@ -49,9 +60,7 @@ export function DynamicFormField({ field, control, error }: DynamicFormFieldProp
               size="medium"
               inputProps={{
                 min: field.min,
-                max: field.max,
-                minLength: field.minLength,
-                maxLength: field.maxLength
+                max: field.max
               }}
             />
           )}
@@ -64,6 +73,7 @@ export function DynamicFormField({ field, control, error }: DynamicFormFieldProp
           name={field.name}
           control={control}
           defaultValue={field.defaultValue ?? ''}
+          rules={effectiveRules}
           render={({ field: f }) => (
             <FormControl fullWidth error={!!error}>
               <InputLabel>{label}</InputLabel>
@@ -88,38 +98,12 @@ export function DynamicFormField({ field, control, error }: DynamicFormFieldProp
           name={field.name}
           control={control}
           defaultValue={field.defaultValue ?? false}
+          rules={effectiveRules}
           render={({ field: f }) => (
             <FormControlLabel
               control={<Checkbox {...f} checked={!!f.value} />}
               label={field.label}
             />
-          )}
-        />
-      )
-
-    case 'radio':
-      return (
-        <Controller
-          name={field.name}
-          control={control}
-          defaultValue={field.defaultValue ?? ''}
-          render={({ field: f }) => (
-            <FormControl error={!!error}>
-              <FormLabel>{label}</FormLabel>
-              <RadioGroup {...f} row>
-                {field.options?.map(opt => (
-                  <FormControlLabel
-                    key={opt.value}
-                    value={opt.value}
-                    control={<Radio />}
-                    label={opt.label}
-                  />
-                ))}
-              </RadioGroup>
-              {(error ?? field.helperText) && (
-                <FormHelperText>{error ?? field.helperText}</FormHelperText>
-              )}
-            </FormControl>
           )}
         />
       )
@@ -130,6 +114,7 @@ export function DynamicFormField({ field, control, error }: DynamicFormFieldProp
           name={field.name}
           control={control}
           defaultValue={field.defaultValue ?? []}
+          rules={effectiveRules}
           render={({ field: f }) => (
             <FormControl component="fieldset" error={!!error} fullWidth>
               <FormLabel component="legend">{label}</FormLabel>

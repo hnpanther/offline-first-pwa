@@ -7,10 +7,11 @@ import rtlPlugin from 'stylis-plugin-rtl'
 import { theme } from '@/theme'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Dashboard } from '@/pages/Dashboard'
-import { CollectPage } from '@/pages/CollectPage'
 import { RecordsPage } from '@/pages/RecordsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { AdminPage } from '@/pages/AdminPage'
+import { LogSheetListPage } from '@/pages/LogSheetListPage'
+import { LogSheetFillPage } from '@/pages/LogSheetFillPage'
 
 const rtlCache = createCache({
   key: 'muirtl',
@@ -26,8 +27,9 @@ export function App() {
           <Routes>
             <Route element={<AppLayout />}>
               <Route index element={<Dashboard />} />
-              <Route path="collect" element={<CollectPage />} />
               <Route path="records" element={<RecordsPage />} />
+              <Route path="logsheets" element={<LogSheetListPage />} />
+              <Route path="logsheets/:localId" element={<LogSheetFillPage />} />
               <Route path="admin" element={<AdminPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>

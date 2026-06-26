@@ -5,7 +5,7 @@
  */
 
 import { apiClient } from './client'
-import type { AssetInfo, DataRecord, FormSchema } from '@/types'
+import type { AssetEntry, AssetClass, DataRecord } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Assets
@@ -15,30 +15,30 @@ import type { AssetInfo, DataRecord, FormSchema } from '@/types'
 export async function fetchAssetByNfcTag(
   nfcTagId: string,
   signal?: AbortSignal
-): Promise<AssetInfo | null> {
+): Promise<AssetEntry | null> {
   try {
-    return await apiClient.get<AssetInfo>(`/api/assets/nfc/${encodeURIComponent(nfcTagId)}`, signal)
+    return await apiClient.get<AssetEntry>(`/api/assets/nfc/${encodeURIComponent(nfcTagId)}`, signal)
   } catch {
     return null
   }
 }
 
 /** Fetch all known assets (for offline caching) */
-export async function fetchAllAssets(signal?: AbortSignal): Promise<AssetInfo[]> {
-  return apiClient.get<AssetInfo[]>('/api/assets', signal)
+export async function fetchAllAssets(signal?: AbortSignal): Promise<AssetEntry[]> {
+  return apiClient.get<AssetEntry[]>('/api/assets', signal)
 }
 
 // ---------------------------------------------------------------------------
-// Form schemas
+// Asset classes (form schemas)
 // ---------------------------------------------------------------------------
 
-/** Fetch form schema from the server for a given form type */
+/** Fetch asset class schema from the server */
 export async function fetchFormSchema(
   formType: string,
   signal?: AbortSignal
-): Promise<FormSchema | null> {
+): Promise<AssetClass | null> {
   try {
-    return await apiClient.get<FormSchema>(`/api/forms/${encodeURIComponent(formType)}`, signal)
+    return await apiClient.get<AssetClass>(`/api/forms/${encodeURIComponent(formType)}`, signal)
   } catch {
     return null
   }

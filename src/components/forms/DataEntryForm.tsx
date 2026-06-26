@@ -18,17 +18,17 @@ import { DynamicFormField } from './DynamicFormField'
 import { useRecords } from '@/hooks/useRecords'
 import { useSettings } from '@/hooks/useSettings'
 import { t } from '@/i18n'
-import type { AssetType, AssetEntry } from '@/types'
+import type { AssetClass, AssetEntry } from '@/types'
 
 interface DataEntryFormProps {
   nfcTagId: string
   assetEntry: AssetEntry
-  assetType: AssetType
+  assetClass: AssetClass
   onSuccess?: (mode: 'draft' | 'approved') => void
   onCancel?: () => void
 }
 
-export function DataEntryForm({ nfcTagId, assetEntry, assetType, onSuccess, onCancel }: DataEntryFormProps) {
+export function DataEntryForm({ nfcTagId, assetEntry, assetClass, onSuccess, onCancel }: DataEntryFormProps) {
   const { addRecord } = useRecords()
   const { settings } = useSettings()
   const [saving, setSaving] = useState<'draft' | 'approved' | null>(null)
@@ -44,7 +44,7 @@ export function DataEntryForm({ nfcTagId, assetEntry, assetType, onSuccess, onCa
         nfcTagId,
         assetEntryId: assetEntry.id,
         assetName: assetEntry.assetName,
-        assetTypeId: assetType.id,
+        assetTypeId: assetClass.id,   // stored in legacy field for DataRecord
         recordStatus: mode,
         formData: data,
         operatorName: settings.operatorName,
@@ -72,7 +72,12 @@ export function DataEntryForm({ nfcTagId, assetEntry, assetType, onSuccess, onCa
           </Typography>
           <Typography variant="h6" fontWeight={700}>{assetEntry.assetName}</Typography>
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
-            <Chip label={assetType.name} size="small" color="primary" variant="outlined" />
+            <Chip
+              label={`${t.collect.assetType}: ${assetClass.name}`}
+              size="small"
+              color="primary"
+              variant="outlined"
+            />
             {assetEntry.location && (
               <Chip
                 icon={<LocationOnIcon />}
@@ -90,10 +95,10 @@ export function DataEntryForm({ nfcTagId, assetEntry, assetType, onSuccess, onCa
       <Card>
         <CardContent>
           <Typography variant="subtitle1" fontWeight={600} gutterBottom>
-            {assetType.name}
+            {assetClass.name}
           </Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-            {assetType.fields.map(field => (
+            {assetClass.fields.map(field => (
               <DynamicFormField
                 key={field.name}
                 field={field}

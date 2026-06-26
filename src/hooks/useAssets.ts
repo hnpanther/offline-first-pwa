@@ -1,30 +1,30 @@
 import { useState, useCallback, useEffect } from 'react'
 import {
-  getAllAssetTypes,
-  getAssetType,
-  saveAssetType,
-  updateAssetType,
-  deleteAssetType,
+  getAllAssetClasses,
+  getAssetClass,
+  saveAssetClass,
+  updateAssetClass,
+  deleteAssetClass,
   getAllAssetEntries,
   getAssetEntryByTagId,
   saveAssetEntry,
   updateAssetEntry,
   deleteAssetEntry
 } from '@/services/storage'
-import type { AssetType, AssetEntry } from '@/types'
+import type { AssetClass, AssetEntry } from '@/types'
 
 // ---------------------------------------------------------------------------
-// Asset Types
+// Asset Classes (was useAssetTypes)
 // ---------------------------------------------------------------------------
 
-export function useAssetTypes() {
-  const [assetTypes, setAssetTypes] = useState<AssetType[]>([])
+export function useAssetClasses() {
+  const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
   const [loading, setLoading] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      setAssetTypes(await getAllAssetTypes())
+      setAssetClasses(await getAllAssetClasses())
     } finally {
       setLoading(false)
     }
@@ -34,37 +34,37 @@ export function useAssetTypes() {
     void refresh()
   }, [refresh])
 
-  const addAssetType = useCallback(
-    async (data: Omit<AssetType, 'id' | 'createdAt' | 'updatedAt'>) => {
-      const result = await saveAssetType(data)
+  const addAssetClass = useCallback(
+    async (data: Omit<AssetClass, 'id' | 'createdAt' | 'updatedAt'>) => {
+      const result = await saveAssetClass(data)
       await refresh()
       return result
     },
     [refresh]
   )
 
-  const editAssetType = useCallback(
-    async (id: string, updates: Partial<Omit<AssetType, 'id' | 'createdAt'>>) => {
-      await updateAssetType(id, updates)
+  const editAssetClass = useCallback(
+    async (id: string, updates: Partial<Omit<AssetClass, 'id' | 'createdAt'>>) => {
+      await updateAssetClass(id, updates)
       await refresh()
     },
     [refresh]
   )
 
-  const removeAssetType = useCallback(
+  const removeAssetClass = useCallback(
     async (id: string) => {
-      await deleteAssetType(id)
+      await deleteAssetClass(id)
       await refresh()
     },
     [refresh]
   )
 
-  const findAssetType = useCallback(
-    (id: string) => assetTypes.find(t => t.id === id),
-    [assetTypes]
+  const findAssetClass = useCallback(
+    (id: string) => assetClasses.find(c => c.id === id),
+    [assetClasses]
   )
 
-  return { assetTypes, loading, refresh, addAssetType, editAssetType, removeAssetType, findAssetType }
+  return { assetClasses, loading, refresh, addAssetClass, editAssetClass, removeAssetClass, findAssetClass }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +122,10 @@ export function useAssetEntries() {
 
 export async function lookupTag(
   nfcTagId: string
-): Promise<{ entry: AssetEntry; assetType: AssetType } | null> {
+): Promise<{ entry: AssetEntry; assetClass: AssetClass } | null> {
   const entry = await getAssetEntryByTagId(nfcTagId)
   if (!entry) return null
-  const assetType = await getAssetType(entry.assetTypeId)
-  if (!assetType) return null
-  return { entry, assetType }
+  const assetClass = await getAssetClass(entry.classId)
+  if (!assetClass) return null
+  return { entry, assetClass }
 }
