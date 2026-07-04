@@ -97,6 +97,7 @@ export interface LogSheetInboxResponse {
   serverTime: number
   assigned: ServerLogSheet[]
   available: ServerLogSheet[]
+  teamOpen?: ServerLogSheet[]
 }
 
 export async function fetchLogSheetInbox(
@@ -123,6 +124,45 @@ export async function releaseLogSheet(
   return apiClient.post<ServerLogSheet>(
     `/api/log-sheets/${serverId}/release`,
     {},
+    signal
+  )
+}
+
+export async function assignLogSheet(
+  serverId: number | string,
+  operatorId: number | string,
+  signal?: AbortSignal
+): Promise<ServerLogSheet> {
+  return apiClient.post<ServerLogSheet>(
+    `/api/log-sheets/${serverId}/assign`,
+    { operatorId: Number(operatorId) },
+    signal
+  )
+}
+
+export async function reassignLogSheet(
+  serverId: number | string,
+  operatorId: number | string,
+  signal?: AbortSignal
+): Promise<ServerLogSheet> {
+  return apiClient.post<ServerLogSheet>(
+    `/api/log-sheets/${serverId}/reassign`,
+    { operatorId: Number(operatorId) },
+    signal
+  )
+}
+
+export interface UnitOperatorOption {
+  id: number
+  fullName: string
+}
+
+export async function fetchUnitOperators(
+  unitId: number | string,
+  signal?: AbortSignal
+): Promise<UnitOperatorOption[]> {
+  return apiClient.get<UnitOperatorOption[]>(
+    `/api/operational-units/${unitId}/operators`,
     signal
   )
 }
@@ -250,6 +290,7 @@ export interface ApiLogSheetEntry {
   assetName: string
   subFunctionCode: string
   subFunctionTag: string
+  nfcTagId?: string
   classId: number
   formData: Record<string, unknown>
 }

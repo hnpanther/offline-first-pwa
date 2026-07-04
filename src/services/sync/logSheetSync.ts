@@ -6,12 +6,13 @@ import {
   getSettings,
   saveLogSheet,
   updateLogSheet,
-  getLogSheetByServerId
+  getLogSheetByServerId,
+  getAllLogSheets
 } from '@/services/storage'
 import type { ServerLogSheet } from '@/services/api'
 import type { LogSheet, LogSheetEntryData } from '@/types'
 import { toIdString } from '@/utils/ids'
-import { isLogSheetExpired, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
+import { isLogSheetExpiredForSync, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet } from '@/utils/logSheetStatus'
 
 export async function buildEntriesForTemplate(
   templateId: string
@@ -36,7 +37,8 @@ export async function buildEntriesForTemplate(
       assetName: asset.assetName,
       subFunctionCode: sf?.code ?? '',
       subFunctionTag: sf?.tag ?? '',
-      classId: asset.classId,
+      nfcTagId: asset.nfcTagId,
+      classId: toIdString(asset.classId),
       formData: {}
     }
   })
@@ -122,13 +124,45 @@ export async function mergeInboxIntoLocalSheets(assigned: ServerLogSheet[]): Pro
           updates.syncStatus = 'pending'
         }
       }
-    } else if (isLogSheetExpired({ dueAt, serverStatus }, now) && local.status === 'submitted') {
+    } else if (isLogSheetExpiredForSync({ ...local, dueAt, serverStatus }, now) && local.status === 'submitted') {
       updates.serverStatus = 'EXPIRED'
       updates.syncStatus = 'failed'
       updates.syncError = SYNC_OUTCOME_MESSAGES.EXPIRED
     }
 
     await updateLogSheet(local.localId, updates)
+  }
+
+  await reconcileInboxRevocations(assigned)
+}
+
+/**
+ * Local drafts for sheets no longer in the user's inbox were revoked server-side
+ * (release / reassign / takeover) while the device was offline.
+ */
+export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Promise<void> {
+  const assignedIds = new Set(assigned.map(s => toIdString(s.id)))
+  const all = await getAllLogSheets()
+
+  for (const local of all) {
+    if (local.status !== 'draft' || !local.serverId) continue
+    if (local.syncStatus === 'synced') continue
+    if (isInvalidLocalLogSheet(local)) continue
+
+    const serverId = toIdString(local.serverId)
+    if (assignedIds.has(serverId)) continue
+
+    const wasOpen =
+      local.serverStatus === 'ASSIGNED' ||
+      local.serverStatus === 'IN_PROGRESS' ||
+      local.serverStatus === 'PENDING'
+
+    if (!wasOpen) continue
+
+    await updateLogSheet(local.localId, {
+      syncStatus: 'failed',
+      syncError: SYNC_OUTCOME_MESSAGES.REVOKED
+    })
   }
 }
 
@@ -155,6 +189,7 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
       assetName: e.assetName,
       subFunctionCode: e.subFunctionCode,
       subFunctionTag: e.subFunctionTag,
+      nfcTagId: e.nfcTagId,
       classId: Number(e.classId),
       formData: e.formData
     })),

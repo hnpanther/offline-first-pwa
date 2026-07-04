@@ -190,7 +190,7 @@ class AppDatabase extends Dexie {
 export const db = new AppDatabase()
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  serverUrl: 'http://localhost:8081',
+  serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',
   syncIntervalMs: 30_000,
   operatorName: '',
   locationName: '',

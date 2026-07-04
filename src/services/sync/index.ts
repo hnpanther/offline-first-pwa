@@ -14,7 +14,7 @@ import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getAuthSession } from '@/services/auth'
 import { hasPermission } from '@/types/auth'
 import {
-  isLogSheetExpired,
+  isLogSheetExpiredForSync,
   syncOutcomeMessage,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
@@ -188,7 +188,7 @@ class SyncManager {
     const all = await getAllLogSheets()
     for (const ls of all) {
       if (ls.status !== 'submitted' || ls.syncStatus === 'synced') continue
-      if (!isLogSheetExpired(ls)) continue
+      if (!isLogSheetExpiredForSync(ls)) continue
       await updateLogSheet(ls.localId, {
         syncStatus: 'failed',
         syncError: SYNC_OUTCOME_MESSAGES.EXPIRED,
@@ -217,7 +217,7 @@ class SyncManager {
         ls.syncStatus !== 'synced' &&
         ls.syncStatus !== 'failed' &&
         ls.serverId &&
-        !isLogSheetExpired(ls)
+        !isLogSheetExpiredForSync(ls)
     )
   }
 

@@ -23,7 +23,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SendIcon from '@mui/icons-material/Send'
 import SaveIcon from '@mui/icons-material/Save'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type FormEvent, type MouseEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { v4 as uuidv4 } from 'uuid'
@@ -31,11 +31,13 @@ import {
   getLogSheet,
   updateLogSheet,
   getAllAssetClasses,
+  getAllAssetEntries,
   getAssetEntryByTagId
 } from '@/services/storage'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
+import { resolveNfcTagId } from '@/services/nfc'
 import { useSettings } from '@/hooks/useSettings'
 import { useAppStore } from '@/store'
 import { canEnterTagManually } from '@/types/auth'
@@ -45,13 +47,32 @@ import {
   canSubmitLogSheet,
   isLogSheetExpired,
   isSupersededSyncError,
+  isInvalidLocalLogSheet,
+  isRevokedSyncError,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
+import { pullMasterData } from '@/services/sync/pullMasterData'
+import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
+
+async function enrichEntriesWithNfc(
+  entries: LogSheetEntryData[]
+): Promise<LogSheetEntryData[]> {
+  const assets = await getAllAssetEntries()
+  const byId = new Map(assets.map(a => [a.id, a]))
+  return entries.map(e => {
+    const asset = byId.get(e.assetId)
+    return {
+      ...e,
+      classId: asset ? toIdString(asset.classId) : toIdString(e.classId),
+      nfcTagId: e.nfcTagId || asset?.nfcTagId
+    }
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Asset fill dialog — view on tap, edit only via NFC / tag ID
@@ -74,7 +95,9 @@ function AssetFillDialog({
   onClose,
   onSave
 }: AssetFillDialogProps) {
-  const { fields, loading: fieldsLoading } = useFieldDefinitions(entry?.classId)
+  const { fields, loading: fieldsLoading, refresh: refreshFields } = useFieldDefinitions(
+    entry ? toIdString(entry.classId) : undefined
+  )
   const {
     control,
     handleSubmit,
@@ -82,7 +105,10 @@ function AssetFillDialog({
     formState: { errors, isSubmitting }
   } = useForm<Record<string, unknown>>({ defaultValues: {} })
 
-  // Reset form each time a different entry is opened
+  useEffect(() => {
+    if (open && entry) void refreshFields()
+  }, [open, entry?.assetId, entry?.classId, refreshFields])
+
   const entryId = entry?.assetId
   useEffect(() => {
     if (entry) reset(entry.formData ?? {})
@@ -119,6 +145,11 @@ function AssetFillDialog({
                   کد: {entry.subFunctionCode}
                 </Typography>
               )}
+              {entry.nfcTagId && (
+                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', direction: 'ltr' }}>
+                  {t.logSheet.nfcTag}: {entry.nfcTagId}
+                </Typography>
+              )}
             </Box>
             {assetClass && (
               <Chip label={assetClass.name} size="small" color="secondary" />
@@ -126,6 +157,13 @@ function AssetFillDialog({
           </DialogTitle>
 
           <DialogContent sx={{ pt: 2.5, px: 2, pb: 2, overflow: 'auto' }}>
+            <Box
+              component="form"
+              onSubmit={e => {
+                e.preventDefault()
+                void handleSubmit(onSubmit)()
+              }}
+            >
             {fieldsLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                 <CircularProgress />
@@ -139,26 +177,34 @@ function AssetFillDialog({
                 readOnlyValues={readOnly ? entry.formData : undefined}
               />
             )}
+            {!readOnly && (
+              <DialogActions sx={{ px: 0, pb: 0, pt: 2, gap: 1 }}>
+                <Button variant="outlined" color="inherit" onClick={onClose} type="button">
+                  انصراف
+                </Button>
+                <Button
+                  type="submit"
+                  variant="contained"
+                  disabled={isSubmitting || fieldsLoading}
+                  startIcon={
+                    isSubmitting ? (
+                      <CircularProgress size={16} color="inherit" />
+                    ) : (
+                      <SaveIcon />
+                    )
+                  }
+                >
+                  ذخیره
+                </Button>
+              </DialogActions>
+            )}
+            </Box>
           </DialogContent>
 
-          {!readOnly && (
-            <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
-              <Button variant="outlined" color="inherit" onClick={onClose}>
-                انصراف
-              </Button>
-              <Button
-                variant="contained"
-                onClick={() => void handleSubmit(onSubmit)()}
-                disabled={isSubmitting || fieldsLoading}
-                startIcon={
-                  isSubmitting ? (
-                    <CircularProgress size={16} color="inherit" />
-                  ) : (
-                    <SaveIcon />
-                  )
-                }
-              >
-                ذخیره
+          {readOnly && (
+            <DialogActions sx={{ px: 3, pb: 2.5 }}>
+              <Button variant="outlined" onClick={onClose} type="button">
+                بستن
               </Button>
             </DialogActions>
           )}
@@ -192,6 +238,7 @@ export function LogSheetFillPage() {
   // NFC
   const { isScanning, isSupported, lastTag, error: nfcScanError, startScan, stopScan } = useNFC()
   const setNFCError = useAppStore(s => s.setNFCError)
+  const setLastScannedTag = useAppStore(s => s.setLastScannedTag)
   const [manualTagId, setManualTagId] = useState('')
   const [nfcError, setNfcError] = useState<string | null>(null)
   const lastProcessedTag = useRef<string | null>(null)
@@ -205,6 +252,7 @@ export function LogSheetFillPage() {
   const [saving, setSaving] = useState(false)
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
 
   // -------------------------------------------------------------------------
   // Load
@@ -216,6 +264,9 @@ export function LogSheetFillPage() {
       setLoading(true)
       setLoadError(null)
       try {
+        if (navigator.onLine && authSession) {
+          await pullMasterData(true)
+        }
         const [sheet, classes] = await Promise.all([
           getLogSheet(localId),
           getAllAssetClasses()
@@ -224,7 +275,8 @@ export function LogSheetFillPage() {
           setLoadError('Log Sheet یافت نشد')
           return
         }
-        setLogSheet(sheet)
+        const entries = await enrichEntriesWithNfc(sheet.entries ?? [])
+        setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'خطا در بارگذاری')
@@ -233,15 +285,29 @@ export function LogSheetFillPage() {
       }
     }
     void load()
-  }, [localId])
+  }, [localId, authSession])
 
   // Refresh local sheet when inbox sync updates dueAt / status from server
   useEffect(() => {
     if (!localId || !inboxLastSyncAt) return
-    void getLogSheet(localId).then(sheet => {
-      if (sheet) setLogSheet(sheet)
+    void getLogSheet(localId).then(async sheet => {
+      if (!sheet) return
+      const entries = await enrichEntriesWithNfc(sheet.entries ?? [])
+      setLogSheet({ ...sheet, entries })
     })
   }, [inboxLastSyncAt, localId])
+
+  // Clear stale NFC tag when entering / leaving this page
+  useEffect(() => {
+    setLastScannedTag(null)
+    setNFCError(null)
+    lastProcessedTag.current = null
+    stopScan()
+    return () => {
+      setLastScannedTag(null)
+      stopScan()
+    }
+  }, [localId, setLastScannedTag, setNFCError, stopScan])
 
   // -------------------------------------------------------------------------
   // NFC tag lookup
@@ -264,7 +330,11 @@ export function LogSheetFillPage() {
         return
       }
 
-      setActiveEntry(entry)
+      setActiveEntry({
+        ...entry,
+        classId: toIdString(assetEntry.classId),
+        nfcTagId: assetEntry.nfcTagId
+      })
       setDialogEditable(true)
       setDialogOpen(true)
     },
@@ -283,32 +353,43 @@ export function LogSheetFillPage() {
     lastProcessedTag.current = null
   }
 
-  const handleStartNfcScan = () => {
+  const handleStartNfcScan = (e?: MouseEvent) => {
+    e?.preventDefault()
+    e?.stopPropagation()
     lastProcessedTag.current = null
     setNfcError(null)
     setNFCError(null)
     void startScan()
   }
 
-  // Fill tag ID field when NFC tag is detected, then open asset for edit
-  const lastTagSerial = lastTag?.serialNumber
-  useEffect(() => {
-    if (!lastTagSerial) return
-    if (lastTagSerial === lastProcessedTag.current) return
-    lastProcessedTag.current = lastTagSerial
-
-    setManualTagId(lastTagSerial)
-    stopScan()
-    void handleTagId(lastTagSerial)
-  }, [lastTagSerial, handleTagId, stopScan])
-
-  const handleManualSubmit = () => {
+  const handleManualSubmit = (e?: FormEvent | MouseEvent) => {
+    e?.preventDefault()
     if (!allowManualEntry) return
     const trimmed = manualTagId.trim()
     if (!trimmed) return
     void handleTagId(trimmed)
     setManualTagId('')
   }
+
+  // Fill tag ID from NDEF record payload (not hardware UID), then open asset for edit
+  useEffect(() => {
+    if (!lastTag || !isScanning) return
+
+    const tagId = resolveNfcTagId(lastTag)
+    if (!tagId) {
+      stopScan()
+      setNfcError('محتوای Record 1 خوانده نشد — تگ باید text/plain با شناسه Asset باشد')
+      return
+    }
+
+    if (tagId === lastProcessedTag.current) return
+    lastProcessedTag.current = tagId
+
+    setManualTagId(tagId)
+    stopScan()
+    setLastScannedTag(null)
+    void handleTagId(tagId)
+  }, [lastTag, isScanning, handleTagId, stopScan, setLastScannedTag])
 
   // -------------------------------------------------------------------------
   // Helpers
@@ -341,7 +422,10 @@ export function LogSheetFillPage() {
       )
       await updateLogSheet(localId, { entries: updatedEntries })
       const refreshed = await getLogSheet(localId)
-      if (refreshed) setLogSheet(refreshed)
+      if (refreshed) {
+        const entries = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        setLogSheet({ ...refreshed, entries })
+      }
       closeDialog()
       setSavedMessage('اطلاعات ذخیره شد')
     } catch (err) {
@@ -376,7 +460,10 @@ export function LogSheetFillPage() {
         clientActionId
       })
       const refreshed = await getLogSheet(localId)
-      if (refreshed) setLogSheet(refreshed)
+      if (refreshed) {
+        const entries = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        setLogSheet({ ...refreshed, entries })
+      }
       setSavedMessage('Log Sheet با موفقیت ارسال شد و در صف همگام‌سازی قرار گرفت')
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'خطا در ارسال')
@@ -411,7 +498,9 @@ export function LogSheetFillPage() {
   const isSubmitted = logSheet.status === 'submitted'
   const isExpired = isLogSheetExpired(logSheet)
   const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
-  const canEdit = !isSubmitted && !isExpired
+  const isRevoked = logSheet.syncStatus === 'failed' && isRevokedSyncError(logSheet.syncError)
+  const isInvalid = isInvalidLocalLogSheet(logSheet)
+  const canEdit = !isSubmitted && !isExpired && !isInvalid
   const entries = logSheet.entries ?? []
   const totalCount = entries.length
   const filledCount = entries.filter(
@@ -485,6 +574,12 @@ export function LogSheetFillPage() {
         </Alert>
       )}
 
+      {isRevoked && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {SYNC_OUTCOME_MESSAGES.REVOKED}
+        </Alert>
+      )}
+
       {isSuperseded && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           {SYNC_OUTCOME_MESSAGES.SUPERSEDED}
@@ -501,6 +596,7 @@ export function LogSheetFillPage() {
       {canEdit && entries.length > 0 && (
         <Box sx={{ mb: 2 }}>
           <Button
+            type="button"
             variant="contained"
             color="success"
             size="large"
@@ -512,8 +608,8 @@ export function LogSheetFillPage() {
                 <SendIcon />
               )
             }
-            onClick={() => void handleSubmitLogSheet()}
-            disabled={saving}
+            onClick={() => setConfirmSubmitOpen(true)}
+            disabled={saving || isScanning || dialogOpen}
           >
             {t.logSheet.submit}
           </Button>
@@ -554,11 +650,12 @@ export function LogSheetFillPage() {
 
             {isSupported && (
               <Button
+                type="button"
                 variant={isScanning ? 'contained' : 'outlined'}
                 color={isScanning ? 'error' : 'primary'}
                 fullWidth
                 startIcon={isScanning ? <CircularProgress size={16} color="inherit" /> : <NfcIcon />}
-                onClick={isScanning ? stopScan : handleStartNfcScan}
+                onClick={e => (isScanning ? stopScan() : handleStartNfcScan(e))}
                 sx={{ mb: 1.5, height: 44 }}
               >
                 {isScanning ? t.nfc.stopScan : t.nfc.startScan}
@@ -566,22 +663,25 @@ export function LogSheetFillPage() {
             )}
 
             {allowManualEntry ? (
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+              <Box
+                component="form"
+                onSubmit={e => handleManualSubmit(e)}
+                sx={{ display: 'flex', gap: 1, alignItems: 'center' }}
+              >
                 <TextField
                   size="small"
                   label={t.nfc.serialNumber}
                   placeholder="شناسه تگ..."
                   value={manualTagId}
                   onChange={e => setManualTagId(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleManualSubmit()}
                   dir="ltr"
                   sx={{ flex: 1 }}
                   inputProps={{ style: { fontFamily: 'monospace' }, readOnly: isScanning }}
                 />
                 <Button
+                  type="submit"
                   variant="contained"
                   size="small"
-                  onClick={handleManualSubmit}
                   disabled={!manualTagId.trim() || isScanning}
                   sx={{ height: 40, minWidth: 72 }}
                 >
@@ -703,6 +803,19 @@ export function LogSheetFillPage() {
                           }}
                         />
                       )}
+                      {entry.nfcTagId && (
+                        <Chip
+                          label={entry.nfcTagId}
+                          size="small"
+                          variant="outlined"
+                          sx={{
+                            fontSize: '0.65rem',
+                            height: 18,
+                            fontFamily: 'monospace',
+                            direction: 'ltr'
+                          }}
+                        />
+                      )}
                       {assetClass && (
                         <Chip
                           label={assetClass.name}
@@ -739,6 +852,34 @@ export function LogSheetFillPage() {
         })}
       </Stack>
       )}
+
+      {/* Confirm final submit */}
+      <Dialog open={confirmSubmitOpen} onClose={() => setConfirmSubmitOpen(false)} dir="rtl">
+        <DialogTitle>ثبت نهایی Log Sheet</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            آیا از ثبت نهایی و ارسال این Log Sheet به سرور مطمئن هستید؟
+            این عمل فقط با دکمه تأیید انجام می‌شود و اسکن NFC ارتباطی ندارد.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button type="button" onClick={() => setConfirmSubmitOpen(false)}>
+            انصراف
+          </Button>
+          <Button
+            type="button"
+            variant="contained"
+            color="success"
+            disabled={saving}
+            onClick={() => {
+              setConfirmSubmitOpen(false)
+              void handleSubmitLogSheet()
+            }}
+          >
+            تأیید ثبت نهایی
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Asset fill dialog */}
       <AssetFillDialog

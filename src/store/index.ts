@@ -73,10 +73,16 @@ interface AuthSlice {
 interface InboxSlice {
   inboxAssigned: ServerLogSheet[]
   inboxAvailable: ServerLogSheet[]
+  inboxTeamOpen: ServerLogSheet[]
   inboxLoading: boolean
   inboxError: string | null
   inboxLastSyncAt: number | null
-  setInbox: (assigned: ServerLogSheet[], available: ServerLogSheet[], syncAt: number) => void
+  setInbox: (
+    assigned: ServerLogSheet[],
+    available: ServerLogSheet[],
+    teamOpen: ServerLogSheet[],
+    syncAt: number
+  ) => void
   setInboxLoading: (v: boolean) => void
   setInboxError: (err: string | null) => void
   clearInbox: () => void
@@ -150,13 +156,15 @@ export const useAppStore = create<AppStore>()(
     // Inbox
     inboxAssigned: [],
     inboxAvailable: [],
+    inboxTeamOpen: [],
     inboxLoading: false,
     inboxError: null,
     inboxLastSyncAt: null,
-    setInbox: (assigned, available, syncAt) =>
+    setInbox: (assigned, available, teamOpen, syncAt) =>
       set({
         inboxAssigned: assigned,
         inboxAvailable: available,
+        inboxTeamOpen: teamOpen,
         inboxLastSyncAt: syncAt,
         inboxError: null
       }),
@@ -166,6 +174,7 @@ export const useAppStore = create<AppStore>()(
       set({
         inboxAssigned: [],
         inboxAvailable: [],
+        inboxTeamOpen: [],
         inboxLastSyncAt: null,
         inboxError: null
       })

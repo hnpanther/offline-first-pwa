@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   getAuthSession,
   saveAuthSession,
@@ -16,14 +16,23 @@ export function useAuthInit(): void {
   const setAuthLoaded = useAppStore(s => s.setAuthLoaded)
   const clearInbox = useAppStore(s => s.clearInbox)
   const navigate = useNavigate()
+  const location = useLocation()
 
   useEffect(() => {
+    let cancelled = false
     void (async () => {
       const session = await getAuthSession()
+      if (cancelled) return
       setAuthSession(session)
       setAuthLoaded(true)
+      if (session && location.pathname === '/login') {
+        navigate('/', { replace: true })
+      }
     })()
-  }, [setAuthSession, setAuthLoaded])
+    return () => {
+      cancelled = true
+    }
+  }, [setAuthSession, setAuthLoaded, navigate, location.pathname])
 
   useEffect(() => {
     setUnauthorizedHandler(() => {

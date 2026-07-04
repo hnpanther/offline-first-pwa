@@ -7,7 +7,21 @@ const AUTH_KEY = 'authSession'
 export async function getAuthSession(): Promise<AuthSession | null> {
   const row = await db.syncMeta.get(AUTH_KEY)
   const value = row?.value as AuthSession | undefined
-  if (!value || !isSessionValid(value)) return null
+  if (!value?.accessToken) return null
+  if (!isSessionValid(value)) {
+    if (navigator.onLine) {
+      await clearAuthSession()
+    }
+    return null
+  }
+  return value
+}
+
+/** Raw session from IndexedDB (ignores expiry) — for restore on startup. */
+export async function peekAuthSession(): Promise<AuthSession | null> {
+  const row = await db.syncMeta.get(AUTH_KEY)
+  const value = row?.value as AuthSession | undefined
+  if (!value?.accessToken) return null
   return value
 }
 

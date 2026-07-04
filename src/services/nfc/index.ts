@@ -7,7 +7,6 @@ import type { NFCTagData, NFCScanResult } from '@/types'
  * touching any UI component.
  */
 
-// Extend the global NDEFReader type (Web NFC API)
 declare global {
   interface Window {
     NDEFReader?: new () => NDEFReader
@@ -39,13 +38,52 @@ declare global {
   interface NDEFMessageRecord {
     recordType: string
     mediaType?: string
-    data?: DataView
+    data?: DataView | ArrayBuffer | Uint8Array | null
     toRecords?: () => NDEFMessageRecord[]
     encoding?: string
     lang?: string
     id?: string
   }
 }
+
+const URL_PREFIXES = [
+  '',
+  'http://www.',
+  'https://www.',
+  'http://',
+  'https://',
+  'tel:',
+  'mailto:',
+  'ftp://anonymous:anonymous@',
+  'ftp://ftp.',
+  'ftps://',
+  'sftp://',
+  'smb://',
+  'nfs://',
+  'ftp://',
+  'dav://',
+  'news:',
+  'telnet://',
+  'imap:',
+  'rtsp://',
+  'urn:',
+  'pop:',
+  'sip:',
+  'sips:',
+  'tftp:',
+  'btspp://',
+  'btl2cap://',
+  'btgoep://',
+  'tcpobex://',
+  'irdaobex://',
+  'file://',
+  'urn:epc:id:',
+  'urn:epc:tag:',
+  'urn:epc:pat:',
+  'urn:epc:raw:',
+  'urn:epc:',
+  'urn:nfc:'
+]
 
 export function isNFCSupported(): boolean {
   return typeof window !== 'undefined' && 'NDEFReader' in window
@@ -56,10 +94,20 @@ type NFCReadCallback = (result: NFCScanResult) => void
 let activeAbortController: AbortController | null = null
 
 /**
- * Start scanning for NFC tags.
- * Calls `onRead` each time a tag is detected.
- * Returns a cleanup function that stops scanning.
+ * Asset tag id from NDEF payload — never the hardware UID.
  */
+export function resolveNfcTagId(tag: NFCTagData): string {
+  const fromMessage = tag.message?.trim()
+  if (fromMessage) return fromMessage
+
+  let best = ''
+  for (const record of tag.records ?? []) {
+    const value = record.data?.trim() ?? ''
+    if (value.length > best.length) best = value
+  }
+  return best
+}
+
 export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void> {
   if (!isNFCSupported()) {
     onRead({
@@ -97,31 +145,125 @@ export function stopNFCScan(): void {
   activeAbortController = null
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 function parseNDEFEvent(event: NDEFReadingEvent): NFCTagData {
-  const records = event.message.records.map(r => ({
-    recordType: r.recordType,
-    mediaType: r.mediaType,
-    data: r.data ? decodeDataView(r.data) : undefined
-  }))
+  const records = event.message.records.map(r => {
+    const decoded = decodeRecordData(r)
+    return {
+      recordType: r.recordType,
+      mediaType: r.mediaType,
+      data: decoded || undefined
+    }
+  })
 
-  // Extract a human-readable message from the first text record
-  const textRecord = records.find(r => r.recordType === 'text' || r.recordType === 'url')
+  const best = pickLongest(records.map(r => r.data))
 
   return {
     serialNumber: event.serialNumber,
-    message: textRecord?.data,
+    message: best,
     records
   }
 }
 
-function decodeDataView(data: DataView): string {
+function decodeRecordData(record: NDEFMessageRecord): string {
+  const bytes = toBytes(record.data)
+  if (!bytes || bytes.byteLength === 0) return ''
+
+  const candidates: string[] = []
+
+  if (isPlainTextPayload(record)) {
+    candidates.push(decodeRawBytes(bytes))
+  }
+
+  if (record.recordType === 'url') {
+    candidates.push(decodeUrlBytes(bytes))
+  }
+
+  if (record.recordType === 'text' && isValidNdefTextHeader(bytes)) {
+    candidates.push(decodeNdefTextBytes(bytes))
+  }
+
+  // Always include raw UTF-8 — handles text/plain and mis-labelled text records.
+  candidates.push(decodeRawBytes(bytes))
+
+  return pickLongest(candidates)
+}
+
+function isPlainTextPayload(record: NDEFMessageRecord): boolean {
+  const type = record.recordType.toLowerCase()
+  const media = (record.mediaType ?? '').toLowerCase()
+
+  if (type === 'text/plain' || media === 'text/plain') return true
+  if (type.startsWith('text/')) return true
+  if (type === 'mime' && media.startsWith('text/')) return true
+  return false
+}
+
+function isValidNdefTextHeader(bytes: Uint8Array): boolean {
+  if (bytes.byteLength < 3) return false
+
+  const status = bytes[0]
+  const langLength = status & 0x3f
+  if (langLength === 0 || langLength > 8) return false
+  if (1 + langLength >= bytes.byteLength) return false
+
+  for (let i = 1; i <= langLength; i++) {
+    const c = bytes[i]
+    const isLetter = (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)
+    const isSubtag = c === 0x2d
+    if (!isLetter && !isSubtag) return false
+  }
+
+  return true
+}
+
+function decodeNdefTextBytes(bytes: Uint8Array): string {
+  const status = bytes[0]
+  const langLength = status & 0x3f
+  const isUtf16 = (status & 0x80) !== 0
+  const textStart = 1 + langLength
+  if (textStart >= bytes.byteLength) return ''
+
+  const textBytes = bytes.subarray(textStart)
+  return new TextDecoder(isUtf16 ? 'utf-16' : 'utf-8').decode(textBytes).trim()
+}
+
+function decodeUrlBytes(bytes: Uint8Array): string {
+  const code = bytes[0]
+  const prefix = URL_PREFIXES[code] ?? ''
+  if (bytes.byteLength <= 1) return prefix
+  return `${prefix}${decodeRawBytes(bytes.subarray(1))}`.trim()
+}
+
+function decodeRawBytes(bytes: Uint8Array): string {
   try {
-    return new TextDecoder().decode(data)
+    return new TextDecoder('utf-8')
+      .decode(bytes)
+      .replace(/\0/g, '')
+      .trim()
   } catch {
     return ''
   }
+}
+
+function toBytes(data: NDEFMessageRecord['data']): Uint8Array | null {
+  if (!data) return null
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  if (data instanceof Uint8Array) return data
+  if (data instanceof DataView) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  }
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  }
+  return null
+}
+
+function pickLongest(values: (string | undefined)[]): string {
+  let best = ''
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (trimmed && trimmed.length > best.length) best = trimmed
+  }
+  return best
 }

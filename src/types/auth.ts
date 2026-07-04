@@ -23,13 +23,19 @@ export interface LoginResponse {
   expiresAt: number
 }
 
-export function isSessionValid(session: AuthSession | null): boolean {
+export function isSessionValid(session: AuthSession | null, now = Date.now()): boolean {
   if (!session?.accessToken) return false
-  return Date.now() < session.expiresAt - 60_000
+  // Offline-first: stored session stays usable offline even past JWT expiry.
+  if (!navigator.onLine) return true
+  return now < session.expiresAt - 60_000
 }
 
 export function isAdminRole(roles: string[]): boolean {
   return roles.some(r => r === 'ADMIN' || r === 'HIGH_USER')
+}
+
+export function isSupervisorRole(roles: string[]): boolean {
+  return roles.some(r => r === 'SUPERVISOR' || r === 'ADMIN' || r === 'HIGH_USER')
 }
 
 export function hasPermission(session: AuthSession | null, perm: string): boolean {

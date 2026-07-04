@@ -183,6 +183,7 @@ export interface LogSheetEntryData {
   assetName: string
   subFunctionCode: string
   subFunctionTag: string
+  nfcTagId?: string
   classId: string          // was assetTypeId
   formData: Record<string, unknown>  // filled by operator
 }

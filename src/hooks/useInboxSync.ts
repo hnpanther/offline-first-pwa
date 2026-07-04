@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { pullInbox } from '@/services/sync/pullInbox'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
+import { saveInboxSnapshot, loadInboxSnapshot } from '@/services/storage/inboxCache'
 import { useAppStore } from '@/store'
 
 export function useInboxSync(): {
@@ -19,9 +20,17 @@ export function useInboxSync(): {
       if (showLoading || isFirstLoad) setInboxLoading(true)
       setInboxError(null)
       try {
-        const { assigned, available } = await pullInbox()
+        const { assigned, available, teamOpen, serverTime } = await pullInbox()
         await mergeInboxIntoLocalSheets(assigned)
-        setInbox(assigned, available, Date.now())
+        const syncAt = Date.now()
+        await saveInboxSnapshot({
+          assigned,
+          available,
+          teamOpen,
+          lastSyncAt: syncAt,
+          serverTime
+        })
+        setInbox(assigned, available, teamOpen, syncAt)
       } catch (err) {
         setInboxError(err instanceof Error ? err.message : 'خطا در دریافت کارتابل')
       } finally {
@@ -30,6 +39,17 @@ export function useInboxSync(): {
     },
     [isAuthenticated, setInbox, setInboxLoading, setInboxError]
   )
+
+  // Restore last inbox when offline (read-only snapshot)
+  useEffect(() => {
+    if (!isAuthenticated || isOnline) return
+    void loadInboxSnapshot().then(snap => {
+      if (!snap) return
+      const state = useAppStore.getState()
+      if (state.inboxLastSyncAt != null) return
+      setInbox(snap.assigned, snap.available, snap.teamOpen ?? [], snap.lastSyncAt)
+    })
+  }, [isAuthenticated, isOnline, setInbox])
 
   useEffect(() => {
     if (isOnline && isAuthenticated) {

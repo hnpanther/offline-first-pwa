@@ -7,20 +7,28 @@
 
 import { db } from './db'
 import { Repository } from './repository'
-import type { FieldDefinition } from '@/types/sync'
+import type { FieldDefinition, FieldDataType } from '@/types/sync'
 import type { FormField } from '@/types'
+import { toIdString } from '@/utils/ids'
 
 const repo = new Repository<FieldDefinition>(db.fieldDefinitions, 'field_definition')
 
 /** Sorted by order, excludes soft-deleted entries. */
-export async function getFieldsForClass(classId: string): Promise<FieldDefinition[]> {
-  let fields = await repo.findWhere('classId', classId)
-  const assetClass = await db.assetClasses.get(classId)
+export async function getFieldsForClass(classId: string | undefined): Promise<FieldDefinition[]> {
+  const normalizedClassId = toIdString(classId)
+  if (!normalizedClassId) return []
 
-  if (assetClass?.fields) {
+  let fields = (await repo.findAll()).filter(
+    f => toIdString(f.classId) === normalizedClassId
+  )
+
+  const assetClass = await db.assetClasses.get(normalizedClassId)
+
+  if (assetClass?.fields?.length) {
     const classKeys = assetClass.fields.map(f => f.name)
     const defKeys = fields.map(f => f.key)
     const needsSync =
+      fields.length === 0 ||
       classKeys.length !== defKeys.length ||
       classKeys.some((k, i) => k !== defKeys[i]) ||
       assetClass.fields.some((f, i) => {
@@ -29,12 +37,42 @@ export async function getFieldsForClass(classId: string): Promise<FieldDefinitio
       })
 
     if (needsSync) {
-      await syncClassFieldsFromFormFields(classId, assetClass.fields)
-      fields = await repo.findWhere('classId', classId)
+      await syncClassFieldsFromFormFields(normalizedClassId, assetClass.fields)
+      fields = (await repo.findAll()).filter(
+        f => toIdString(f.classId) === normalizedClassId
+      )
     }
   }
 
-  return fields.sort((a, b) => a.order - b.order)
+  if (fields.length === 0 && assetClass?.fields?.length) {
+    return formFieldsToDefinitions(normalizedClassId, assetClass.fields)
+  }
+
+  return fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+}
+
+function formFieldsToDefinitions(classId: string, fields: FormField[]): FieldDefinition[] {
+  const now = Date.now()
+  return fields.map((field, index) => ({
+    id: `embedded-${classId}-${field.name}`,
+    classId,
+    key: field.name,
+    label: field.label,
+    dataType: field.type as FieldDataType,
+    unit: field.unit,
+    required: field.required ?? false,
+    validation: {
+      min: field.min,
+      max: field.max,
+      options: field.options
+    },
+    order: index,
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+    deleted: false,
+    synced: true
+  }))
 }
 
 export async function getFieldDefinition(id: string): Promise<FieldDefinition | undefined> {

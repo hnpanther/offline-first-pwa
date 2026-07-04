@@ -7,6 +7,7 @@ import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { useSyncManager } from '@/hooks/useSync'
 import { useMasterDataSync } from '@/hooks/useMasterDataSync'
 import { useInboxSync } from '@/hooks/useInboxSync'
+import { InstallPwaPrompt } from '@/components/common/InstallPwaPrompt'
 
 const DRAWER_WIDTH = 240
 
@@ -40,6 +41,7 @@ export function AppLayout() {
         <Toolbar />
 
         <Box sx={{ flexGrow: 1, p: { xs: 1.5, sm: 2, md: 3 } }}>
+          <InstallPwaPrompt />
           <Outlet />
         </Box>
       </Box>

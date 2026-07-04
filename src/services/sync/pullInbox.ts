@@ -13,12 +13,14 @@ export interface InboxState {
 export async function pullInbox(signal?: AbortSignal): Promise<{
   assigned: ServerLogSheet[]
   available: ServerLogSheet[]
+  teamOpen: ServerLogSheet[]
   serverTime: number
 }> {
   const response = await fetchLogSheetInbox(signal)
   return {
     assigned: response.assigned ?? [],
     available: response.available ?? [],
+    teamOpen: response.teamOpen ?? [],
     serverTime: response.serverTime
   }
 }

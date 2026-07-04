@@ -9,7 +9,7 @@ import {
   CircularProgress
 } from '@mui/material'
 import LoginIcon from '@mui/icons-material/Login'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useForm, Controller } from 'react-hook-form'
 import { useAuth } from '@/hooks/useAuth'
@@ -31,12 +31,25 @@ export function LoginPage() {
 
   const from = (location.state as { from?: string } | null)?.from ?? '/'
 
+  useEffect(() => {
+    if (authLoaded && isAuthenticated) {
+      navigate(from, { replace: true })
+    }
+  }, [authLoaded, isAuthenticated, from, navigate])
+
   const { control, handleSubmit } = useForm<LoginForm>({
     defaultValues: { username: '', password: '' }
   })
 
-  if (authLoaded && isAuthenticated) {
-    navigate(from, { replace: true })
+  if (!authLoaded) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
+        <CircularProgress />
+      </Box>
+    )
+  }
+
+  if (isAuthenticated) {
     return null
   }
 

@@ -16,6 +16,7 @@ import ErrorIcon from '@mui/icons-material/Error'
 import EditIcon from '@mui/icons-material/Edit'
 import { useState } from 'react'
 import { useNFC } from '@/hooks/useNFC'
+import { resolveNfcTagId } from '@/services/nfc'
 import { t } from '@/i18n'
 
 interface NFCReaderProps {
@@ -33,8 +34,13 @@ export function NFCReader({ onTagConfirmed, allowManualEntry = false }: NFCReade
   }
 
   const handleTagConfirm = () => {
-    if (lastTag?.serialNumber) onTagConfirmed(lastTag.serialNumber)
+    if (!lastTag) return
+    const tagId = resolveNfcTagId(lastTag)
+    if (!tagId) return
+    onTagConfirmed(tagId)
   }
+
+  const resolvedTagId = lastTag ? resolveNfcTagId(lastTag) : ''
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -102,7 +108,7 @@ export function NFCReader({ onTagConfirmed, allowManualEntry = false }: NFCReade
                     {t.nfc.tagDetected}
                   </Typography>
                   <Chip
-                    label={`${t.nfc.serialNumber}: ${lastTag.serialNumber}`}
+                    label={`${t.nfc.serialNumber}: ${resolvedTagId}`}
                     variant="outlined"
                     color="success"
                   />

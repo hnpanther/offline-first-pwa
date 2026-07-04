@@ -27,16 +27,29 @@ const fa = {
   inbox: {
     myWork: 'کارهای من',
     pickupPool: 'قابل پیک‌آپ',
+    teamWork: 'کارهای واحد (سرپرست)',
     claim: 'پیک‌آپ',
     claiming: 'در حال پیک‌آپ...',
+    release: 'برگرداندن',
+    releasing: 'در حال برگرداندن...',
     open: 'شروع کار',
     refresh: 'بروزرسانی کارتابل',
     lastSync: 'آخرین بروزرسانی',
+    assignee: 'مسئول فعلی',
     noAssigned: 'کار باز اختصاص‌یافته‌ای ندارید',
     noAvailable: 'کار قابل پیک‌آپی در واحد شما نیست',
-    pickupRequiresOnline: 'برای پیک‌آپ باید آنلاین باشید',
+    pickupRequiresOnline: 'این عمل فقط در حالت آنلاین امکان‌پذیر است',
     claimFailed: 'پیک‌آپ ناموفق بود',
-    offlineHint: 'در حالت آفلاین فقط کارهای قبلاً پیک‌آپ‌شده یا اختصاص‌یافته را می‌توانید ادامه دهید. برای دیدن کارتابل جدید آنلاین شوید.'
+    releaseFailed: 'برگرداندن کار ناموفق بود',
+    assignTitle: 'انتساب به اپراتور',
+    reassignTitle: 'بازانتساب به اپراتور',
+    assign: 'انتساب',
+    assigning: 'در حال انتساب...',
+    assignConfirm: 'تأیید انتساب',
+    assignFailed: 'انتساب ناموفق بود',
+    selectOperator: 'انتخاب اپراتور',
+    offlineDraft: 'پیش‌نویس محلی — برای کارتابل به‌روز آنلاین شوید',
+    offlineHint: 'در حالت آفلاین فقط کارهای قبلاً ذخیره‌شده روی دستگاه قابل ادامه است. پیک‌آپ، انتساب و بروزرسانی کارتابل فقط آنلاین انجام می‌شود.'
   },
   nfc: {
     title: 'شناسایی Asset',
@@ -185,7 +198,8 @@ const fa = {
     assetValues: 'مقادیر Asset',
     scopeSummary: 'محدوده',
     producedAt: 'تاریخ تولید',
-    serverId: 'شناسه لاگ شیت'
+    serverId: 'شناسه لاگ شیت',
+    nfcTag: 'شناسه NFC'
   },
   sync: {
     pending: 'در انتظار ارسال',

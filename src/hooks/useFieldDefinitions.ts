@@ -7,6 +7,7 @@ import {
   reorderFieldDefinitions,
 } from '@/services/storage/fieldDefinitions'
 import type { FieldDefinition } from '@/types/sync'
+import { toIdString } from '@/utils/ids'
 
 /**
  * Hook for managing field definitions of a single AssetClass.
@@ -22,13 +23,14 @@ export function useFieldDefinitions(classId: string | undefined) {
   const [loading, setLoading] = useState(false)
 
   const refresh = useCallback(async () => {
-    if (!classId) {
+    const normalizedId = classId ? toIdString(classId) : ''
+    if (!normalizedId) {
       setFields([])
       return
     }
     setLoading(true)
     try {
-      setFields(await getFieldsForClass(classId))
+      setFields(await getFieldsForClass(normalizedId))
     } finally {
       setLoading(false)
     }

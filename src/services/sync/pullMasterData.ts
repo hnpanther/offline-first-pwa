@@ -22,6 +22,7 @@ import { fetchMasterData } from '@/services/api'
 import type { MasterDataResponse } from '@/services/api'
 import { toIdString } from '@/utils/ids'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
+import type { FieldDefinition } from '@/types/sync'
 
 export type PullStatus = 'idle' | 'pulling' | 'success' | 'error'
 
@@ -96,6 +97,11 @@ function normalizeMasterData(data: MasterDataResponse): MasterDataResponse {
       ...fd,
       id: toIdString(fd.id),
       classId: toIdString(fd.classId),
+      dataType: (fd.dataType?.toLowerCase() ?? 'text') as FieldDefinition['dataType'],
+      deleted: fd.deleted ?? false,
+      synced: fd.synced ?? true,
+      version: fd.version ?? 1,
+      order: fd.order ?? 0,
       validation: fd.validation
         ? {
             ...fd.validation,
