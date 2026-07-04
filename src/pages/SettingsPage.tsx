@@ -64,7 +64,7 @@ export function SettingsPage() {
                 label={t.settings.serverUrl}
                 fullWidth
                 dir="ltr"
-                helperText="مثال: http://192.168.1.100:3000"
+                helperText="مثال: http://192.168.1.100:8081"
                 inputProps={{ style: { textAlign: 'left', direction: 'ltr' } }}
               />
             )}

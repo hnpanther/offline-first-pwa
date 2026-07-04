@@ -26,9 +26,12 @@ import FactCheckIcon from '@mui/icons-material/FactCheck'
 import AssignmentIcon from '@mui/icons-material/Assignment'
 import HistoryIcon from '@mui/icons-material/History'
 import ArticleIcon from '@mui/icons-material/Article'
+import LogoutIcon from '@mui/icons-material/Logout'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { t } from '@/i18n'
+import { useAuth } from '@/hooks/useAuth'
+import { isAdminRole } from '@/types/auth'
 
 const DRAWER_WIDTH = 240
 
@@ -56,6 +59,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const navigate = useNavigate()
   const location = useLocation()
+  const { authSession, signOut } = useAuth()
+  const showAdmin = authSession ? isAdminRole(authSession.roles) : false
 
   const isLogSheetRoute = location.pathname.startsWith('/logsheets')
   const isMasterDataRoute = location.pathname.startsWith('/master-data')
@@ -177,63 +182,67 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </List>
         </Collapse>
 
-        {/* قالب‌های Log Sheet — standalone */}
-        <ListItemButton
-          selected={isSelected('/logsheet-templates')}
-          onClick={() => handleNav('/logsheet-templates')}
-          sx={groupItemSx(isSelected('/logsheet-templates'))}
-        >
-          <ListItemIcon sx={{ minWidth: 40 }}>
-            <ArticleIcon color={isSelected('/logsheet-templates') ? 'inherit' : 'action'} />
-          </ListItemIcon>
-          <ListItemText
-            primary={t.nav.logSheetTemplates}
-            primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: isSelected('/logsheet-templates') ? 600 : 400 }}
-          />
-        </ListItemButton>
+        {showAdmin && (
+          <>
+            <ListItemButton
+              selected={isSelected('/logsheet-templates')}
+              onClick={() => handleNav('/logsheet-templates')}
+              sx={groupItemSx(isSelected('/logsheet-templates'))}
+            >
+              <ListItemIcon sx={{ minWidth: 40 }}>
+                <ArticleIcon color={isSelected('/logsheet-templates') ? 'inherit' : 'action'} />
+              </ListItemIcon>
+              <ListItemText
+                primary={t.nav.logSheetTemplates}
+                primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: isSelected('/logsheet-templates') ? 600 : 400 }}
+              />
+            </ListItemButton>
 
-        <Divider sx={{ my: 1 }} />
+            <Divider sx={{ my: 1 }} />
 
-        {/* اطلاعات پایه — expandable */}
-        <ListItemButton
-          onClick={() => setMasterDataOpen(v => !v)}
-          selected={isMasterDataRoute}
-          sx={groupItemSx(isMasterDataRoute)}
-        >
-          <ListItemIcon sx={{ minWidth: 40 }}>
-            <StorageIcon color={isMasterDataRoute ? 'inherit' : 'action'} />
-          </ListItemIcon>
-          <ListItemText
-            primary={t.nav.masterData}
-            primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isMasterDataRoute ? 600 : 400 }}
-          />
-          {masterDataOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-        </ListItemButton>
+            <ListItemButton
+              onClick={() => setMasterDataOpen(v => !v)}
+              selected={isMasterDataRoute}
+              sx={groupItemSx(isMasterDataRoute)}
+            >
+              <ListItemIcon sx={{ minWidth: 40 }}>
+                <StorageIcon color={isMasterDataRoute ? 'inherit' : 'action'} />
+              </ListItemIcon>
+              <ListItemText
+                primary={t.nav.masterData}
+                primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isMasterDataRoute ? 600 : 400 }}
+              />
+              {masterDataOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            </ListItemButton>
 
-        <Collapse in={masterDataOpen} timeout="auto" unmountOnExit>
-          <List disablePadding sx={{ pr: 1 }}>
-            {masterDataItems.map(item => (
-              <ListItemButton
-                key={item.path}
-                selected={isSelected(item.path)}
-                onClick={() => handleNav(item.path)}
-                sx={subItemSx(isSelected(item.path))}
-              >
-                <ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon>
-                <ListItemText
-                  primary={item.label}
-                  primaryTypographyProps={{
-                    fontSize: '0.82rem',
-                    fontWeight: isSelected(item.path) ? 600 : 400,
-                    noWrap: true
-                  }}
-                />
-              </ListItemButton>
-            ))}
-          </List>
-        </Collapse>
+            <Collapse in={masterDataOpen} timeout="auto" unmountOnExit>
+              <List disablePadding sx={{ pr: 1 }}>
+                {masterDataItems.map(item => (
+                  <ListItemButton
+                    key={item.path}
+                    selected={isSelected(item.path)}
+                    onClick={() => handleNav(item.path)}
+                    sx={subItemSx(isSelected(item.path))}
+                  >
+                    <ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon>
+                    <ListItemText
+                      primary={item.label}
+                      primaryTypographyProps={{
+                        fontSize: '0.82rem',
+                        fontWeight: isSelected(item.path) ? 600 : 400,
+                        noWrap: true
+                      }}
+                    />
+                  </ListItemButton>
+                ))}
+              </List>
+            </Collapse>
 
-        <Divider sx={{ my: 1 }} />
+            <Divider sx={{ my: 1 }} />
+          </>
+        )}
+
+        {!showAdmin && <Divider sx={{ my: 1 }} />}
 
         {/* تنظیمات */}
         <ListItemButton
@@ -247,6 +256,24 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isSelected('/settings') ? 600 : 400 }}
           />
         </ListItemButton>
+
+        {authSession && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <Box sx={{ px: 2, py: 1 }}>
+              <Typography variant="caption" color="text.secondary" display="block">
+                {authSession.fullName || authSession.username}
+              </Typography>
+            </Box>
+            <ListItemButton onClick={() => void signOut()} sx={{ borderRadius: 1 }}>
+              <ListItemIcon sx={{ minWidth: 40 }}><LogoutIcon color="error" /></ListItemIcon>
+              <ListItemText
+                primary={t.auth.logout}
+                primaryTypographyProps={{ fontSize: '0.9rem', color: 'error.main' }}
+              />
+            </ListItemButton>
+          </>
+        )}
       </List>
     </Box>
   )

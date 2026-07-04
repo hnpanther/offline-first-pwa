@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import type { AssetEntry, DataRecord, NFCTagData, AppSettings } from '@/types'
+import type { AuthSession } from '@/types/auth'
+import type { ServerLogSheet } from '@/services/api'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 
 // ---------------------------------------------------------------------------
@@ -56,6 +58,31 @@ interface RecordsSlice {
 }
 
 // ---------------------------------------------------------------------------
+// Auth slice
+// ---------------------------------------------------------------------------
+interface AuthSlice {
+  authSession: AuthSession | null
+  authLoaded: boolean
+  setAuthSession: (session: AuthSession | null) => void
+  setAuthLoaded: (v: boolean) => void
+}
+
+// ---------------------------------------------------------------------------
+// Inbox slice
+// ---------------------------------------------------------------------------
+interface InboxSlice {
+  inboxAssigned: ServerLogSheet[]
+  inboxAvailable: ServerLogSheet[]
+  inboxLoading: boolean
+  inboxError: string | null
+  inboxLastSyncAt: number | null
+  setInbox: (assigned: ServerLogSheet[], available: ServerLogSheet[], syncAt: number) => void
+  setInboxLoading: (v: boolean) => void
+  setInboxError: (err: string | null) => void
+  clearInbox: () => void
+}
+
+// ---------------------------------------------------------------------------
 // Settings slice
 // ---------------------------------------------------------------------------
 interface SettingsSlice {
@@ -68,7 +95,7 @@ interface SettingsSlice {
 // ---------------------------------------------------------------------------
 // Combined store
 // ---------------------------------------------------------------------------
-type AppStore = NFCSlice & AssetSlice & SyncSlice & RecordsSlice & SettingsSlice
+type AppStore = NFCSlice & AssetSlice & SyncSlice & RecordsSlice & SettingsSlice & AuthSlice & InboxSlice
 
 export const useAppStore = create<AppStore>()(
   subscribeWithSelector((set) => ({
@@ -112,6 +139,35 @@ export const useAppStore = create<AppStore>()(
     settings: { ...DEFAULT_SETTINGS },
     settingsLoaded: false,
     setSettings: (s) => set({ settings: s }),
-    setSettingsLoaded: (v) => set({ settingsLoaded: v })
+    setSettingsLoaded: (v) => set({ settingsLoaded: v }),
+
+    // Auth
+    authSession: null,
+    authLoaded: false,
+    setAuthSession: (session) => set({ authSession: session }),
+    setAuthLoaded: (v) => set({ authLoaded: v }),
+
+    // Inbox
+    inboxAssigned: [],
+    inboxAvailable: [],
+    inboxLoading: false,
+    inboxError: null,
+    inboxLastSyncAt: null,
+    setInbox: (assigned, available, syncAt) =>
+      set({
+        inboxAssigned: assigned,
+        inboxAvailable: available,
+        inboxLastSyncAt: syncAt,
+        inboxError: null
+      }),
+    setInboxLoading: (v) => set({ inboxLoading: v }),
+    setInboxError: (err) => set({ inboxError: err }),
+    clearInbox: () =>
+      set({
+        inboxAssigned: [],
+        inboxAvailable: [],
+        inboxLastSyncAt: null,
+        inboxError: null
+      })
   }))
 )

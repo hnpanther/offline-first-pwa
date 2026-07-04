@@ -13,6 +13,7 @@ import {
 } from '@mui/material'
 import { Controller, type Control, type RegisterOptions } from 'react-hook-form'
 import type { FormField } from '@/types'
+import { normalizeFieldOptions } from '@/utils/fieldOptions'
 
 interface DynamicFormFieldProps {
   field: FormField
@@ -29,6 +30,7 @@ interface DynamicFormFieldProps {
 
 export function DynamicFormField({ field, control, error, rules }: DynamicFormFieldProps) {
   const label = field.required ? `${field.label} *` : field.label
+  const options = normalizeFieldOptions(field.options)
 
   // If caller passes explicit rules (from DynamicClassForm), use them.
   // Otherwise fall back to a simple required check from field.required.
@@ -58,6 +60,7 @@ export function DynamicFormField({ field, control, error, rules }: DynamicFormFi
               helperText={error ?? field.helperText}
               fullWidth
               size="medium"
+              sx={{ '& .MuiOutlinedInput-root': { overflow: 'visible' } }}
               inputProps={{
                 min: field.min,
                 max: field.max
@@ -75,11 +78,21 @@ export function DynamicFormField({ field, control, error, rules }: DynamicFormFi
           defaultValue={field.defaultValue ?? ''}
           rules={effectiveRules}
           render={({ field: f }) => (
-            <FormControl fullWidth error={!!error}>
-              <InputLabel>{label}</InputLabel>
-              <Select {...f} label={label}>
-                {field.options?.map(opt => (
-                  <MenuItem key={opt.value} value={opt.value}>
+            <FormControl fullWidth error={!!error} sx={{ mt: 0.5 }}>
+              <InputLabel id={`${field.name}-label`}>{label}</InputLabel>
+              <Select
+                {...f}
+                labelId={`${field.name}-label`}
+                label={label}
+                displayEmpty={!field.required}
+              >
+                {!field.required && (
+                  <MenuItem key={`${field.name}-empty`} value="">
+                    <em>— انتخاب کنید —</em>
+                  </MenuItem>
+                )}
+                {options.map((opt, idx) => (
+                  <MenuItem key={`${field.name}-${opt.value}-${idx}`} value={opt.value}>
                     {opt.label}
                   </MenuItem>
                 ))}
@@ -118,10 +131,10 @@ export function DynamicFormField({ field, control, error, rules }: DynamicFormFi
           render={({ field: f }) => (
             <FormControl component="fieldset" error={!!error} fullWidth>
               <FormLabel component="legend">{label}</FormLabel>
-              <FormGroup>
-                {field.options?.map(opt => (
+              <FormGroup sx={{ pl: 0.5 }}>
+                {options.map((opt, idx) => (
                   <FormControlLabel
-                    key={opt.value}
+                    key={`${field.name}-${opt.value}-${idx}`}
                     control={
                       <Checkbox
                         checked={Array.isArray(f.value) && f.value.includes(opt.value)}

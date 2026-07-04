@@ -15,6 +15,29 @@ const fa = {
     logSheetHistory: 'سوابق لاگ شیت‌ها',
     logSheetTemplates: 'قالب‌های Log Sheet'
   },
+  auth: {
+    loginTitle: 'ورود به سیستم',
+    loginSubtitle: 'با نام کاربری و رمز عبور وارد شوید',
+    username: 'نام کاربری',
+    password: 'رمز عبور',
+    login: 'ورود',
+    loggingIn: 'در حال ورود...',
+    logout: 'خروج'
+  },
+  inbox: {
+    myWork: 'کارهای من',
+    pickupPool: 'قابل پیک‌آپ',
+    claim: 'پیک‌آپ',
+    claiming: 'در حال پیک‌آپ...',
+    open: 'شروع کار',
+    refresh: 'بروزرسانی کارتابل',
+    lastSync: 'آخرین بروزرسانی',
+    noAssigned: 'کار باز اختصاص‌یافته‌ای ندارید',
+    noAvailable: 'کار قابل پیک‌آپی در واحد شما نیست',
+    pickupRequiresOnline: 'برای پیک‌آپ باید آنلاین باشید',
+    claimFailed: 'پیک‌آپ ناموفق بود',
+    offlineHint: 'در حالت آفلاین فقط کارهای قبلاً پیک‌آپ‌شده یا اختصاص‌یافته را می‌توانید ادامه دهید. برای دیدن کارتابل جدید آنلاین شوید.'
+  },
   nfc: {
     title: 'شناسایی Asset',
     startScan: 'شروع اسکن NFC',
@@ -154,13 +177,15 @@ const fa = {
     fill: 'تکمیل Log Sheet',
     draft: 'پیش‌نویس',
     submitted: 'ارسال شده',
-    submit: 'ارسال نهایی',
+    submit: 'ثبت نهایی Log Sheet',
     saveDraft: 'ذخیره پیش‌نویس',
     noAssets: 'هیچ Asset ای در این محدوده یافت نشد',
     noLogSheets: 'هیچ Log Sheet ای ثبت نشده',
     deleteConfirm: 'آیا از حذف این Log Sheet مطمئن هستید؟',
     assetValues: 'مقادیر Asset',
-    scopeSummary: 'محدوده'
+    scopeSummary: 'محدوده',
+    producedAt: 'تاریخ تولید',
+    serverId: 'شناسه لاگ شیت'
   },
   sync: {
     pending: 'در انتظار ارسال',
@@ -171,7 +196,9 @@ const fa = {
     pendingCount: '{{count}} رکورد در انتظار',
     manualSync: 'همگام‌سازی دستی',
     online: 'آنلاین',
-    offline: 'آفلاین'
+    offline: 'آفلاین',
+    expired: 'مهلت تکمیل گذشته — سینک ممکن نیست',
+    superseded: 'ثبت‌شده توسط دیگری — سینک ممکن نیست'
   },
   records: {
     title: 'سوابق',
@@ -196,7 +223,8 @@ const fa = {
     operatorName: 'نام اپراتور',
     locationName: 'نام محل',
     allowManualEntry: 'اجازه ورود دستی شناسه تگ',
-    allowManualEntryHint: 'اگر فعال باشد، کاربر می‌تواند شناسه را بدون اسکن NFC وارد کند',
+    allowManualEntryHint:
+      'اگر فعال باشد، همه کاربران می‌توانند شناسه را بدون اسکن NFC وارد کنند. سرپرست و اپراتور ارشد همیشه این امکان را دارند.',
     save: 'ذخیره',
     saved: 'تنظیمات ذخیره شد'
   },

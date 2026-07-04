@@ -9,137 +9,116 @@ import {
   Alert,
   CircularProgress,
   Divider,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  DialogContentText,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   IconButton,
   TextField,
-  Pagination
+  Pagination,
+  Tooltip
 } from '@mui/material'
-import AddIcon from '@mui/icons-material/Add'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
-import DeleteIcon from '@mui/icons-material/Delete'
 import SearchIcon from '@mui/icons-material/Search'
 import SyncIcon from '@mui/icons-material/Sync'
-import { useState, useEffect } from 'react'
+import BackHandIcon from '@mui/icons-material/BackHand'
+import CloudOffIcon from '@mui/icons-material/CloudOff'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useLogSheetTemplates, useLogSheets } from '@/hooks/useLogSheets'
-import { getAssetsInScope, getAllSubFunctions, getSettings } from '@/services/storage'
+import { useLogSheets } from '@/hooks/useLogSheets'
+import { useInboxSync } from '@/hooks/useInboxSync'
+import { useAppStore } from '@/store'
+import { claimLogSheet } from '@/services/api'
+import { ensureLocalLogSheet } from '@/services/sync/logSheetSync'
+import { getLogSheetByServerId } from '@/services/storage'
 import { t } from '@/i18n'
-import type { LogSheetTemplate, LogSheetEntryData, LogSheet } from '@/types'
+import type { LogSheet } from '@/types'
+import type { ServerLogSheet } from '@/services/api'
+import { toIdString } from '@/utils/ids'
+import { ScopeLabel } from '@/components/common/ScopeLabel'
+import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 
 const PAGE_SIZE = 20
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
 
-// ---------------------------------------------------------------------------
-// Create from template dialog
-// ---------------------------------------------------------------------------
-
-interface CreateLogSheetDialogProps {
-  open: boolean
-  templates: LogSheetTemplate[]
-  onClose: () => void
-  onCreate: (template: LogSheetTemplate) => Promise<void>
-}
-
-function CreateLogSheetDialog({ open, templates, onClose, onCreate }: CreateLogSheetDialogProps) {
-  const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleCreate = async () => {
-    const template = templates.find(t => t.id === selectedTemplateId)
-    if (!template) return
-    setCreating(true)
-    setError(null)
-    try {
-      await onCreate(template)
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'خطا در ایجاد Log Sheet')
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onClose={creating ? undefined : onClose}
-      dir="rtl"
-      fullWidth
-      maxWidth="xs"
-      TransitionProps={{ onExited: () => { setSelectedTemplateId(''); setError(null) } }}
-    >
-      <DialogTitle>ایجاد Log Sheet از قالب</DialogTitle>
-      <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 3 }}>
-        <FormControl fullWidth required>
-          <InputLabel>انتخاب قالب</InputLabel>
-          <Select
-            value={selectedTemplateId}
-            label="انتخاب قالب"
-            onChange={e => setSelectedTemplateId(e.target.value)}
-            disabled={creating}
-          >
-            <MenuItem value=""><em>— انتخاب کنید —</em></MenuItem>
-            {templates.map(tmpl => (
-              <MenuItem key={tmpl.id} value={tmpl.id}>{tmpl.name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        {error && <Alert severity="error">{error}</Alert>}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose} disabled={creating}>{t.common.cancel}</Button>
-        <Button
-          variant="contained"
-          onClick={() => void handleCreate()}
-          disabled={!selectedTemplateId || creating}
-          startIcon={creating ? <CircularProgress size={16} color="inherit" /> : undefined}
-        >
-          {creating ? 'در حال ایجاد...' : 'ایجاد'}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
-
 interface LogSheetListPageProps {
   mode: 'active' | 'history'
 }
 
+function serverStatusLabel(status?: string | null): string {
+  switch (status) {
+    case 'ASSIGNED': return 'اختصاص یافته'
+    case 'IN_PROGRESS': return 'در حال انجام'
+    case 'PENDING': return 'در انتظار پیک‌آپ'
+    case 'SUBMITTED': return 'ارسال شده'
+    case 'EXPIRED': return 'منقضی'
+    default: return status ?? '—'
+  }
+}
+
 export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const navigate = useNavigate()
-  const { templates } = useLogSheetTemplates()
-  const { logs, loading, addLogSheet, removeLogSheet } = useLogSheets()
+  const isOnline = useAppStore(s => s.isOnline)
+  const inboxAssigned = useAppStore(s => s.inboxAssigned)
+  const inboxAvailable = useAppStore(s => s.inboxAvailable)
+  const inboxLoading = useAppStore(s => s.inboxLoading)
+  const inboxError = useAppStore(s => s.inboxError)
+  const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
+  const { refreshInbox } = useInboxSync()
+  const { logs, loading, refresh: refreshLocal } = useLogSheets()
 
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
-  const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<LogSheet | undefined>()
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [claimingId, setClaimingId] = useState<string | null>(null)
 
-  // Reset page when search or mode changes
   useEffect(() => setPage(1), [search, mode])
 
-  // Filter by mode then by search
-  const modeFiltered = logs.filter(log =>
-    mode === 'active' ? log.status === 'draft' : log.status === 'submitted'
+  const openSheet = useCallback(
+    async (serverSheet: ServerLogSheet) => {
+      setActionError(null)
+      try {
+        const local = await ensureLocalLogSheet(serverSheet)
+        await refreshLocal()
+        navigate(`/logsheets/${local.localId}`)
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'خطا در باز کردن کار')
+      }
+    },
+    [navigate, refreshLocal]
   )
 
-  const filtered = modeFiltered.filter(log => {
+  const handleClaim = async (sheet: ServerLogSheet) => {
+    if (!isOnline) {
+      setActionError(t.inbox.pickupRequiresOnline)
+      return
+    }
+    setActionError(null)
+    setClaimingId(toIdString(sheet.id))
+    try {
+      const claimed = await claimLogSheet(sheet.id)
+      await refreshInbox()
+      await openSheet(claimed)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t.inbox.claimFailed)
+    } finally {
+      setClaimingId(null)
+    }
+  }
+
+  const handleOpenAssigned = async (sheet: ServerLogSheet) => {
+    const serverId = toIdString(sheet.id)
+    const existing = await getLogSheetByServerId(serverId)
+    if (existing) {
+      navigate(`/logsheets/${existing.localId}`)
+      return
+    }
+    await openSheet(sheet)
+  }
+
+  // Active: assigned from server inbox + local drafts not yet in history
+  // History: locally submitted sheets
+  const historyLogs = logs.filter(log => log.status === 'submitted')
+
+  const filteredHistory = historyLogs.filter(log => {
     const q = search.toLowerCase()
     if (!q) return true
     return (
@@ -149,49 +128,30 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     )
   })
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const filteredAssigned = inboxAssigned.filter(s => {
+    const q = search.toLowerCase()
+    if (!q) return true
+    return (
+      (s.templateName ?? '').toLowerCase().includes(q) ||
+      (s.scopeSummary ?? '').toLowerCase().includes(q)
+    )
+  })
 
-  const createLogSheetFromTemplate = async (template: LogSheetTemplate) => {
-    const assets = await getAssetsInScope(template.scopeType, template.scopeId)
-    if (assets.length === 0) throw new Error(t.logSheet.noAssets)
+  const filteredAvailable = inboxAvailable.filter(s => {
+    const q = search.toLowerCase()
+    if (!q) return true
+    return (
+      (s.templateName ?? '').toLowerCase().includes(q) ||
+      (s.scopeSummary ?? '').toLowerCase().includes(q)
+    )
+  })
 
-    const allSubFunctions = await getAllSubFunctions()
-    const sfMap = new Map(allSubFunctions.map(sf => [sf.id, sf]))
+  const totalPages =
+    mode === 'history'
+      ? Math.ceil(filteredHistory.length / PAGE_SIZE)
+      : Math.ceil((filteredAssigned.length + filteredAvailable.length) / PAGE_SIZE)
 
-    const entries: LogSheetEntryData[] = assets.map(asset => {
-      const sf = sfMap.get(asset.subFunctionId)
-      return {
-        assetId: asset.id,
-        assetName: asset.assetName,
-        subFunctionCode: sf?.code ?? '',
-        subFunctionTag: sf?.tag ?? '',
-        classId: asset.classId,
-        formData: {}
-      }
-    })
-
-    const settings = await getSettings()
-    const newLogSheet = await addLogSheet({
-      templateId: template.id,
-      templateName: template.name,
-      scopeSummary: template.name,
-      operatorName: settings.operatorName || undefined,
-      status: 'draft',
-      entries
-    })
-    navigate(`/logsheets/${newLogSheet.localId}`)
-  }
-
-  const handleCreateFromTemplate = async (template: LogSheetTemplate) => {
-    setCreateError(null)
-    try {
-      await createLogSheetFromTemplate(template)
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : 'خطا در ایجاد Log Sheet')
-      throw err
-    }
-  }
+  const paginatedHistory = filteredHistory.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   const syncStatusColor = (log: LogSheet) => {
     if (log.syncStatus === 'synced') return 'success'
@@ -207,71 +167,193 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     return 'در انتظار ارسال'
   }
 
+  const renderServerCard = (
+    sheet: ServerLogSheet,
+    variant: 'assigned' | 'available'
+  ) => {
+    const serverId = toIdString(sheet.id)
+    const isClaiming = claimingId === serverId
+
+    return (
+      <Card
+        key={`${variant}-${serverId}`}
+        variant="outlined"
+        sx={{
+          borderRight: '4px solid',
+          borderRightColor: variant === 'assigned' ? 'primary.main' : 'info.main'
+        }}
+      >
+        <CardContent sx={{ pb: '8px !important' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
+            <Box sx={{ flex: 1 }}>
+              <Typography variant="subtitle1" fontWeight={700}>
+                {sheet.templateName}
+              </Typography>
+              <ScopeLabel
+                scopeSummary={sheet.scopeSummary}
+                templateId={sheet.templateId != null ? toIdString(sheet.templateId) : undefined}
+              />
+            </Box>
+            <Chip
+              label={serverStatusLabel(sheet.status)}
+              size="small"
+              color={variant === 'assigned' ? 'primary' : 'info'}
+              variant="outlined"
+            />
+            {variant === 'assigned' ? (
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<OpenInNewIcon />}
+                onClick={() => void handleOpenAssigned(sheet)}
+              >
+                {t.inbox.open}
+              </Button>
+            ) : (
+              <Tooltip
+                title={!isOnline ? t.inbox.pickupRequiresOnline : ''}
+                arrow
+              >
+                <span>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    color="info"
+                    disabled={!isOnline || isClaiming}
+                    startIcon={
+                      isClaiming ? (
+                        <CircularProgress size={14} color="inherit" />
+                      ) : !isOnline ? (
+                        <CloudOffIcon />
+                      ) : (
+                        <BackHandIcon />
+                      )
+                    }
+                    onClick={() => void handleClaim(sheet)}
+                  >
+                    {isClaiming ? t.inbox.claiming : t.inbox.claim}
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
+          </Box>
+
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', flexDirection: 'column' }}>
+            <LogSheetIdentityMeta serverId={sheet.id} createdAt={sheet.createdAt} />
+            {sheet.dueAt && (
+              <Typography variant="caption" color="text.secondary">
+                مهلت: {formatDate(sheet.dueAt)}
+              </Typography>
+            )}
+            {sheet.assignmentType === 'SUPERVISOR_ASSIGNED' && (
+              <Chip label="اختصاص سرپرست" size="small" variant="outlined" />
+            )}
+          </Box>
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
     <Box sx={{ maxWidth: 720, mx: 'auto' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h5" fontWeight={700}>
           {mode === 'active' ? t.nav.logSheetActive : t.nav.logSheetHistory}
         </Typography>
         {mode === 'active' && (
           <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => setCreateDialogOpen(true)}
-            disabled={templates.length === 0}
+            size="small"
+            variant="outlined"
+            startIcon={inboxLoading ? <CircularProgress size={14} /> : <SyncIcon />}
+            onClick={() => void refreshInbox(true)}
+            disabled={!isOnline || inboxLoading}
           >
-            {t.logSheet.createFromTemplate}
+            {t.inbox.refresh}
           </Button>
         )}
       </Box>
 
-      {mode === 'active' && templates.length === 0 && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          ابتدا یک قالب در بخش «قالب‌های Log Sheet» تعریف کنید.
+      {mode === 'active' && !isOnline && (
+        <Alert severity="warning" sx={{ mb: 2 }} icon={<CloudOffIcon />}>
+          {t.inbox.offlineHint}
         </Alert>
       )}
 
-      {createError && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setCreateError(null)}>
-          {createError}
+      {inboxError && mode === 'active' && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => useAppStore.getState().setInboxError(null)}>
+          {inboxError}
         </Alert>
       )}
 
-      {/* Search */}
+      {actionError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>
+          {actionError}
+        </Alert>
+      )}
+
+      {mode === 'active' && inboxLastSyncAt && (
+        <Typography variant="caption" color="text.disabled" sx={{ mb: 1, display: 'block' }}>
+          {t.inbox.lastSync}: {formatDate(inboxLastSyncAt)}
+        </Typography>
+      )}
+
       <TextField
         size="small"
-        placeholder="جستجو در نام قالب، محدوده یا اپراتور..."
+        placeholder="جستجو..."
         value={search}
         onChange={e => setSearch(e.target.value)}
         fullWidth
         sx={{ mb: 1 }}
         InputProps={{
-          startAdornment: <SearchIcon fontSize="small" sx={{ ml: 0.5, color: 'text.disabled', mr: 0.5 }} />
+          startAdornment: (
+            <SearchIcon fontSize="small" sx={{ ml: 0.5, color: 'text.disabled', mr: 0.5 }} />
+          )
         }}
       />
-      <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-        {filtered.length} مورد{search ? ` از ${modeFiltered.length}` : ''}
-      </Typography>
 
-      {loading ? (
+      {(loading || (mode === 'active' && inboxLoading && inboxAssigned.length === 0)) ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
         </Box>
-      ) : filtered.length === 0 ? (
-        <Alert severity="info">
-          {search ? 'نتیجه‌ای یافت نشد' : t.logSheet.noLogSheets}
-        </Alert>
+      ) : mode === 'active' ? (
+        <>
+          <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, mt: 1 }}>
+            {t.inbox.myWork} ({filteredAssigned.length})
+          </Typography>
+          {filteredAssigned.length === 0 ? (
+            <Alert severity="info" sx={{ mb: 2 }}>{t.inbox.noAssigned}</Alert>
+          ) : (
+            <Stack spacing={1.5} sx={{ mb: 3 }}>
+              {filteredAssigned.map(s => renderServerCard(s, 'assigned'))}
+            </Stack>
+          )}
+
+          <Divider sx={{ my: 2 }} />
+
+          <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>
+            {t.inbox.pickupPool} ({filteredAvailable.length})
+          </Typography>
+          {filteredAvailable.length === 0 ? (
+            <Alert severity="info">{t.inbox.noAvailable}</Alert>
+          ) : (
+            <Stack spacing={1.5}>
+              {filteredAvailable.map(s => renderServerCard(s, 'available'))}
+            </Stack>
+          )}
+        </>
+      ) : filteredHistory.length === 0 ? (
+        <Alert severity="info">{search ? 'نتیجه‌ای یافت نشد' : t.logSheet.noLogSheets}</Alert>
       ) : (
         <>
+          <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+            {filteredHistory.length} مورد
+          </Typography>
           <Stack spacing={1.5}>
-            {paginated.map(log => (
+            {paginatedHistory.map(log => (
               <Card
                 key={log.localId}
                 variant="outlined"
-                sx={{
-                  borderRight: '4px solid',
-                  borderRightColor: mode === 'active' ? 'warning.main' : 'success.main'
-                }}
+                sx={{ borderRight: '4px solid', borderRightColor: 'success.main' }}
               >
                 <CardContent sx={{ pb: '8px !important' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
@@ -279,107 +361,48 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                       <Typography variant="subtitle1" fontWeight={700}>
                         {log.templateName}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {log.scopeSummary}
-                      </Typography>
+                      <ScopeLabel scopeSummary={log.scopeSummary} templateId={log.templateId} />
                     </Box>
-                    {mode === 'history' && (
-                      <Chip
-                        label={syncStatusLabel(log)}
-                        size="small"
-                        color={syncStatusColor(log)}
-                        variant="outlined"
-                        icon={log.syncStatus === 'syncing' ? <SyncIcon fontSize="small" /> : undefined}
-                      />
-                    )}
-                    <Button
+                    <Chip
+                      label={syncStatusLabel(log)}
                       size="small"
+                      color={syncStatusColor(log)}
                       variant="outlined"
-                      startIcon={<OpenInNewIcon />}
-                      onClick={() => navigate(`/logsheets/${log.localId}`)}
-                    >
-                      باز کردن
-                    </Button>
+                    />
                     <IconButton
                       size="small"
-                      color="error"
-                      aria-label={t.common.delete}
-                      onClick={() => setDeleteTarget(log)}
+                      color="primary"
+                      onClick={() => navigate(`/logsheets/${log.localId}`)}
                     >
-                      <DeleteIcon fontSize="small" />
+                      <OpenInNewIcon fontSize="small" />
                     </IconButton>
                   </Box>
-
-                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 0.5 }}>
-                    {log.operatorName && (
-                      <Typography variant="body2" color="text.secondary">
-                        اپراتور: {log.operatorName}
-                      </Typography>
-                    )}
-                    <Typography variant="body2" color="text.secondary">
-                      {log.entries.length} Asset
-                    </Typography>
-                  </Box>
-
-                  <Divider sx={{ my: 0.75 }} />
-                  <Box sx={{ display: 'flex', gap: 3 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                    <LogSheetIdentityMeta
+                      serverId={log.serverId}
+                      createdAt={log.createdAt}
+                    />
                     <Typography variant="caption" color="text.disabled">
-                      ثبت: {formatDate(log.createdAt)}
+                      ارسال: {log.submittedAt ? formatDate(log.submittedAt) : '—'}
                     </Typography>
-                    {log.submittedAt && (
-                      <Typography variant="caption" color="text.disabled">
-                        ارسال: {formatDate(log.submittedAt)}
-                      </Typography>
-                    )}
-                    {log.syncedAt && (
-                      <Typography variant="caption" color="text.disabled">
-                        همگام‌سازی: {formatDate(log.syncedAt)}
-                      </Typography>
-                    )}
                   </Box>
                 </CardContent>
               </Card>
             ))}
           </Stack>
-
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
-            <Pagination
-              count={totalPages}
-              page={page}
-              onChange={(_, p) => setPage(p)}
-              size="small"
-              color="primary"
-            />
-          </Box>
+          {totalPages > 1 && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+              <Pagination
+                count={totalPages}
+                page={page}
+                onChange={(_, p) => setPage(p)}
+                size="small"
+                color="primary"
+              />
+            </Box>
+          )}
         </>
       )}
-
-      <CreateLogSheetDialog
-        open={createDialogOpen}
-        templates={templates}
-        onClose={() => setCreateDialogOpen(false)}
-        onCreate={handleCreateFromTemplate}
-      />
-
-      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(undefined)} dir="rtl">
-        <DialogTitle>{t.common.delete}</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            {t.logSheet.deleteConfirm}
-            {deleteTarget && <> ({deleteTarget.templateName})</>}
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteTarget(undefined)}>{t.common.cancel}</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={() => { void removeLogSheet(deleteTarget!.localId); setDeleteTarget(undefined) }}
-          >
-            {t.common.delete}
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   )
 }

@@ -29,14 +29,18 @@ export function SyncStatusBar() {
   const { label, color, icon } = getStatus()
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
       <Chip
         icon={icon}
         label={label}
         color={color}
         size="small"
         variant="outlined"
-        sx={{ fontSize: '0.75rem' }}
+        sx={{
+          fontSize: '0.75rem',
+          minWidth: 148,
+          '& .MuiChip-icon': { width: 18, height: 18, flexShrink: 0 }
+        }}
       />
       {isOnline && pendingCount > 0 && !isSyncing && (
         <Tooltip title={t.sync.manualSync}>

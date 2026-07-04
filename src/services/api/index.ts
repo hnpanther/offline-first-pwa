@@ -21,10 +21,12 @@ import type {
   MainFunction,
   SubFunction,
   LogSheetTemplate,
-  LogSheet,
+  LogSheetServerStatus,
+  LogSheetAssignmentType,
   DataRecord
 } from '@/types'
 import type { FieldDefinition, OutboxEntry } from '@/types/sync'
+import type { LoginRequest, LoginResponse } from '@/types/auth'
 
 // ===========================================================================
 // Health
@@ -39,11 +41,90 @@ export interface HealthResponse {
 /** Lightweight ping — used by SyncManager and the Settings page. */
 export async function checkServerHealth(signal?: AbortSignal): Promise<boolean> {
   try {
-    await apiClient.get<HealthResponse>('/api/health', signal)
+    await apiClient.get<HealthResponse>('/api/health', signal, false)
     return true
   } catch {
     return false
   }
+}
+
+// ===========================================================================
+// Auth
+// ===========================================================================
+
+export async function login(
+  credentials: LoginRequest,
+  signal?: AbortSignal
+): Promise<LoginResponse> {
+  return apiClient.post<LoginResponse>('/api/auth/login', credentials, signal, false)
+}
+
+// ===========================================================================
+// Log sheet inbox (kartabl)
+// ===========================================================================
+
+/** Server log sheet shape returned by inbox / claim / release. */
+export interface ServerLogSheet {
+  id: number
+  localId?: string | null
+  templateId?: number | null
+  templateName?: string | null
+  scopeSummary?: string | null
+  operationalUnitId?: number | null
+  status?: LogSheetServerStatus | null
+  origin?: string | null
+  assigneeUserId?: number | null
+  assignmentType?: LogSheetAssignmentType | null
+  assignedByUserId?: number | null
+  completedByUserId?: number | null
+  operatorName?: string | null
+  dueAt?: number | null
+  assignedAt?: number | null
+  claimedAt?: number | null
+  startedAt?: number | null
+  completedAt?: number | null
+  expiredAt?: number | null
+  submittedAt?: number | null
+  syncedAt?: number | null
+  draftSavedAt?: number | null
+  syncStatus?: string | null
+  syncError?: string | null
+  createdAt?: number | null
+  updatedAt?: number | null
+}
+
+export interface LogSheetInboxResponse {
+  serverTime: number
+  assigned: ServerLogSheet[]
+  available: ServerLogSheet[]
+}
+
+export async function fetchLogSheetInbox(
+  signal?: AbortSignal
+): Promise<LogSheetInboxResponse> {
+  return apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal)
+}
+
+export async function claimLogSheet(
+  serverId: number | string,
+  signal?: AbortSignal
+): Promise<ServerLogSheet> {
+  return apiClient.post<ServerLogSheet>(
+    `/api/log-sheets/${serverId}/claim`,
+    {},
+    signal
+  )
+}
+
+export async function releaseLogSheet(
+  serverId: number | string,
+  signal?: AbortSignal
+): Promise<ServerLogSheet> {
+  return apiClient.post<ServerLogSheet>(
+    `/api/log-sheets/${serverId}/release`,
+    {},
+    signal
+  )
 }
 
 // ===========================================================================
@@ -66,8 +147,18 @@ export interface MasterDataResponse {
   fieldDefinitions: FieldDefinition[]
   assetEntries: AssetEntry[]
   logSheetTemplates: LogSheetTemplate[]
+  operationalUnits?: OperationalUnit[]
   /** Server-side timestamp of this snapshot — save as lastPullAt in syncMeta */
   serverTime: number
+}
+
+export interface OperationalUnit {
+  id: string | number
+  code: string
+  name: string
+  parentId?: string | number | null
+  createdAt: number
+  updatedAt: number
 }
 
 /**
@@ -149,18 +240,49 @@ export async function submitRecordsBatch(
 
 export interface LogSheetSubmitResult {
   localId: string
-  serverId?: string
-  error?: string
+  serverId?: number | string
+  error?: string | null
+  outcome?: 'SUBMITTED' | 'SUPERSEDED' | 'EXPIRED' | 'DUPLICATE' | 'ERROR'
+}
+
+export interface ApiLogSheetEntry {
+  assetId: number
+  assetName: string
+  subFunctionCode: string
+  subFunctionTag: string
+  classId: number
+  formData: Record<string, unknown>
+}
+
+/** Payload shape expected by POST /api/log-sheets/batch */
+export interface LogSheetBatchItem {
+  id?: number | string
+  serverId?: number | string
+  localId: string
+  templateId?: number | string
+  templateName?: string
+  scopeSummary?: string
+  operatorName?: string
+  status?: string
+  syncStatus?: string
+  entries?: ApiLogSheetEntry[]
+  submittedAt?: number
+  createdAt?: number
+  updatedAt?: number
+  syncedAt?: number | null
+  syncError?: string | null
+  operationalUnitId?: number | string
+  completedAt?: number
+  clientActionId?: string
 }
 
 /**
  * POST /api/log-sheets/batch
  *
  * Send one or more submitted LogSheets to the server.
- * Only log sheets with status==='submitted' are ever sent.
  */
 export async function submitLogSheetsBatch(
-  logSheets: LogSheet[],
+  logSheets: LogSheetBatchItem[],
   signal?: AbortSignal
 ): Promise<LogSheetSubmitResult[]> {
   return apiClient.post<LogSheetSubmitResult[]>(

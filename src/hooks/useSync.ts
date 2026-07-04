@@ -1,56 +1,70 @@
 import { useEffect, useCallback } from 'react'
 import { syncManager, type SyncEvent } from '@/services/sync'
+import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
 import { useAppStore } from '@/store'
 import { getSettings } from '@/services/storage'
 
-/**
- * Initializes the sync manager and wires sync events into the Zustand store.
- * Call this once at the app root level.
- */
 export function useSyncManager(): void {
   const setSyncing = useAppStore(s => s.setSyncing)
   const setLastSyncAt = useAppStore(s => s.setLastSyncAt)
   const setPendingCount = useAppStore(s => s.setPendingCount)
   const setFailedCount = useAppStore(s => s.setFailedCount)
   const setSyncError = useAppStore(s => s.setSyncError)
+  const isOnline = useAppStore(s => s.isOnline)
+  const authSession = useAppStore(s => s.authSession)
+
+  useEffect(() => {
+    if (!isOnline || !authSession) return
+    void cleanupLocalLogSheets().then(() => {
+      setLastSyncAt(Date.now())
+    })
+  }, [isOnline, authSession, setLastSyncAt])
 
   useEffect(() => {
     const handleEvent = (event: SyncEvent) => {
       switch (event.type) {
         case 'start':
           setSyncing(true)
-          setSyncError(null)
-          setPendingCount(event.pendingCount ?? 0)
+          if (!event.transient) setSyncError(null)
+          if (event.pendingCount != null) setPendingCount(event.pendingCount)
           break
         case 'complete':
           setSyncing(false)
           setLastSyncAt(Date.now())
-          setPendingCount(event.failedCount ?? 0)
           setFailedCount(event.failedCount ?? 0)
+          void syncManager.getPendingCount().then(setPendingCount)
           break
         case 'error':
           setSyncing(false)
-          setSyncError(event.error ?? 'خطا در همگام‌سازی')
+          if (event.transient) {
+            setSyncError(null)
+          } else {
+            setSyncError(event.error ?? 'خطا در همگام‌سازی')
+          }
           setFailedCount(event.failedCount ?? 0)
+          if (event.pendingCount != null) {
+            setPendingCount(event.pendingCount)
+          } else {
+            void syncManager.getPendingCount().then(setPendingCount)
+          }
           break
         case 'progress':
+          if (event.pendingCount != null) setPendingCount(event.pendingCount)
           break
       }
     }
 
     const unsubscribe = syncManager.subscribe(handleEvent)
 
-    // Start the sync manager after reading interval from settings
     getSettings().then(settings => {
       syncManager.start(settings.syncIntervalMs)
     })
 
-    // Keep pending count fresh
     const refreshCount = () => {
       syncManager.getPendingCount().then(setPendingCount)
     }
     refreshCount()
-    const countInterval = setInterval(refreshCount, 5_000)
+    const countInterval = setInterval(refreshCount, 15_000)
 
     return () => {
       unsubscribe()
@@ -60,7 +74,6 @@ export function useSyncManager(): void {
   }, [setSyncing, setLastSyncAt, setPendingCount, setFailedCount, setSyncError])
 }
 
-/** Trigger an immediate sync from any component */
 export function useManualSync(): () => Promise<void> {
   return useCallback(() => syncManager.sync(), [])
 }

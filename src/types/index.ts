@@ -162,9 +162,21 @@ export interface LogSheetTemplate {
   description?: string
   scopeType: 'location' | 'system' | 'mainFunction'
   scopeId: string
+  classId?: string
+  operationalUnitId?: string
   createdAt: number
   updatedAt: number
 }
+
+export type LogSheetServerStatus =
+  | 'PENDING'
+  | 'ASSIGNED'
+  | 'IN_PROGRESS'
+  | 'SUBMITTED'
+  | 'EXPIRED'
+  | 'CANCELLED'
+
+export type LogSheetAssignmentType = 'SELF_CLAIMED' | 'SUPERVISOR_ASSIGNED'
 
 export interface LogSheetEntryData {
   assetId: string
@@ -178,17 +190,25 @@ export interface LogSheetEntryData {
 export interface LogSheet {
   id: string
   localId: string
+  serverId?: string
   templateId: string
   templateName: string
-  scopeSummary: string    // e.g. "واحد 01 / سیستم شیرین‌سازی"
+  scopeSummary: string
+  operationalUnitId?: string
   operatorName?: string
+  /** Local workflow: draft = in progress on device, submitted = ready to sync */
   status: 'draft' | 'submitted'
+  /** Server lifecycle status from last inbox/claim sync */
+  serverStatus?: LogSheetServerStatus
+  assignmentType?: LogSheetAssignmentType
+  dueAt?: number
   syncStatus: SyncStatus
   syncedAt?: number
   syncError?: string
-  serverId?: string
   entries: LogSheetEntryData[]
   submittedAt?: number
+  completedAt?: number
+  clientActionId?: string
   createdAt: number
   updatedAt: number
 }

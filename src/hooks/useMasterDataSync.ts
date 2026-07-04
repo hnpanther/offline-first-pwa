@@ -16,12 +16,13 @@ const STALE_AFTER_MS = 60 * 60 * 1000 // 1 hour
 
 export function useMasterDataSync(): void {
   const isOnline = useAppStore(s => s.isOnline)
+  const authSession = useAppStore(s => s.authSession)
   const isMounted = useRef(true)
 
   const attemptPull = useCallback(async () => {
-    if (!navigator.onLine) return
+    if (!navigator.onLine || !authSession) return
     await pullMasterDataIfStale(STALE_AFTER_MS)
-  }, [])
+  }, [authSession])
 
   // Pull on mount (if online and data is stale)
   useEffect(() => {

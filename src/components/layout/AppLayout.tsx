@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar'
 import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { useSyncManager } from '@/hooks/useSync'
 import { useMasterDataSync } from '@/hooks/useMasterDataSync'
+import { useInboxSync } from '@/hooks/useInboxSync'
 
 const DRAWER_WIDTH = 240
 
@@ -15,7 +16,8 @@ export function AppLayout() {
   // Global hooks — must run for the lifetime of the app
   useOnlineStatus()
   useSyncManager()
-  useMasterDataSync() // pulls config from server when online / stale
+  useMasterDataSync()
+  useInboxSync()
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>

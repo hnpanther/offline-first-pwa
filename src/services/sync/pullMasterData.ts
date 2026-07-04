@@ -20,6 +20,8 @@
 import { db } from '@/services/storage/db'
 import { fetchMasterData } from '@/services/api'
 import type { MasterDataResponse } from '@/services/api'
+import { toIdString } from '@/utils/ids'
+import { normalizeFieldOptions } from '@/utils/fieldOptions'
 
 export type PullStatus = 'idle' | 'pulling' | 'success' | 'error'
 
@@ -49,9 +51,73 @@ async function setLastPullAt(ts: number): Promise<void> {
 
 async function mergeCollection<T extends { id: string }>(
   table: { bulkPut: (items: T[]) => Promise<unknown> },
-  items: T[]
+  items: Array<Omit<T, 'id'> & { id: string | number }>
 ): Promise<void> {
-  if (items.length > 0) await table.bulkPut(items)
+  if (items.length === 0) return
+  const normalized = items.map(item => ({
+    ...item,
+    id: toIdString(item.id)
+  })) as T[]
+  await table.bulkPut(normalized)
+}
+
+function normalizeMasterData(data: MasterDataResponse): MasterDataResponse {
+  return {
+    ...data,
+    locations: data.locations.map(l => ({
+      ...l,
+      id: toIdString(l.id),
+      parentId: l.parentId != null ? toIdString(l.parentId) : undefined
+    })),
+    plantSystems: data.plantSystems.map(s => ({
+      ...s,
+      id: toIdString(s.id),
+      locationId: toIdString(s.locationId)
+    })),
+    mainFunctions: data.mainFunctions.map(mf => ({
+      ...mf,
+      id: toIdString(mf.id),
+      systemId: mf.systemId != null ? toIdString(mf.systemId) : undefined,
+      locationId: mf.locationId != null ? toIdString(mf.locationId) : undefined
+    })),
+    subFunctions: data.subFunctions.map(sf => ({
+      ...sf,
+      id: toIdString(sf.id),
+      mainFunctionId: sf.mainFunctionId != null ? toIdString(sf.mainFunctionId) : undefined,
+      systemId: sf.systemId != null ? toIdString(sf.systemId) : undefined,
+      locationId: sf.locationId != null ? toIdString(sf.locationId) : undefined
+    })),
+    assetClasses: data.assetClasses.map(c => ({
+      ...c,
+      id: toIdString(c.id),
+      fields: c.fields ?? []
+    })),
+    fieldDefinitions: data.fieldDefinitions.map(fd => ({
+      ...fd,
+      id: toIdString(fd.id),
+      classId: toIdString(fd.classId),
+      validation: fd.validation
+        ? {
+            ...fd.validation,
+            options: normalizeFieldOptions(fd.validation.options)
+          }
+        : fd.validation
+    })),
+    assetEntries: data.assetEntries.map(a => ({
+      ...a,
+      id: toIdString(a.id),
+      classId: toIdString(a.classId),
+      subFunctionId: toIdString(a.subFunctionId)
+    })),
+    logSheetTemplates: data.logSheetTemplates.map(tmpl => ({
+      ...tmpl,
+      id: toIdString(tmpl.id),
+      scopeId: toIdString(tmpl.scopeId),
+      classId: tmpl.classId != null ? toIdString(tmpl.classId) : undefined,
+      operationalUnitId:
+        tmpl.operationalUnitId != null ? toIdString(tmpl.operationalUnitId) : undefined
+    }))
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +137,8 @@ export async function pullMasterData(
 ): Promise<PullResult> {
   try {
     const since = incremental ? await getLastPullAt() : null
-    const data = await fetchMasterData(since ?? undefined, signal)
+    const raw = await fetchMasterData(since ?? undefined, signal)
+    const data = normalizeMasterData(raw)
 
     // Merge each collection into IndexedDB in a single transaction-like sequence.
     // Using bulkPut means "insert or overwrite by primary key".

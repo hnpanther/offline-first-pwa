@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
+import { v4 as uuidv4 } from 'uuid'
+import { useAppStore } from '@/store'
 import {
   getAllLogSheetTemplates,
   saveLogSheetTemplate,
@@ -67,6 +69,7 @@ export function useLogSheetTemplates() {
 export function useLogSheets() {
   const [logs, setLogs] = useState<LogSheet[]>([])
   const [loading, setLoading] = useState(false)
+  const lastSyncAt = useAppStore(s => s.lastSyncAt)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -81,9 +84,13 @@ export function useLogSheets() {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    if (lastSyncAt != null) void refresh()
+  }, [lastSyncAt, refresh])
+
   const addLogSheet = useCallback(
     async (data: Omit<LogSheet, 'id' | 'localId' | 'createdAt' | 'updatedAt' | 'syncStatus'>) => {
-      const result = await saveLogSheet(data)
+      const result = await saveLogSheet({ ...data, localId: uuidv4() })
       await refresh()
       return result
     },

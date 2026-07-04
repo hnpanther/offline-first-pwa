@@ -72,7 +72,7 @@ class AppDatabase extends Dexie {
         mainFunctions: 'id, code, systemId, locationId',
         subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
         logSheetTemplates: 'id, scopeType, scopeId',
-        logSheets: 'id, localId, templateId, status, createdAt',
+        logSheets: 'id, localId, serverId, templateId, status, createdAt',
         settings: 'key'
       })
       .upgrade(async (trans) => {
@@ -117,7 +117,7 @@ class AppDatabase extends Dexie {
         mainFunctions: 'id, code, systemId, locationId',
         subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
         logSheetTemplates: 'id, scopeType, scopeId',
-        logSheets: 'id, localId, templateId, status, createdAt',
+        logSheets: 'id, localId, serverId, templateId, status, createdAt',
         settings: 'key',
         // New in v6:
         fieldDefinitions: 'id, classId, order',
@@ -168,13 +168,29 @@ class AppDatabase extends Dexie {
           // Migration is best-effort; existing UI still reads from AssetClass.fields
         }
       })
+
+    this.version(7).stores({
+      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      outbox: 'id, entityType, synced, createdAt',
+      syncMeta: 'key'
+    })
   }
 }
 
 export const db = new AppDatabase()
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  serverUrl: 'http://localhost:3000',
+  serverUrl: 'http://localhost:8081',
   syncIntervalMs: 30_000,
   operatorName: '',
   locationName: '',

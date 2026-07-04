@@ -15,8 +15,7 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
-  Divider
+  DialogActions
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import NfcIcon from '@mui/icons-material/Nfc'
@@ -27,6 +26,7 @@ import SaveIcon from '@mui/icons-material/Save'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
+import { v4 as uuidv4 } from 'uuid'
 import {
   getLogSheet,
   updateLogSheet,
@@ -38,6 +38,15 @@ import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
 import { useSettings } from '@/hooks/useSettings'
 import { useAppStore } from '@/store'
+import { canEnterTagManually } from '@/types/auth'
+import { ScopeLabel } from '@/components/common/ScopeLabel'
+import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
+import {
+  canSubmitLogSheet,
+  isLogSheetExpired,
+  isSupersededSyncError,
+  SYNC_OUTCOME_MESSAGES
+} from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
@@ -116,7 +125,7 @@ function AssetFillDialog({
             )}
           </DialogTitle>
 
-          <DialogContent sx={{ pt: 2.5 }}>
+          <DialogContent sx={{ pt: 2.5, px: 2, pb: 2, overflow: 'auto' }}>
             {fieldsLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                 <CircularProgress />
@@ -167,7 +176,13 @@ export function LogSheetFillPage() {
   const { localId } = useParams<{ localId: string }>()
   const navigate = useNavigate()
   const { settings } = useSettings()
-  const allowManualEntry = settings.allowManualEntry
+  const authSession = useAppStore(s => s.authSession)
+  const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
+  const isOnline = useAppStore(s => s.isOnline)
+  const allowManualEntry = canEnterTagManually(
+    authSession?.roles ?? [],
+    settings.allowManualEntry
+  )
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
@@ -219,6 +234,14 @@ export function LogSheetFillPage() {
     }
     void load()
   }, [localId])
+
+  // Refresh local sheet when inbox sync updates dueAt / status from server
+  useEffect(() => {
+    if (!localId || !inboxLastSyncAt) return
+    void getLogSheet(localId).then(sheet => {
+      if (sheet) setLogSheet(sheet)
+    })
+  }, [inboxLastSyncAt, localId])
 
   // -------------------------------------------------------------------------
   // NFC tag lookup
@@ -332,16 +355,29 @@ export function LogSheetFillPage() {
 
   const handleSubmitLogSheet = async () => {
     if (!logSheet || !localId) return
+    if (!logSheet.serverId) {
+      setSaveError('این کار از سرور دریافت نشده و قابل ارسال نیست.')
+      return
+    }
+    const check = canSubmitLogSheet(logSheet)
+    if (!check.ok) {
+      setSaveError(check.reason ?? SYNC_OUTCOME_MESSAGES.EXPIRED)
+      return
+    }
     setSaving(true)
     setSaveError(null)
     try {
+      const completedAt = Date.now()
+      const clientActionId = logSheet.clientActionId ?? uuidv4()
       await updateLogSheet(localId, {
         status: 'submitted',
-        submittedAt: Date.now()
+        submittedAt: completedAt,
+        completedAt,
+        clientActionId
       })
       const refreshed = await getLogSheet(localId)
       if (refreshed) setLogSheet(refreshed)
-      setSavedMessage('Log Sheet با موفقیت ارسال شد')
+      setSavedMessage('Log Sheet با موفقیت ارسال شد و در صف همگام‌سازی قرار گرفت')
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'خطا در ارسال')
     } finally {
@@ -373,8 +409,12 @@ export function LogSheetFillPage() {
   }
 
   const isSubmitted = logSheet.status === 'submitted'
-  const totalCount = logSheet.entries.length
-  const filledCount = logSheet.entries.filter(
+  const isExpired = isLogSheetExpired(logSheet)
+  const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
+  const canEdit = !isSubmitted && !isExpired
+  const entries = logSheet.entries ?? []
+  const totalCount = entries.length
+  const filledCount = entries.filter(
     e => countFilledFields(e) > 0
   ).length
 
@@ -389,9 +429,7 @@ export function LogSheetFillPage() {
           <Typography variant="h5" fontWeight={700}>
             {logSheet.templateName}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {logSheet.scopeSummary}
-          </Typography>
+          <ScopeLabel scopeSummary={logSheet.scopeSummary} templateId={logSheet.templateId} />
         </Box>
         <Chip
           label={isSubmitted ? 'ارسال شده' : 'پیش‌نویس'}
@@ -409,9 +447,17 @@ export function LogSheetFillPage() {
                 اپراتور: <strong>{logSheet.operatorName}</strong>
               </Typography>
             )}
-            <Typography variant="body2" color="text.secondary">
-              ثبت: <strong>{formatDate(logSheet.createdAt)}</strong>
-            </Typography>
+            <LogSheetIdentityMeta
+              serverId={logSheet.serverId}
+              createdAt={logSheet.createdAt}
+              variant="body2"
+              inline={false}
+            />
+            {logSheet.dueAt && (
+              <Typography variant="body2" color="text.secondary">
+                مهلت: <strong>{formatDate(logSheet.dueAt)}</strong>
+              </Typography>
+            )}
             {logSheet.submittedAt && (
               <Typography variant="body2" color="text.secondary">
                 ارسال: <strong>{formatDate(logSheet.submittedAt)}</strong>
@@ -432,8 +478,50 @@ export function LogSheetFillPage() {
         </CardContent>
       </Card>
 
+      {isExpired && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {SYNC_OUTCOME_MESSAGES.EXPIRED}
+          {!isOnline && ' پس از آنلاین شدن، در صورت تمدید مهلت توسط سرپرست، وضعیت به‌روز می‌شود.'}
+        </Alert>
+      )}
+
+      {isSuperseded && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {SYNC_OUTCOME_MESSAGES.SUPERSEDED}
+        </Alert>
+      )}
+
+      {logSheet.syncStatus === 'failed' && logSheet.syncError && !isSuperseded && !isExpired && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {logSheet.syncError}
+        </Alert>
+      )}
+
+      {/* Submit — top */}
+      {canEdit && entries.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <Button
+            variant="contained"
+            color="success"
+            size="large"
+            fullWidth
+            startIcon={
+              saving ? (
+                <CircularProgress size={18} color="inherit" />
+              ) : (
+                <SendIcon />
+              )
+            }
+            onClick={() => void handleSubmitLogSheet()}
+            disabled={saving}
+          >
+            {t.logSheet.submit}
+          </Button>
+        </Box>
+      )}
+
       {/* NFC scan bar */}
-      {!isSubmitted && (
+      {canEdit && (
         <Card
           variant="outlined"
           sx={{
@@ -534,7 +622,7 @@ export function LogSheetFillPage() {
         </Card>
       )}
 
-      {!isSubmitted && (
+      {canEdit && (
         <Alert severity="info" sx={{ mb: 2 }}>
           {allowManualEntry
             ? 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، تگ NFC را اسکن کنید یا شناسه را دستی وارد کنید.'
@@ -555,10 +643,15 @@ export function LogSheetFillPage() {
       )}
 
       {/* Asset status list */}
+      {entries.length === 0 ? (
+        <Alert severity="warning">
+          هیچ Asset ای برای این کار یافت نشد. ابتدا master-data را همگام‌سازی کنید یا با سرپرست تماس بگیرید.
+        </Alert>
+      ) : (
       <Stack spacing={1}>
-        {logSheet.entries.map(entry => {
+        {entries.map(entry => {
           const assetClass = getAssetClass(entry.classId)
-          const totalFields = assetClass?.fields.length ?? 0
+          const totalFields = assetClass?.fields?.length ?? 0
           const filledFields = countFilledFields(entry)
           const isFilled = totalFields > 0 && filledFields >= totalFields
           const isPartial = filledFields > 0 && !isFilled
@@ -645,30 +738,6 @@ export function LogSheetFillPage() {
           )
         })}
       </Stack>
-
-      {/* Divider + submit */}
-      {!isSubmitted && (
-        <>
-          <Divider sx={{ my: 3 }} />
-          <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button
-              variant="contained"
-              color="success"
-              size="large"
-              startIcon={
-                saving ? (
-                  <CircularProgress size={18} color="inherit" />
-                ) : (
-                  <SendIcon />
-                )
-              }
-              onClick={() => void handleSubmitLogSheet()}
-              disabled={saving}
-            >
-              ارسال Log Sheet
-            </Button>
-          </Box>
-        </>
       )}
 
       {/* Asset fill dialog */}

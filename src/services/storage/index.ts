@@ -365,7 +365,8 @@ export async function getSubFunctionPath(subFunctionId: string): Promise<string>
 
 export async function getAssetsInScope(
   scopeType: 'location' | 'system' | 'mainFunction',
-  scopeId: string
+  scopeId: string,
+  classId?: string
 ): Promise<AssetEntry[]> {
   const [allAssets, allSubFunctions, allMainFunctions, allSystems, allLocations] = await Promise.all([
     db.assetEntries.toArray(),
@@ -435,7 +436,11 @@ export async function getAssetsInScope(
     if (inScope) inScopeSubFunctionIds.add(sf.id)
   }
 
-  return allAssets.filter(a => inScopeSubFunctionIds.has(a.subFunctionId))
+  return allAssets.filter(a => {
+    if (!inScopeSubFunctionIds.has(a.subFunctionId)) return false
+    if (classId && String(a.classId) !== String(classId)) return false
+    return true
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -476,18 +481,19 @@ export async function deleteLogSheetTemplate(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function saveLogSheet(
-  data: Omit<LogSheet, 'id' | 'localId' | 'createdAt' | 'updatedAt' | 'syncStatus'>
+  data: Omit<LogSheet, 'id' | 'syncStatus' | 'createdAt' | 'updatedAt'> &
+    Partial<Pick<LogSheet, 'createdAt' | 'updatedAt' | 'syncStatus'>>
 ): Promise<LogSheet> {
   const now = Date.now()
   const logSheet: LogSheet = {
     ...data,
-    id: uuidv4(),
-    localId: uuidv4(),
-    createdAt: now,
-    updatedAt: now,
-    syncStatus: 'pending'
+    id: data.localId,
+    entries: data.entries ?? [],
+    syncStatus: data.syncStatus ?? 'pending',
+    createdAt: data.createdAt ?? now,
+    updatedAt: data.updatedAt ?? now
   }
-  await db.logSheets.add(logSheet)
+  await db.logSheets.put(logSheet)
   return logSheet
 }
 
@@ -507,6 +513,10 @@ export async function getAllLogSheets(): Promise<LogSheet[]> {
 
 export async function getLogSheet(localId: string): Promise<LogSheet | undefined> {
   return db.logSheets.where('localId').equals(localId).first()
+}
+
+export async function getLogSheetByServerId(serverId: string): Promise<LogSheet | undefined> {
+  return db.logSheets.where('serverId').equals(serverId).first()
 }
 
 export async function deleteLogSheet(localId: string): Promise<void> {

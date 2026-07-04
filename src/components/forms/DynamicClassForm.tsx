@@ -23,6 +23,7 @@ import type { Control, FieldErrors, RegisterOptions } from 'react-hook-form'
 import { DynamicFormField } from './DynamicFormField'
 import type { FieldDefinition } from '@/types/sync'
 import type { FormField } from '@/types'
+import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,9 +42,31 @@ function toFormField(def: FieldDefinition, nameOverride?: string): FormField {
     unit: def.unit,
     min: def.validation?.min,
     max: def.validation?.max,
-    options: def.validation?.options,
+    options: normalizeFieldOptions(def.validation?.options),
     helperText: def.unit ? `واحد: ${def.unit}` : undefined,
   }
+}
+
+function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: string; unit?: string } {
+  if (val === undefined || val === null || val === '') {
+    return { value: '—' }
+  }
+
+  const options = normalizeFieldOptions(def.validation?.options)
+
+  if (def.dataType === 'checkbox') {
+    return { value: val ? 'بله' : 'خیر' }
+  }
+
+  if (def.dataType === 'select' || def.dataType === 'multiselect') {
+    return { value: resolveOptionLabel(options, val) }
+  }
+
+  const text = Array.isArray(val) ? val.join('، ') : String(val)
+  if (def.unit) {
+    return { value: text, unit: def.unit }
+  }
+  return { value: text }
 }
 
 /**
@@ -135,34 +158,40 @@ export function DynamicClassForm({
 
   if (readOnly && readOnlyValues) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {sorted.map(def => {
-          const val = readOnlyValues[def.key]
-          const display =
-            val === undefined || val === null || val === ''
-              ? '—'
-              : Array.isArray(val)
-              ? val.join('، ')
-              : def.unit
-              ? `${String(val)} ${def.unit}`
-              : String(val)
+          const { value, unit } = formatReadOnlyValue(def, readOnlyValues[def.key])
 
           return (
             <Box
               key={def.key}
-              sx={{ display: 'flex', alignItems: 'baseline', gap: 1, py: 0.5 }}
+              sx={{
+                py: 1.25,
+                px: 0.5,
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+                '&:last-child': { borderBottom: 'none' }
+              }}
             >
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ minWidth: 120, flexShrink: 0 }}
-              >
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75 }}>
                 {def.label}
-                {def.required && <span style={{ color: 'inherit' }}> *</span>}:
+                {def.required ? ' *' : ''}
               </Typography>
-              <Typography variant="body2" fontWeight={500}>
-                {display}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2, flexWrap: 'wrap' }}>
+                <Typography variant="body1" fontWeight={600} component="span">
+                  {value}
+                </Typography>
+                {unit && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    component="span"
+                    sx={{ borderRight: 1, borderColor: 'divider', pr: 2 }}
+                  >
+                    {unit}
+                  </Typography>
+                )}
+              </Box>
             </Box>
           )
         })}
@@ -171,7 +200,7 @@ export function DynamicClassForm({
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, py: 0.5, px: 0.5 }}>
       {sorted.map(def => {
         const fieldName = fieldPrefix ? `${fieldPrefix}.${def.key}` : def.key
         const formField = toFormField(def, fieldName)
