@@ -34,7 +34,17 @@ function extractErrorMessage(body: unknown, fallback: string): string {
 
 async function getBaseUrl(): Promise<string> {
   const settings = await getSettings()
-  return settings.serverUrl.replace(/\/$/, '')
+  const configured = settings.serverUrl.replace(/\/$/, '')
+  if (typeof window !== 'undefined') {
+    try {
+      if (new URL(configured).origin === window.location.origin) {
+        return ''
+      }
+    } catch {
+      /* keep configured URL */
+    }
+  }
+  return configured
 }
 
 async function buildHeaders(): Promise<Record<string, string>> {

@@ -54,15 +54,34 @@ mkcert -cert-file $certFile -key-file $keyFile $Ip localhost 127.0.0.1
 
 $caRoot = mkcert -CAROOT
 $caFile = Join-Path $caRoot "rootCA.pem"
+$caCopy = Join-Path $certDir "rootCA.pem"
+Copy-Item -Force $caFile $caCopy
+
+# Android often needs .crt extension to offer "CA certificate" install
+$caCrt = Join-Path $certDir "rootCA.crt"
+Copy-Item -Force $caFile $caCrt
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
-Write-Host "  Cert: $certFile"
-Write-Host "  Key:  $keyFile"
-Write-Host "  CA (copy to phone): $caFile"
+Write-Host "  Server cert: $certFile"
+Write-Host "  Server key:  $keyFile"
+Write-Host "  CA for phone: $caCopy"
+Write-Host "  CA (.crt):    $caCrt  <-- send THIS to phone"
 Write-Host ""
-Write-Host "Next steps:" -ForegroundColor Yellow
-Write-Host "  1) Copy rootCA.pem to your phone and install/trust it (see README or chat guide)"
-Write-Host "  2) npm run dev:mobile"
-Write-Host "  3) On phone open: https://${Ip}:5173"
+Write-Host "=== ON PC (offline PWA — use this, NOT dev:5173) ===" -ForegroundColor Yellow
+Write-Host "  npm run build:mobile"
+Write-Host "  npm run preview:mobile"
+Write-Host "  On phone: https://${Ip}:4173  -> install PWA from HERE"
+Write-Host ""
+Write-Host "=== Dev only (hot reload, offline PWA broken) ===" -ForegroundColor DarkYellow
+Write-Host "  npm run dev:mobile  -> https://${Ip}:5173"
+Write-Host ""
+Write-Host "=== ON ANDROID (must be CA, NOT WiFi/VPN) ===" -ForegroundColor Yellow
+Write-Host "  1) Copy certs/rootCA.crt to phone (USB / Drive — not root.pem renamed wrong file)"
+Write-Host "  2) Settings -> Security -> More security settings"
+Write-Host "     -> Encryption and credentials -> Install a certificate"
+Write-Host "     -> CA certificate  (NOT VPN and app user certificate)"
+Write-Host "  3) Pick rootCA.crt, confirm the warning"
+Write-Host "  4) Force-stop Chrome, reopen https://${Ip}:5173"
+Write-Host "  5) Lock icon must be normal (no red). Then Install app in menu."
 Write-Host ""

@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "dev:mobile": "vite --mode mobile",
+    "build:mobile": "tsc && vite build --mode mobile",
+    "preview:mobile": "vite preview --mode mobile",
     "setup:mkcert": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-mkcert.ps1",
     "build": "tsc && vite build",
     "preview": "vite preview",

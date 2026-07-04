@@ -5,7 +5,7 @@ node_modules/
 dist/
 dev-dist/
 
-# Local TLS (mkcert) — never commit private keys
+# Local TLS (mkcert) — never commit; created by npm run setup:mkcert
 certs/
 
 # Environment — machine-specific URLs/secrets

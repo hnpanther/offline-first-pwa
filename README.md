@@ -1,6 +1,373 @@
 # سیستم جمع‌آوری اطلاعات — Offline PWA
 
-اپلیکیشن وب پیشرفته (PWA) برای جمع‌آوری اطلاعات میدانی با پشتیبانی آفلاین، اسکن NFC، و همگام‌سازی خودکار با سرور.
+اپلیکیشن وب پیشرفته (PWA) برای جمع‌آوری اطلاعات میدانی با پشتیبانی **آفلاین‌اول**، اسکن **NFC**، کارتابل **لاگ‌شیت**، و همگام‌سازی خودکار با backend Spring.
+
+این سند راهنمای کامل راه‌اندازی، تست روی موبایل، نصب PWA، HTTPS با mkcert، و رفتار آنلاین/آفلاین است — **با توضیح علت هر مرحله**.
+
+---
+
+## فهرست
+
+1. [پیش‌نیازها](#پیش‌نیازها)
+2. [معماری آفلاین‌اول](#معماری-آفلاین‌اول)
+3. [اسکریپت‌ها و حالت‌های اجرا](#اسکریپت‌ها-و-حالت‌های-اجرا)
+4. [راه‌اندازی کامل تست موبایل (گام‌به‌گام)](#راه‌اندازی-کامل-تست-موبایل-گام‌به‌گام)
+5. [HTTPS و mkcert — چرا و چگونه](#https-و-mkcert--چرا-و-چگونه)
+6. [نصب PWA روی گوشی](#نصب-pwa-روی-گوشی)
+7. [تست آفلاین](#تست-آفلاین)
+8. [سناریوی آنلاین/آفلاین (اپراتور و سرپرست)](#سناریوی-آفلاینآنلاین-اپراتور-و-سرپرست)
+9. [احراز هویت و لاگین خودکار](#احراز-هویت-و-لاگین-خودکار)
+10. [NFC](#nfc)
+11. [جریان همگام‌سازی](#جریان-همگام‌سازی)
+12. [ساختار پروژه](#ساختار-پروژه)
+13. [قرارداد API](#قرارداد-api)
+14. [استقرار production](#استقرار-production)
+15. [عیب‌یابی](#عیب‌یابی)
+
+---
+
+## پیش‌نیازها
+
+| ابزار | نسخه / توضیح |
+|--------|----------------|
+| Node.js | 20+ |
+| npm | همراه Node |
+| Backend | پروژه `backend-offline-first` روی پورت **8081** |
+| شبکه | PC و گوشی روی **همان Wi‑Fi** (برای sync و API) |
+| مرورگر موبایل | Chrome Android (NFC + PWA) یا Safari iOS (بدون NFC، نصب دستی) |
+
+**Windows — اگر `node` در PATH نیست:**
+
+```powershell
+$env:PATH = "C:\Program Files\nodejs;$env:PATH"
+```
+
+---
+
+## معماری آفلاین‌اول
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  UI (React)                                                  │
+│    ↕ Zustand store                                           │
+│  IndexedDB (Dexie)  ← منبع حقیقت محلی                        │
+│    • authSession, settings, master data, log sheets, ...       │
+│  Service Worker (Workbox)  ← shell اپ + فایل‌های build       │
+└─────────────────────────────────────────────────────────────┘
+         │ آنلاین                          │ آفلاین
+         ▼                                 ▼
+   Spring Backend (:8081)            فقط IndexedDB + SW cache
+   /api/master-data, inbox, batch
+```
+
+**اصل مهم:** داده‌های کاری (لاگ‌شیت، فرم‌ها، تنظیمات) روی دستگاه در IndexedDB ذخیره می‌شوند. API فقط برای pull/push و عملیات کارتابل **آنلاین** است.
+
+---
+
+## اسکریپت‌ها و حالت‌های اجرا
+
+| دستور | پورت | HTTPS | کاربرد | آفلاین PWA |
+|--------|------|-------|--------|------------|
+| `npm run dev` | 5173 | خیر | توسعه روی PC | ❌ |
+| `npm run dev:mobile` | 5173 | بله (mkcert یا self-signed) | توسعه با hot reload روی موبایل | ❌ **نصب نکنید** |
+| `npm run build:mobile` | — | — | ساخت production در `dist/` | — |
+| `npm run preview:mobile` | **4173** | بله (mkcert) | **تست و نصب PWA واقعی** | ✅ |
+| `npm run setup:mkcert` | — | — | ساخت گواهی trusted | — |
+
+### چرا دو پورت؟
+
+| | `:5173` dev | `:4173` preview |
+|--|-------------|-----------------|
+| **چی سرو می‌شود** | سورس زنده Vite (`/src/...`) | فایل‌های build شده در `dist/` |
+| **Service Worker** | dev SW — precache ناقص | ~۳۰ فایل precache (JS, CSS, فونت, …) |
+| **Wi‑Fi خاموش** | گوشی به PC وصل نیست → JS لود نمی‌شود → **صفحه سفید** | shell از cache → **UI باز می‌شود** |
+| **کی استفاده کنیم** | دیباگ و تغییر کد | نصب PWA و تست آفلاین |
+
+> **قانون طلایی:** PWA را **فقط از `https://IP-PC:4173`** نصب کنید، نه از 5173.
+
+---
+
+## راه‌اندازی کامل تست موبایل (گام‌به‌گام)
+
+### مرحله ۰ — نصب وابستگی‌ها
+
+```powershell
+cd offline-first-pwa
+npm install
+```
+
+---
+
+### مرحله ۱ — Backend
+
+```powershell
+cd ..\backend-offline-first
+.\mvnw.cmd spring-boot:run
+```
+
+**علت:** API روی `http://127.0.0.1:8081` است. در حالت mobile، Vite درخواست‌های `/api` را به این آدرس proxy می‌کند تا گوشی فقط با یک origin (HTTPS frontend) کار کند.
+
+---
+
+### مرحله ۲ — پیدا کردن IP کامپیوتر
+
+```powershell
+ipconfig
+```
+
+مثال: `192.168.1.101` — PC و گوشی باید در یک subnet باشند.
+
+---
+
+### مرحله ۳ — فایل محیط موبایل
+
+```powershell
+cd offline-first-pwa
+copy .env.mobile.example .env.mobile
+```
+
+فایل `.env.mobile` را ویرایش کنید:
+
+```env
+VITE_SERVER_URL=https://192.168.1.101:4173
+```
+
+**علت:**
+- IP باید IP واقعی PC شما باشد.
+- پورت **4173** برای PWA نصب‌شده (preview).
+- این مقدار پیش‌فرض `serverUrl` در IndexedDB است؛ API وقتی origin اپ با این URL یکی باشد از **مسیر نسبی** `/api` استفاده می‌کند (همان proxy).
+
+---
+
+### مرحله ۴ — mkcert (گواهی trusted)
+
+```powershell
+npm run setup:mkcert
+# یا با IP مشخص:
+.\scripts\setup-mkcert.ps1 -Ip 192.168.1.101
+```
+
+**خروجی مورد انتظار در `certs/`:**
+
+```
+certs/cert.pem      ← گواهی سرور (روی PC)
+certs/key.pem       ← کلید خصوصی (روی PC)
+certs/rootCA.crt    ← برای نصب روی گوشی
+```
+
+**علت:** NFC و PWA Install روی موبایل به **HTTPS مورد اعتماد** نیاز دارند. گواهی self-signed خود Vite (`basic-ssl`) trusted نیست → قفل قرمز، بدون Install.
+
+وقتی `certs/cert.pem` وجود داشته باشد، Vite خودکار از mkcert استفاده می‌کند. در ترمینال می‌بینید:
+
+```
+[mobile] HTTPS: mkcert (certs/cert.pem)
+```
+
+اگر ببینید `WARNING: No certs/cert.pem` هنوز از self-signed استفاده می‌شود.
+
+---
+
+### مرحله ۵ — نصب CA روی گوشی (Android)
+
+1. فایل **`certs/rootCA.crt`** را به گوشی بفرستید (نه `cert.pem`).
+2. **Settings → Security → More security settings**
+3. **Encryption & credentials → Install a certificate**
+4. **CA certificate** ← فقط این گزینه (نه WiFi/VPN / user certificate)
+5. فایل `rootCA.crt` را انتخاب و تأیید کنید.
+6. Chrome را **Force stop** کنید.
+
+**علت گزینه اشتباه WiFi/VPN:** آن گواهی **کاربر** است برای شبکه سازمانی، نه اعتماد به HTTPS سایت. با نصب اشتباه، قفل همچنان قرمز می‌ماند.
+
+**iOS:** فایل را نصب کنید → **Settings → General → About → Certificate Trust Settings** → Full Trust برای mkcert.
+
+---
+
+### مرحله ۶ — Build و Preview
+
+```powershell
+npm run build:mobile
+npm run preview:mobile
+```
+
+**علت build:** Service Worker فقط روی فایل‌های `dist/` precache کامل دارد.
+
+---
+
+### مرحله ۷ — باز کردن در گوشی
+
+```
+https://192.168.1.101:4173
+```
+
+- قفل SSL باید **بدون قرمز** باشد.
+- یک‌بار **login** کنید.
+- چند صفحه باز کنید (داشبورد، لاگ‌شیت‌ها) تا cache پر شود.
+
+---
+
+### مرحله ۸ — نصب PWA
+
+**Android Chrome:**
+- بنر «نصب» در اپ، یا
+- منو ⋮ → **Install app** / نصب برنامه
+
+**iOS Safari:**
+- `beforeinstallprompt` وجود ندارد → **Share → Add to Home Screen**
+
+---
+
+### مرحله ۹ — تست آفلاین
+
+1. Wi‑Fi را خاموش کنید.
+2. اپ **نصب‌شده** را باز کنید (نه تب Chrome).
+3. UI باید باز شود؛ داده از IndexedDB خوانده می‌شود.
+4. sync / کارتابل جدید فقط بعد از روشن شدن Wi‑Fi (و دسترسی به PC در شبکه).
+
+---
+
+## HTTPS و mkcert — چرا و چگونه
+
+| نیاز | چرا HTTPS |
+|------|-----------|
+| Web NFC | API مرورگر فقط روی secure context |
+| PWA Install | Chrome installability criteria |
+| Service Worker | روی non-localhost فقط با HTTPS |
+
+| نوع گواهی | قفل | Install خودکار |
+|-----------|-----|----------------|
+| self-signed (Accept warning) | قرمز یا هشدار | ❌ |
+| mkcert + CA روی گوشی | سبز | ✅ Android |
+| SSL واقعی (production) | سبز | ✅ |
+
+### نصب mkcert روی Windows (اگر `setup:mkcert` خطا داد)
+
+```powershell
+winget install FiloSottile.mkcert
+# یا: choco install mkcert
+```
+
+سپس دوباره `npm run setup:mkcert`.
+
+---
+
+## نصب PWA روی گوشی
+
+### شرایط Install خودکار (Android)
+
+1. HTTPS **trusted** (mkcert روی گوشی)
+2. `manifest.webmanifest` + آیکون ۱۹۲/۵۱۲
+3. Service Worker ثبت‌شده
+4. چند ثانیه تعامل با سایت
+5. نصب از **`4173`** نه `5173`
+
+### اگر Install نمی‌آید
+
+→ بخش [عیب‌یابی](#عیب‌یابی)
+
+---
+
+## تست آفلاین
+
+### چه چیزی آفلاین کار می‌کند
+
+| قابلیت | آفلاین |
+|--------|--------|
+| باز شدن UI (PWA از 4173) | ✅ |
+| ادامه لاگ‌شیت ذخیره‌شده | ✅ |
+| خواندن master data کش‌شده | ✅ |
+| لاگین با session ذخیره‌شده | ✅ (حتی اگر JWT منقضی شده باشد) |
+| NFC (با داده محلی) | ✅ |
+| پیک‌آپ / کارتابل / انتساب | ❌ فقط آنلاین |
+| sync به سرور | ❌ تا Wi‑Fi و backend |
+
+### چرا بعد از نصب از 5173 صفحه سفید می‌شد؟
+
+PWA نصب‌شده هنوز به dev server اشاره می‌کرد. dev فایل‌های JS را در SW cache نمی‌گذارد → آفلاین = صفحه سفید.
+
+**راه‌حل:** حذف PWA قدیمی → نصب مجدد از **4173**.
+
+---
+
+## سناریوی آنلاین/آفلاین (اپراتور و سرپرست)
+
+### اپراتور
+
+| حالت | مجاز |
+|------|------|
+| **آنلاین** | دیدن کارتابل، پیک‌آپ کار |
+| **آفلاین** | فقط ادامه کارهای قبلاً باز/ذخیره‌شده روی دستگاه |
+
+### سرپرست
+
+| حالت | مجاز |
+|------|------|
+| **آنلاین** | کارتابل + پیک‌آپ + **برگرداندن** + **انتساب/بازانتساب** |
+| **آفلاین** | مثل اپراتور — بدون عملیات کارتابل |
+
+### تعارض sync (مهم)
+
+| سناریو | نتیجه روی دستگاه |
+|--------|------------------|
+| اپراتور آفلاین کار کرد، سرپرست کار را پس گرفت/داد به دیگری | پیش‌نویس: `REVOKED` — قابل ادامه نیست |
+| اپراتور آفلاین submit کرد، assignee عوض شده | sync: `SUPERSEDED` |
+| تکمیل **قبل از مهلت** آفلاین، sync **بعد از مهلت** آنلاین | ✅ قبول — مهلت با `completedAt` دستگاه سنجیده می‌شود |
+
+---
+
+## احراز هویت و لاگین خودکار
+
+### ذخیره‌سازی
+
+Session (JWT + roles + permissions + `expiresAt`) در IndexedDB جدول `syncMeta` با کلید `authSession` ذخیره می‌شود.
+
+### باز شدن اپ
+
+1. `useAuthInit` session را از IndexedDB می‌خواند.
+2. اگر معتبر باشد → مستقیم داشبورد (بدون login).
+3. اگر آنلاین و JWT منقضی → پاک و redirect به login.
+4. اگر **آفلاین** و JWT منقضی → همچنان ورود (offline-first).
+
+### خروج
+
+دکمه خروج → پاک شدن session از IndexedDB.
+
+---
+
+## NFC
+
+### محدودیت مرورگر
+
+- فقط **HTTPS trusted** یا localhost
+- عمدتاً **Android Chrome**
+- iOS: Web NFC محدود — ورود دستی در صورت فعال بودن در تنظیمات
+
+### شناسه تگ
+
+مقدار **`nfcTagId`** از محتوای Record متنی تگ خوانده می‌شود (مثل `E-0110CM2`)، نه UID سخت‌افزاری.
+
+آفلاین: lookup از `assetEntries` در IndexedDB.
+
+---
+
+## جریان همگام‌سازی
+
+```
+Pull (آنلاین)
+  App start / online
+    → GET /api/master-data[?since=]
+    → IndexedDB: locations, assets, templates, ...
+    → GET /api/log-sheets/inbox
+    → کش کارتابل + merge به لاگ‌شیت‌های محلی
+
+Push (آنلاین، هر ~۳۰ ثانیه)
+    → POST /api/log-sheets/batch  (submitted, not synced)
+    → POST /api/records/batch     (approved, if permitted)
+    ← outcome: SUBMITTED | SUPERSEDED | EXPIRED | DUPLICATE
+
+پاک‌سازی محلی
+    → synced: بعد از ۱ روز
+    → failed: بعد از ۷ روز
+```
 
 ---
 
@@ -9,500 +376,191 @@
 ```
 src/
 ├── components/
-│   ├── common/           SyncStatusBar
-│   ├── forms/            DataEntryForm, DynamicFormField, DynamicClassForm
-│   ├── layout/           AppLayout, Header, Sidebar
-│   └── nfc/              NFCReader
+│   ├── auth/           ProtectedRoute
+│   ├── common/         SyncStatusBar, InstallPwaPrompt, LogSheetIdentityMeta
+│   ├── forms/          DynamicClassForm, DynamicFormField
+│   ├── layout/         AppLayout, Header, Sidebar
+│   ├── logsheet/       AssignOperatorDialog
+│   └── nfc/            NFCReader
 ├── hooks/
-│   ├── useNFC.ts         اسکن NFC و بارگذاری AssetEntry
-│   ├── useSync.ts        وصل کردن SyncManager به Store
-│   ├── useMasterDataSync.ts  pull پیکربندی از سرور
-│   ├── useRecords.ts     CRUD رکوردهای DataRecord
-│   ├── useAssets.ts      CRUD AssetClass و AssetEntry
-│   ├── useHierarchy.ts   CRUD ساختار سلسله‌مراتبی
-│   ├── useLogSheets.ts   CRUD Log Sheet ها
-│   └── useSettings.ts    خواندن/نوشتن تنظیمات
+│   ├── useAuth.ts      session از IndexedDB، login/logout
+│   ├── useInboxSync.ts کارتابل + کش آفلاین
+│   ├── useSync.ts      SyncManager
+│   ├── useMasterDataSync.ts
+│   ├── useLogSheets.ts
+│   └── useOnlineStatus.ts
 ├── pages/
+│   ├── LoginPage.tsx
 │   ├── Dashboard.tsx
-│   ├── RecordsPage.tsx
-│   ├── LogSheetListPage.tsx
-│   ├── LogSheetFillPage.tsx
+│   ├── LogSheetListPage.tsx   کارتابل (active/history)
+│   ├── LogSheetFillPage.tsx   پر کردن + NFC
 │   ├── AdminPage.tsx
 │   └── SettingsPage.tsx
 ├── services/
-│   ├── api/
-│   │   ├── client.ts     HTTP client (base URL از تنظیمات می‌آید)
-│   │   └── index.ts      ← همه endpoint های سرور اینجا تعریف می‌شوند
-│   ├── nfc/index.ts      لایه NFC (Web NFC API)
-│   ├── storage/
-│   │   ├── db.ts         Dexie schema (v1→v6)
-│   │   ├── index.ts      CRUD توابع برای همه entity ها
-│   │   ├── repository.ts Generic sync-aware Repository با outbox
-│   │   └── fieldDefinitions.ts  CRUD برای FieldDefinition
-│   └── sync/
-│       ├── index.ts      SyncManager (push DataRecord + LogSheet)
-│       └── pullMasterData.ts  pull پیکربندی از سرور
-├── store/index.ts        Zustand store
-├── theme/index.ts        MUI RTL theme
-├── i18n/fa.ts            همه متن‌های فارسی
-└── types/
-    ├── index.ts          همه domain types
-    └── sync.ts           SyncableRecord, FieldDefinition, OutboxEntry
+│   ├── api/            client.ts + endpoints
+│   ├── auth/           IndexedDB session
+│   ├── nfc/
+│   ├── storage/        Dexie (db v7), inboxCache
+│   └── sync/           SyncManager, logSheetSync, pullInbox, cleanup
+├── store/              Zustand
+├── utils/              logSheetStatus, ids, scopeLabels
+└── i18n/fa.ts
+
+certs/                  mkcert (gitignore) — cert.pem, key.pem, rootCA.crt
+scripts/
+  setup-mkcert.ps1      ساخت گواهی + راهنمای گوشی
+  generate-icons.js     آیکون PWA
 ```
 
 ---
 
-## راه‌اندازی محلی
+## قرارداد API
+
+مرجع کامل typeها و endpointها: **`src/services/api/index.ts`**
+
+Backend: پروژه `backend-offline-first` — پورت پیش‌فرض **8081**.
+
+### Endpointهای اصلی
+
+| Method | Path | کاربرد |
+|--------|------|--------|
+| GET | `/api/health` | سلامت سرور |
+| POST | `/api/auth/login` | ورود → JWT |
+| GET | `/api/master-data[?since=]` | پیکربندی (pull) |
+| GET | `/api/log-sheets/inbox` | کارتابل (assigned, available, teamOpen) |
+| POST | `/api/log-sheets/{id}/claim` | پیک‌آپ (آنلاین) |
+| POST | `/api/log-sheets/{id}/release` | برگرداندن |
+| POST | `/api/log-sheets/{id}/assign` | انتساب (سرپرست) |
+| POST | `/api/log-sheets/{id}/reassign` | بازانتساب |
+| GET | `/api/operational-units/{id}/operators` | لیست اپراتورها |
+| GET | `/api/asset-entries/nfc/{tagId}` | lookup NFC |
+| POST | `/api/log-sheets/batch` | ارسال لاگ‌شیت‌های تکمیل‌شده |
+| POST | `/api/records/batch` | ارسال DataRecord |
+
+### لاگ‌شیت batch — فیلد مهم
+
+```json
+{
+  "logSheets": [{
+    "serverId": 42,
+    "localId": "uuid",
+    "completedAt": 1700000000000,
+    "clientActionId": "uuid",
+    "entries": [ ... ]
+  }]
+}
+```
+
+`completedAt` زمان تکمیل روی **دستگاه** است؛ سرور مهلت را با این مقدار می‌سنجد، نه زمان sync.
+
+---
+
+## استقرار production
 
 ```bash
-# نصب وابستگی‌ها (Node.js >=20 نیاز است)
-npm install
-
-# توسعه (با hot reload)
-npm run dev       # http://0.0.0.0:5173
-
-# ساخت production
 npm run build
-
-# پیش‌نمایش build
-npm run preview   # http://0.0.0.0:4173
+# خروجی: dist/
 ```
 
-> **نکته Windows:** اگر `node` در PATH نیست، در PowerShell بنویسید:
-> ```powershell
-> $env:PATH = "C:\Program Files\nodejs;$env:PATH"
-> npm run dev
-> ```
-
----
-
-## قرارداد API سرور
-
-همه endpoint ها در `src/services/api/index.ts` تعریف شده‌اند.
-آدرس base URL را در صفحه تنظیمات اپ وارد کنید (مثال: `http://192.168.1.100:3000`).
-
----
-
-### ۱. Health Check
-
-```
-GET /api/health
-```
-
-**Response:**
-```json
-{ "status": "ok", "version": "1.0.0", "serverTime": 1700000000000 }
-```
-
----
-
-### ۲. Master Data — دریافت پیکربندی از سرور
-
-**این مهم‌ترین endpoint است.** دستگاه هنگام اتصال به شبکه این را صدا می‌زند تا ساختار Asset ها، فرم‌ها، سلسله‌مراتب، و قالب‌های Log Sheet را دانلود کند.
-
-```
-GET /api/master-data
-GET /api/master-data?since=1700000000000
-```
-
-- بدون `since`: سرور **همه** داده‌ها را برمی‌گرداند (اولین اجرا)
-- با `since` (Unix timestamp به میلی‌ثانیه): سرور فقط رکوردهایی که **بعد از آن زمان** تغییر کرده‌اند را برمی‌گرداند (pull افزایشی)
-
-**Response:**
-```json
-{
-  "serverTime": 1700000000000,
-  "locations": [
-    { "id": "loc-1", "code": "U01", "name": "واحد ۰۱", "parentId": null, "createdAt": 1700000000000, "updatedAt": 1700000000000 }
-  ],
-  "plantSystems": [
-    { "id": "sys-1", "code": "SYS-GAS", "name": "سیستم گاز", "locationId": "loc-1", "createdAt": 1700000000000, "updatedAt": 1700000000000 }
-  ],
-  "mainFunctions": [
-    { "id": "mf-1", "code": "MF-001", "name": "فانکشن اصلی ۱", "systemId": "sys-1", "locationId": null, "createdAt": 1700000000000, "updatedAt": 1700000000000 }
-  ],
-  "subFunctions": [
-    { "id": "sf-1", "code": "SF-001", "name": "SubFunction ۱", "tag": "TAG-001", "mainFunctionId": "mf-1", "systemId": null, "locationId": null, "createdAt": 1700000000000, "updatedAt": 1700000000000 }
-  ],
-  "assetClasses": [
-    {
-      "id": "cls-1",
-      "name": "پمپ سانتریفیوژ",
-      "fields": [
-        { "name": "pressure", "label": "فشار خروجی (bar)", "type": "number", "required": true, "min": 0, "max": 50 },
-        { "name": "status", "label": "وضعیت", "type": "select", "required": true, "options": [{ "value": "ok", "label": "سالم" }, { "value": "fault", "label": "معیوب" }] }
-      ],
-      "createdAt": 1700000000000,
-      "updatedAt": 1700000000000
-    }
-  ],
-  "fieldDefinitions": [
-    {
-      "id": "fd-uuid-1", "classId": "cls-1", "key": "pressure", "label": "فشار خروجی (bar)",
-      "dataType": "number", "unit": "bar", "required": true,
-      "validation": { "min": 0, "max": 50 },
-      "order": 0, "version": 1, "deleted": false, "synced": true,
-      "createdAt": 1700000000000, "updatedAt": 1700000000000
-    }
-  ],
-  "assetEntries": [
-    {
-      "id": "ae-1", "nfcTagId": "04:AB:CD:EF:01:02:03", "classId": "cls-1",
-      "assetName": "پمپ P-101", "subFunctionId": "sf-1", "location": "سالن A",
-      "createdAt": 1700000000000, "updatedAt": 1700000000000
-    }
-  ],
-  "logSheetTemplates": [
-    {
-      "id": "tmpl-1", "name": "بازرسی روزانه واحد ۰۱",
-      "description": "قالب چک‌لیست صبحگاهی",
-      "scopeType": "location", "scopeId": "loc-1",
-      "createdAt": 1700000000000, "updatedAt": 1700000000000
-    }
-  ]
-}
-```
-
----
-
-### ۳. Asset Lookup — جستجوی Asset بر اساس NFC
-
-هنگامی که کاربر NFC تگ را اسکن می‌کند و اتصال شبکه دارد، دستگاه این endpoint را می‌زند.
-
-```
-GET /api/asset-entries/nfc/:tagId
-```
-
-مثال: `GET /api/asset-entries/nfc/04%3AAB%3ACD%3AEF%3A01%3A02%3A03`
-
-**Response 200:**
-```json
-{
-  "entry": {
-    "id": "ae-1", "nfcTagId": "04:AB:CD:EF:01:02:03", "classId": "cls-1",
-    "assetName": "پمپ P-101", "subFunctionId": "sf-1", "location": "سالن A",
-    "createdAt": 1700000000000, "updatedAt": 1700000000000
-  },
-  "assetClass": {
-    "id": "cls-1", "name": "پمپ سانتریفیوژ",
-    "fields": [ ... ],
-    "createdAt": 1700000000000, "updatedAt": 1700000000000
-  }
-}
-```
-
-**Response 404:**
-```json
-{ "error": "tag not registered" }
-```
-
-> اگر دستگاه آفلاین است، اطلاعات از IndexedDB محلی خوانده می‌شود.
-
----
-
-### ۴. ارسال DataRecord ها (push)
-
-فقط رکوردهایی که `recordStatus === 'approved'` دارند ارسال می‌شوند.
-
-```
-POST /api/records/batch
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "records": [
-    {
-      "localId": "550e8400-e29b-41d4-a716-446655440000",
-      "nfcTagId": "04:AB:CD:EF:01:02:03",
-      "assetEntryId": "ae-1",
-      "assetName": "پمپ P-101",
-      "assetTypeId": "cls-1",
-      "recordStatus": "approved",
-      "formData": { "pressure": 3.5, "status": "ok" },
-      "operatorName": "علی احمدی",
-      "location": "سالن A",
-      "notes": null,
-      "createdAt": 1700000000000,
-      "updatedAt": 1700000000000,
-      "syncStatus": "pending"
-    }
-  ]
-}
-```
-
-**Response 200:**
-```json
-[
-  { "localId": "550e8400-...", "serverId": "REC-2024-001" },
-  { "localId": "660e8400-...", "error": "asset not found" }
-]
-```
-
-- **serverId**: شناسه‌ای که سرور به رکورد می‌دهد — در IndexedDB ذخیره می‌شود
-- **error**: اگر وجود دارد، رکورد با `syncStatus='failed'` نگه داشته می‌شود و مجدداً تلاش می‌شود
-
----
-
-### ۵. ارسال Log Sheet ها (push)
-
-فقط Log Sheet هایی که `status === 'submitted'` دارند ارسال می‌شوند.
-
-```
-POST /api/log-sheets/batch
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "logSheets": [
-    {
-      "id": "uuid-ls-1",
-      "localId": "uuid-ls-local-1",
-      "templateId": "tmpl-1",
-      "templateName": "بازرسی روزانه واحد ۰۱",
-      "scopeSummary": "بازرسی روزانه واحد ۰۱",
-      "operatorName": "علی احمدی",
-      "status": "submitted",
-      "submittedAt": 1700000000000,
-      "createdAt": 1700000000000,
-      "updatedAt": 1700000000000,
-      "entries": [
-        {
-          "assetId": "ae-1",
-          "assetName": "پمپ P-101",
-          "subFunctionCode": "SF-001",
-          "subFunctionTag": "TAG-001",
-          "classId": "cls-1",
-          "formData": { "pressure": 3.5, "status": "ok" }
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Response 200:**
-```json
-[
-  { "localId": "uuid-ls-local-1", "serverId": "LS-2024-001" },
-  { "localId": "uuid-ls-local-2", "error": "template not found" }
-]
-```
-
----
-
-### ۶. Outbox Push — ارسال تغییرات پیکربندی (آینده)
-
-این endpoint برای زمانی است که adminهای محلی تغییراتی در Asset Class ها، ساختار سلسله‌مراتبی، یا قالب‌ها ایجاد کنند و بخواهند آن را به سرور ارسال کنند.
-
-```
-POST /api/sync/push
-Content-Type: application/json
-```
-
-**Request Body:**
-```json
-{
-  "entries": [
-    {
-      "id": "outbox-uuid-1",
-      "entityType": "asset_class",
-      "entityId": "cls-new",
-      "operation": "create",
-      "payload": { "id": "cls-new", "name": "کمپرسور", "fields": [...], ... },
-      "createdAt": 1700000000000,
-      "synced": false
-    }
-  ]
-}
-```
-
-**entityType مقادیر معتبر:**
-- `asset_class`
-- `field_definition`
-- `asset_entry`
-- `location`
-- `plant_system`
-- `main_function`
-- `sub_function`
-- `log_sheet_template`
-
-**Response 200:**
-```json
-[
-  { "id": "outbox-uuid-1", "accepted": true },
-  { "id": "outbox-uuid-2", "accepted": false, "error": "conflict: newer version on server" }
-]
-```
-
----
-
-### ۷. Incremental Pull — دریافت تغییرات افزایشی (آینده)
-
-برای sync دو طرفه‌ای که تغییرات سرور را به دستگاه می‌آورد.
-
-```
-GET /api/sync/changes?since=<seq>
-```
-
-**Response 200:**
-```json
-{
-  "latestSeq": 1042,
-  "changes": [
-    {
-      "seq": 1040,
-      "entityType": "asset_entry",
-      "entityId": "ae-5",
-      "operation": "update",
-      "payload": { "id": "ae-5", "assetName": "پمپ P-105 (ویرایش)", ... }
-    },
-    {
-      "seq": 1041,
-      "entityType": "sub_function",
-      "entityId": "sf-3",
-      "operation": "delete",
-      "payload": { "id": "sf-3", "deleted": true, ... }
-    }
-  ]
-}
-```
-
----
-
-## جریان sync — خلاصه
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Pull (پیکربندی از سرور → IndexedDB)                           │
-│                                                                 │
-│  App start / online event                                       │
-│    → GET /api/master-data[?since=T]                            │
-│    → bulkPut to: locations, systems, functions,                 │
-│                  assetClasses, fieldDefinitions,                │
-│                  assetEntries, logSheetTemplates                │
-│    → update syncMeta.lastPullAt                                 │
-└─────────────────────────────────────────────────────────────────┘
-                          ↕ آفلاین: کار با IndexedDB
-
-┌─────────────────────────────────────────────────────────────────┐
-│  Push (داده‌های جمع‌آوری شده → سرور)                          │
-│                                                                 │
-│  هر 30 ثانیه (یا هنگام اتصال)                                 │
-│    → POST /api/records/batch        (approved DataRecords)      │
-│    → POST /api/log-sheets/batch     (submitted LogSheets)       │
-│    ← { localId, serverId } per record                          │
-│    → update syncStatus='synced' or 'failed' in IndexedDB       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## فایل‌های کلیدی برای توسعه سرور
-
-| فایل frontend | توضیح |
-|---|---|
-| `src/services/api/index.ts` | **مرجع اصلی** — همه callها و type های request/response اینجاست |
-| `src/services/api/client.ts` | HTTP client — base URL، error handling |
-| `src/types/index.ts` | Domain types: AssetClass, AssetEntry, LogSheet, DataRecord، ... |
-| `src/types/sync.ts` | Sync types: FieldDefinition, OutboxEntry، ... |
-| `src/services/sync/index.ts` | SyncManager — منطق push |
-| `src/services/sync/pullMasterData.ts` | منطق pull پیکربندی |
-
----
-
-## استقرار در شبکه خصوصی
-
-```bash
-npm run build      # خروجی در dist/
-```
-
-### با nginx
+### nginx (HTTPS واقعی)
 
 ```nginx
 server {
-    listen 80;
+    listen 443 ssl;
+    server_name your-domain.local;
+    ssl_certificate     /path/fullchain.pem;
+    ssl_certificate_key /path/privkey.pem;
+
     root /var/www/offline-pwa/dist;
     index index.html;
 
-    # همه routeها به index.html برگردانده می‌شوند (SPA)
     location / {
         try_files $uri $uri/ /index.html;
     }
 
-    # کش طولانی برای asset های hashed
-    location /assets/ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
+    location /api/ {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
     }
 
-    # Service worker نباید کش شود
     location /sw.js {
         add_header Cache-Control "no-cache";
     }
 }
 ```
 
-### با Node.js/Express
-
-```js
-import express from 'express'
-const app = express()
-app.use(express.static('dist'))
-app.get('*', (_, res) => res.sendFile('dist/index.html', { root: '.' }))
-app.listen(80)
-```
+**تفاوت با dev:** یک origin برای UI + API؛ نیازی به proxy جدا روی Vite نیست.
 
 ---
 
-## HTTPS و NFC
+## عیب‌یابی
 
-Web NFC API فقط روی **HTTPS** یا **localhost** کار می‌کند.
+### قفل SSL قرمز روی گوشی
 
-برای تبلت‌های متصل به شبکه محلی:
-```bash
-# گزینه ۱: self-signed cert با mkcert
-mkcert -install
-mkcert 192.168.1.100
+| علت | راه‌حل |
+|-----|--------|
+| `certs/` خالی | `npm run setup:mkcert` |
+| CA اشتباه نصب شده (WiFi/VPN user cert) | حذف از User credentials → نصب **CA certificate** |
+| IP در مرورگر ≠ IP در mkcert | دوباره setup با IP درست |
+| هنوز 5173 باز می‌کنید | بروید به **4173** |
 
-# گزینه ۲: اجرای dev server با HTTPS
-npm run dev -- --https
+### Install نمی‌آید
 
-# گزینه ۳: nginx با SSL (توصیه شده برای production)
+1. قفل سبز باشد
+2. از **4173** نصب کنید
+3. Chrome force stop + دوباره باز
+4. iOS: فقط Add to Home Screen دستی
+
+### PWA نصب شد ولی آفلاین صفحه سفید
+
+→ از **5173** نصب شده. حذف PWA → `build:mobile` + `preview:mobile` → نصب از **4173**.
+
+### هر بار login می‌خواهد
+
+- logout کرده‌اید؟
+- آنلاین + JWT منقضی → طبیعی است
+- آفلاین باید با session قبلی باز شود
+
+### NFC کار نمی‌کند
+
+- HTTPS trusted
+- Android Chrome
+- `nfcTagId` در asset روی سرور درست است
+
+### API خطا می‌دهد
+
+- Backend روی 8081 در حال اجرا؟
+- `serverUrl` در تنظیمات = origin اپ (مثلاً `https://192.168.1.101:4173`)
+- PC و گوشی همان Wi‑Fi
+
+### ترمینال: `WARNING: No certs/cert.pem`
+
+```powershell
+npm run setup:mkcert
 ```
-
-اگر NFC پشتیبانی نشود یا HTTPS نباشد، کاربر می‌تواند شناسه تگ را دستی وارد کند (اگر در تنظیمات فعال شده باشد).
-
----
-
-## اضافه کردن احراز هویت (آینده)
-
-معماری برای auth آماده است:
-
-1. توکن را در `AppSettings` ذخیره کنید
-2. در `src/services/api/client.ts` هدر اضافه کنید:
-   ```ts
-   headers: {
-     'Authorization': `Bearer ${token}`,
-     'Content-Type': 'application/json'
-   }
-   ```
-3. صفحه Login و route های protected اضافه کنید
 
 ---
 
 ## تکنولوژی‌ها
 
 | ابزار | نقش |
-|-------|------|
-| React 18 + TypeScript | فریمورک |
-| Vite + vite-plugin-pwa | Build + Service Worker |
-| MUI v5 + stylis-plugin-rtl | UI با پشتیبانی RTL |
-| Dexie v4 (IndexedDB) | ذخیره‌سازی offline |
-| Zustand | State management |
-| React Hook Form | فرم‌ها |
+|-------|-----|
+| React 18 + TypeScript | UI |
+| Vite + vite-plugin-pwa | Build + Workbox SW |
+| MUI v5 + RTL | رابط فارسی |
+| Dexie (IndexedDB) | ذخیره آفلاین |
+| Zustand | State |
 | Web NFC API | اسکن تگ |
-| Vazirmatn | فونت فارسی |
+| mkcert | HTTPS dev روی LAN |
+
+---
+
+## توسعه روی PC (بدون موبایل)
+
+```bash
+npm run dev          # http://localhost:5173
+npm run build
+npm run preview      # http://localhost:4173
+```
+
+برای موبایل و NFC و PWA همیشه مسیر [راه‌اندازی کامل تست موبایل](#راه‌اندازی-کامل-تست-موبایل-گام‌به‌گام) را دنبال کنید.

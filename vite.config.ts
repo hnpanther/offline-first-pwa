@@ -18,8 +18,24 @@ function loadMkcertHttps(certDir: string) {
 export default defineConfig(({ mode }) => {
   const mobileDev = mode === 'mobile'
   const certDir = path.resolve(__dirname, 'certs')
-  const mkcertHttps = mobileDev ? loadMkcertHttps(certDir) : null
+  const mkcertHttps = loadMkcertHttps(certDir)
   const useTrustedCert = mkcertHttps != null
+
+  if (mobileDev) {
+    if (useTrustedCert) {
+      console.log('\n[mobile] HTTPS: mkcert (certs/cert.pem)\n')
+    } else {
+      console.warn(
+        '\n[mobile] WARNING: No certs/cert.pem — run: npm run setup:mkcert\n'
+      )
+    }
+    if (process.argv.includes('dev')) {
+      console.warn(
+        '[mobile] Dev server (5173) is NOT reliable offline after PWA install.\n' +
+          '         For offline: npm run build:mobile && npm run preview:mobile (port 4173)\n'
+      )
+    }
+  }
 
   return {
     plugins: [
@@ -61,12 +77,15 @@ export default defineConfig(({ mode }) => {
           ]
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}'],
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//]
+          navigateFallbackDenylist: [/^\/api\//],
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true
         },
         devOptions: {
-          enabled: mobileDev,
+          enabled: mobileDev && process.argv.includes('dev'),
           navigateFallback: '/index.html'
         }
       })
@@ -111,7 +130,18 @@ export default defineConfig(({ mode }) => {
     },
     preview: {
       host: '0.0.0.0',
-      port: 4173
+      port: 4173,
+      ...(mobileDev
+        ? {
+            https: mkcertHttps ?? true,
+            proxy: {
+              '/api': {
+                target: 'http://127.0.0.1:8081',
+                changeOrigin: true
+              }
+            }
+          }
+        : {})
     }
   }
 })

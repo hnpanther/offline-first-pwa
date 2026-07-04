@@ -6,8 +6,8 @@ import 'vazirmatn/Vazirmatn-font-face.css'
 
 // Register the Vite PWA service worker with auto-update
 registerSW({
+  immediate: true,
   onNeedRefresh() {
-    // In a real app you could show a toast here
     console.info('[PWA] New content available, refreshing...')
   },
   onOfflineReady() {

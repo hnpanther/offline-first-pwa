@@ -46,6 +46,8 @@ export function InstallPwaPrompt() {
 
   if (isStandalone || dismissed) return null
 
+  const onDevPort = window.location.port === '5173'
+
   // Chrome install banner (trusted HTTPS + engagement criteria)
   if (deferred) {
     return (
@@ -73,6 +75,21 @@ export function InstallPwaPrompt() {
 
   // Mobile / dev: manual install guidance (beforeinstallprompt often missing with self-signed HTTPS)
   if (!mobile) return null
+
+  if (onDevPort) {
+    return (
+      <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setDismissed(true)}>
+        <Typography variant="body2" fontWeight={600} gutterBottom>
+          نصب از dev (5173) آفلاین کار نمی‌کند
+        </Typography>
+        <Typography variant="body2" component="div">
+          برای PWA آفلاین: روی PC اجرا کنید{' '}
+          <strong>npm run build:mobile</strong> و <strong>npm run preview:mobile</strong>، سپس از{' '}
+          <strong>:4173</strong> نصب کنید.
+        </Typography>
+      </Alert>
+    )
+  }
 
   return (
     <Alert
