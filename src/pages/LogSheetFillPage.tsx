@@ -31,8 +31,7 @@ import {
   getLogSheet,
   updateLogSheet,
   getAllAssetClasses,
-  getAllAssetEntries,
-  getAssetEntryByTagId
+  getAllAssetEntries
 } from '@/services/storage'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
@@ -53,6 +52,7 @@ import {
 } from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
 import { pullMasterData } from '@/services/sync/pullMasterData'
+import { buildEntriesForTemplate } from '@/services/sync/logSheetSync'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
@@ -61,17 +61,33 @@ const formatDate = (ts: number) =>
 
 async function enrichEntriesWithNfc(
   entries: LogSheetEntryData[]
-): Promise<LogSheetEntryData[]> {
+): Promise<{ entries: LogSheetEntryData[]; nfcTagsBackfilled: boolean }> {
   const assets = await getAllAssetEntries()
   const byId = new Map(assets.map(a => [a.id, a]))
-  return entries.map(e => {
+  let nfcTagsBackfilled = false
+
+  const enriched = entries.map(e => {
     const asset = byId.get(e.assetId)
+    const nfcTagId = (e.nfcTagId || asset?.nfcTagId)?.trim() || undefined
+    if (!e.nfcTagId?.trim() && nfcTagId) nfcTagsBackfilled = true
     return {
       ...e,
       classId: asset ? toIdString(asset.classId) : toIdString(e.classId),
-      nfcTagId: e.nfcTagId || asset?.nfcTagId
+      nfcTagId
     }
   })
+
+  return { entries: enriched, nfcTagsBackfilled }
+}
+
+/** Match scanned tag against assets in the current log sheet only. */
+function findLogSheetEntryByNfcTag(
+  entries: LogSheetEntryData[],
+  tagId: string
+): LogSheetEntryData | undefined {
+  const needle = tagId.trim()
+  if (!needle) return undefined
+  return entries.find(e => e.nfcTagId?.trim() === needle)
 }
 
 // ---------------------------------------------------------------------------
@@ -267,17 +283,28 @@ export function LogSheetFillPage() {
         if (navigator.onLine && authSession) {
           await pullMasterData(true)
         }
-        const [sheet, classes] = await Promise.all([
+        const [loadedSheet, classes] = await Promise.all([
           getLogSheet(localId),
           getAllAssetClasses()
         ])
-        if (!sheet) {
+        if (!loadedSheet) {
           setLoadError('Log Sheet یافت نشد')
           return
         }
-        const entries = await enrichEntriesWithNfc(sheet.entries ?? [])
+        let sheet = loadedSheet
+        if ((!sheet.entries || sheet.entries.length === 0) && sheet.templateId) {
+          const rebuilt = await buildEntriesForTemplate(sheet.templateId)
+          if (rebuilt.length > 0) {
+            await updateLogSheet(localId, { entries: rebuilt })
+            sheet = (await getLogSheet(localId)) ?? { ...sheet, entries: rebuilt }
+          }
+        }
+        const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
         setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
+        if (nfcTagsBackfilled && localId) {
+          await updateLogSheet(localId, { entries })
+        }
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'خطا در بارگذاری')
       } finally {
@@ -292,8 +319,11 @@ export function LogSheetFillPage() {
     if (!localId || !inboxLastSyncAt) return
     void getLogSheet(localId).then(async sheet => {
       if (!sheet) return
-      const entries = await enrichEntriesWithNfc(sheet.entries ?? [])
+      const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
       setLogSheet({ ...sheet, entries })
+      if (nfcTagsBackfilled) {
+        await updateLogSheet(localId, { entries })
+      }
     })
   }, [inboxLastSyncAt, localId])
 
@@ -314,27 +344,17 @@ export function LogSheetFillPage() {
   // -------------------------------------------------------------------------
 
   const handleTagId = useCallback(
-    async (tagId: string) => {
+    (tagId: string) => {
       if (!logSheet) return
       setNfcError(null)
 
-      const assetEntry = await getAssetEntryByTagId(tagId)
-      if (!assetEntry) {
-        setNfcError(`تگ "${tagId}" در سیستم ثبت نشده است`)
-        return
-      }
-
-      const entry = logSheet.entries.find(e => e.assetId === assetEntry.id)
+      const entry = findLogSheetEntryByNfcTag(logSheet.entries ?? [], tagId)
       if (!entry) {
-        setNfcError(`Asset مربوط به تگ "${tagId}" در این Log Sheet وجود ندارد`)
+        setNfcError(`Asset مربوط به تگ "${tagId.trim()}" در این Log Sheet وجود ندارد`)
         return
       }
 
-      setActiveEntry({
-        ...entry,
-        classId: toIdString(assetEntry.classId),
-        nfcTagId: assetEntry.nfcTagId
-      })
+      setActiveEntry(entry)
       setDialogEditable(true)
       setDialogOpen(true)
     },
@@ -423,7 +443,7 @@ export function LogSheetFillPage() {
       await updateLogSheet(localId, { entries: updatedEntries })
       const refreshed = await getLogSheet(localId)
       if (refreshed) {
-        const entries = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
         setLogSheet({ ...refreshed, entries })
       }
       closeDialog()
@@ -461,7 +481,7 @@ export function LogSheetFillPage() {
       })
       const refreshed = await getLogSheet(localId)
       if (refreshed) {
-        const entries = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
         setLogSheet({ ...refreshed, entries })
       }
       setSavedMessage('Log Sheet با موفقیت ارسال شد و در صف همگام‌سازی قرار گرفت')

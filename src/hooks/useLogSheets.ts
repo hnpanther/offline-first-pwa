@@ -70,6 +70,7 @@ export function useLogSheets() {
   const [logs, setLogs] = useState<LogSheet[]>([])
   const [loading, setLoading] = useState(false)
   const lastSyncAt = useAppStore(s => s.lastSyncAt)
+  const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -87,6 +88,10 @@ export function useLogSheets() {
   useEffect(() => {
     if (lastSyncAt != null) void refresh()
   }, [lastSyncAt, refresh])
+
+  useEffect(() => {
+    if (inboxLastSyncAt != null) void refresh()
+  }, [inboxLastSyncAt, refresh])
 
   const addLogSheet = useCallback(
     async (data: Omit<LogSheet, 'id' | 'localId' | 'createdAt' | 'updatedAt' | 'syncStatus'>) => {

@@ -1,8 +1,11 @@
 import { useCallback, useEffect } from 'react'
 import { pullInbox } from '@/services/sync/pullInbox'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
+import { pullMasterDataIfStale } from '@/services/sync/pullMasterData'
 import { saveInboxSnapshot, loadInboxSnapshot } from '@/services/storage/inboxCache'
 import { useAppStore } from '@/store'
+
+const MASTER_DATA_STALE_MS = 60 * 60 * 1000
 
 export function useInboxSync(): {
   refreshInbox: (showLoading?: boolean) => Promise<void>
@@ -21,6 +24,8 @@ export function useInboxSync(): {
       setInboxError(null)
       try {
         const { assigned, available, teamOpen, serverTime } = await pullInbox()
+        // Asset entries are built from master data — refresh config before provisioning.
+        await pullMasterDataIfStale(MASTER_DATA_STALE_MS)
         await mergeInboxIntoLocalSheets(assigned)
         const syncAt = Date.now()
         await saveInboxSnapshot({

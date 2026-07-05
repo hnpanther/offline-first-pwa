@@ -94,10 +94,12 @@ export async function ensureLocalLogSheet(
   })
 }
 
-/** Merge inbox metadata (dueAt, status) into locally stored open sheets. */
+/** Provision local copies (with asset entries) and merge inbox metadata for assigned sheets. */
 export async function mergeInboxIntoLocalSheets(assigned: ServerLogSheet[]): Promise<void> {
   const now = Date.now()
   for (const serverSheet of assigned) {
+    await ensureLocalLogSheet(serverSheet)
+
     const serverId = toIdString(serverSheet.id)
     const local = await getLogSheetByServerId(serverId)
     if (!local) continue

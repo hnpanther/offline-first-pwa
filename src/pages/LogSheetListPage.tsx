@@ -135,18 +135,15 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const handleOpenAssigned = async (sheet: ServerLogSheet) => {
     const serverId = toIdString(sheet.id)
     const existing = await getLogSheetByServerId(serverId)
-    if (existing) {
-      if (isInvalidLocalLogSheet(existing)) {
-        setActionError(SYNC_OUTCOME_MESSAGES.REVOKED)
-        return
-      }
-      navigate(`/logsheets/${existing.localId}`)
+    if (existing && isInvalidLocalLogSheet(existing)) {
+      setActionError(SYNC_OUTCOME_MESSAGES.REVOKED)
       return
     }
-    if (!isOnline) {
+    if (!existing && !isOnline) {
       setActionError(t.inbox.pickupRequiresOnline)
       return
     }
+    // Always ensure local copy (rebuilds empty entries from cached master data — works offline).
     await openSheet(sheet)
   }
 
