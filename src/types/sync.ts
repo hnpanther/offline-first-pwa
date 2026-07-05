@@ -37,9 +37,18 @@ export type FieldDataType =
   | 'checkbox'
   | 'textarea'
 
-export interface FieldValidation {
+export interface FieldValidationRange {
   min?: number
   max?: number
+}
+
+export interface FieldValidation {
+  /** @deprecated legacy — treated as warning range by backend */
+  min?: number
+  /** @deprecated legacy — treated as warning range by backend */
+  max?: number
+  warning?: FieldValidationRange
+  danger?: FieldValidationRange
   minLength?: number
   maxLength?: number
   /** Regex string — converted to RegExp at runtime for react-hook-form */

@@ -60,6 +60,19 @@ function serverStatusLabel(status?: string | null): string {
   }
 }
 
+function resolveAssignedStatusChip(
+  sheet: ServerLogSheet,
+  local?: LogSheet
+): { label: string; color: 'primary' | 'warning' | 'success' | 'default' } {
+  if (local?.status === 'submitted') {
+    if (local.syncStatus === 'synced') {
+      return { label: 'ارسال شده', color: 'success' }
+    }
+    return { label: t.inbox.completedPendingSync, color: 'warning' }
+  }
+  return { label: serverStatusLabel(sheet.status), color: 'primary' }
+}
+
 export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const navigate = useNavigate()
   const isOnline = useAppStore(s => s.isOnline)
@@ -203,6 +216,16 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     [logs]
   )
 
+  const localByServerId = useMemo(() => {
+    const map = new Map<string, LogSheet>()
+    for (const log of logs) {
+      if (log.serverId) {
+        map.set(toIdString(log.serverId), log)
+      }
+    }
+    return map
+  }, [logs])
+
   const offlineLocalCards = useMemo(() => {
     if (isOnline) return []
     const inboxIds = new Set([
@@ -280,10 +303,15 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     variant: 'assigned' | 'available' | 'team'
   ) => {
     const serverId = toIdString(sheet.id)
+    const localLog = localByServerId.get(serverId)
     const isClaiming = claimingId === serverId
     const isReleasing = releasingId === serverId
     const borderColor =
       variant === 'assigned' ? 'primary.main' : variant === 'team' ? 'warning.main' : 'info.main'
+    const statusChip =
+      variant === 'assigned'
+        ? resolveAssignedStatusChip(sheet, localLog)
+        : { label: serverStatusLabel(sheet.status), color: (variant === 'team' ? 'warning' : 'info') as 'warning' | 'info' }
 
     return (
       <Card
@@ -306,9 +334,9 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
               />
             </Box>
             <Chip
-              label={serverStatusLabel(sheet.status)}
+              label={statusChip.label}
               size="small"
-              color={variant === 'assigned' ? 'primary' : variant === 'team' ? 'warning' : 'info'}
+              color={statusChip.color}
               variant="outlined"
             />
             {variant === 'assigned' ? (

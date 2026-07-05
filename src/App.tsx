@@ -7,6 +7,7 @@ import rtlPlugin from 'stylis-plugin-rtl'
 import { theme } from '@/theme'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
+import { AdminRoute } from '@/components/auth/AdminRoute'
 import { Dashboard } from '@/pages/Dashboard'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { AdminPage } from '@/pages/AdminPage'
@@ -57,7 +58,7 @@ export function App() {
                 </Route>
                 <Route path="admin" element={<Navigate to="/master-data/locations" replace />} />
                 <Route path="records" element={<Navigate to="/" replace />} />
-                <Route path="settings" element={<SettingsPage />} />
+                <Route path="settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
               </Route>
             </Routes>
           </AuthBootstrap>

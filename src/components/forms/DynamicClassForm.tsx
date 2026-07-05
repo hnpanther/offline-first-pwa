@@ -34,16 +34,15 @@ import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
  * understands. This is the adapter between the two representations.
  */
 function toFormField(def: FieldDefinition, nameOverride?: string): FormField {
+  const helperParts = [def.unit ? `واحد: ${def.unit}` : null].filter(Boolean)
   return {
     name: nameOverride ?? def.key,
     label: def.label,
     type: def.dataType,
     required: def.required,
     unit: def.unit,
-    min: def.validation?.min,
-    max: def.validation?.max,
     options: normalizeFieldOptions(def.validation?.options),
-    helperText: def.unit ? `واحد: ${def.unit}` : undefined,
+    helperText: helperParts.length > 0 ? helperParts.join(' · ') : undefined
   }
 }
 
@@ -79,12 +78,6 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
   return {
     required: def.required ? 'این فیلد الزامی است' : false,
 
-    ...(v.min !== undefined && {
-      min: { value: v.min, message: `مقدار نباید کمتر از ${v.min} باشد` },
-    }),
-    ...(v.max !== undefined && {
-      max: { value: v.max, message: `مقدار نباید بیشتر از ${v.max} باشد` },
-    }),
     ...(v.minLength !== undefined && {
       minLength: { value: v.minLength, message: `حداقل ${v.minLength} کاراکتر لازم است` },
     }),
@@ -215,6 +208,7 @@ export function DynamicClassForm({
             control={control}
             error={error}
             rules={rules}
+            rangeValidation={def.dataType === 'number' ? def.validation : undefined}
           />
         )
       })}

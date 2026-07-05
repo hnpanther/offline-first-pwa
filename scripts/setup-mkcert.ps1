@@ -1,4 +1,4 @@
-# Generate trusted HTTPS certs for mobile PWA dev (mkcert)
+﻿# Generate trusted HTTPS certs for mobile PWA dev (mkcert)
 # Run in PowerShell from offline-first-pwa folder:
 #   .\scripts\setup-mkcert.ps1
 #   .\scripts\setup-mkcert.ps1 -Ip 192.168.1.101
@@ -57,31 +57,34 @@ $caFile = Join-Path $caRoot "rootCA.pem"
 $caCopy = Join-Path $certDir "rootCA.pem"
 Copy-Item -Force $caFile $caCopy
 
-# Android often needs .crt extension to offer "CA certificate" install
+# Android often needs .crt extension to install CA
 $caCrt = Join-Path $certDir "rootCA.crt"
 Copy-Item -Force $caFile $caCrt
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
-Write-Host "  Server cert: $certFile"
-Write-Host "  Server key:  $keyFile"
-Write-Host "  CA for phone: $caCopy"
-Write-Host "  CA (.crt):    $caCrt  <-- send THIS to phone"
+Write-Host "Server cert: $certFile"
+Write-Host "Server key:  $keyFile"
+Write-Host "CA for phone: $caCopy"
+Write-Host "CA (crt):    $caCrt  (send this to phone)"
 Write-Host ""
-Write-Host "=== ON PC (offline PWA — use this, NOT dev:5173) ===" -ForegroundColor Yellow
+
+Write-Host "=== ON PC (offline PWA - use this, NOT dev server) ===" -ForegroundColor Yellow
 Write-Host "  npm run build:mobile"
 Write-Host "  npm run preview:mobile"
-Write-Host "  On phone: https://${Ip}:4173  -> install PWA from HERE"
+Write-Host "  Open on phone: https://${Ip}:4173"
+
 Write-Host ""
-Write-Host "=== Dev only (hot reload, offline PWA broken) ===" -ForegroundColor DarkYellow
-Write-Host "  npm run dev:mobile  -> https://${Ip}:5173"
+
+Write-Host "=== DEV MODE (hot reload, not reliable for offline PWA) ===" -ForegroundColor DarkYellow
+Write-Host "  npm run dev:mobile -> https://${Ip}:5173"
+
 Write-Host ""
-Write-Host "=== ON ANDROID (must be CA, NOT WiFi/VPN) ===" -ForegroundColor Yellow
-Write-Host "  1) Copy certs/rootCA.crt to phone (USB / Drive — not root.pem renamed wrong file)"
-Write-Host "  2) Settings -> Security -> More security settings"
-Write-Host "     -> Encryption and credentials -> Install a certificate"
-Write-Host "     -> CA certificate  (NOT VPN and app user certificate)"
-Write-Host "  3) Pick rootCA.crt, confirm the warning"
-Write-Host "  4) Force-stop Chrome, reopen https://${Ip}:5173"
-Write-Host "  5) Lock icon must be normal (no red). Then Install app in menu."
-Write-Host ""
+
+Write-Host "=== ANDROID STEPS ===" -ForegroundColor Yellow
+Write-Host "  1) Copy certs/rootCA.crt to phone"
+Write-Host "  2) Settings -> Security -> Encryption and credentials"
+Write-Host "  3) Install a certificate -> CA certificate"
+Write-Host "  4) Select rootCA.crt and confirm"
+Write-Host "  5) Restart Chrome"
+Write-Host "  6) Open https://${Ip}:5173 or :4173"

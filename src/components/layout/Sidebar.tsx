@@ -242,20 +242,24 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </>
         )}
 
-        {!showAdmin && <Divider sx={{ my: 1 }} />}
+        {showAdmin && (
+          <>
+            <Divider sx={{ my: 1 }} />
 
-        {/* تنظیمات */}
-        <ListItemButton
-          selected={isSelected('/settings')}
-          onClick={() => handleNav('/settings')}
-          sx={groupItemSx(isSelected('/settings'))}
-        >
-          <ListItemIcon sx={{ minWidth: 40 }}><SettingsIcon /></ListItemIcon>
-          <ListItemText
-            primary={t.nav.settings}
-            primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isSelected('/settings') ? 600 : 400 }}
-          />
-        </ListItemButton>
+            {/* تنظیمات — فقط ادمین */}
+            <ListItemButton
+              selected={isSelected('/settings')}
+              onClick={() => handleNav('/settings')}
+              sx={groupItemSx(isSelected('/settings'))}
+            >
+              <ListItemIcon sx={{ minWidth: 40 }}><SettingsIcon /></ListItemIcon>
+              <ListItemText
+                primary={t.nav.settings}
+                primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isSelected('/settings') ? 600 : 400 }}
+              />
+            </ListItemButton>
+          </>
+        )}
 
         {authSession && (
           <>
