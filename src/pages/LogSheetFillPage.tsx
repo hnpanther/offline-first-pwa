@@ -54,7 +54,7 @@ import {
 } from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
 import { pullMasterData } from '@/services/sync/pullMasterData'
-import { buildEntriesForTemplate } from '@/services/sync/logSheetSync'
+import { buildEntriesForTemplate, refreshEntriesFromServer } from '@/services/sync/logSheetSync'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
@@ -294,6 +294,19 @@ export function LogSheetFillPage() {
           return
         }
         let sheet = loadedSheet
+        const canRefreshFromServer =
+          navigator.onLine && authSession && sheet.serverId && sheet.status === 'draft'
+        if (canRefreshFromServer) {
+          try {
+            const refreshed = await refreshEntriesFromServer(sheet.serverId!, sheet.entries)
+            if (refreshed.length > 0) {
+              await updateLogSheet(localId, { entries: refreshed })
+              sheet = (await getLogSheet(localId)) ?? { ...sheet, entries: refreshed }
+            }
+          } catch {
+            // Offline / server down — fall back to cached template scope below.
+          }
+        }
         if ((!sheet.entries || sheet.entries.length === 0) && sheet.templateId) {
           const rebuilt = await buildEntriesForTemplate(sheet.templateId)
           if (rebuilt.length > 0) {

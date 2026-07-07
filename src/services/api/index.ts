@@ -93,6 +93,17 @@ export interface ServerLogSheet {
   updatedAt?: number | null
 }
 
+/** Server-generated rows for a log sheet (authoritative asset list). */
+export interface ServerLogSheetEntry {
+  assetId: number
+  assetName?: string | null
+  subFunctionCode?: string | null
+  subFunctionTag?: string | null
+  nfcTagId?: string | null
+  classId?: number | null
+  formData?: Record<string, unknown> | null
+}
+
 export interface LogSheetInboxResponse {
   serverTime: number
   assigned: ServerLogSheet[]
@@ -104,6 +115,16 @@ export async function fetchLogSheetInbox(
   signal?: AbortSignal
 ): Promise<LogSheetInboxResponse> {
   return apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal)
+}
+
+export async function fetchLogSheetEntries(
+  serverId: number | string,
+  signal?: AbortSignal
+): Promise<ServerLogSheetEntry[]> {
+  return apiClient.get<ServerLogSheetEntry[]>(
+    `/api/log-sheets/${serverId}/entries`,
+    signal
+  )
 }
 
 export async function claimLogSheet(

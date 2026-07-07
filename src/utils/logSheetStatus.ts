@@ -88,9 +88,20 @@ export function isExpiredDraft(
   return isLogSheetExpired(sheet, now)
 }
 
-/** Submitted sheets and expired local drafts belong in history. */
+/** Submitted sheets awaiting sync stay in the active list; synced/failed go to history. */
+export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+  if (isInvalidLocalLogSheet(sheet)) return false
+  if (isExpiredDraft(sheet, now)) return false
+  if (sheet.status === 'draft') return true
+  if (sheet.status === 'submitted' && sheet.syncStatus !== 'synced') return true
+  return false
+}
+
+/** Synced/failed submissions and expired local drafts belong in history. */
 export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
-  if (sheet.status === 'submitted') return true
+  if (sheet.status === 'submitted') {
+    return sheet.syncStatus === 'synced' || sheet.syncStatus === 'failed'
+  }
   return isExpiredDraft(sheet, now)
 }
 

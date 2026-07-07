@@ -9,10 +9,15 @@ import {
   getLogSheetByServerId,
   getAllLogSheets
 } from '@/services/storage'
-import type { ServerLogSheet } from '@/services/api'
+import { fetchLogSheetEntries, type ServerLogSheet, type ServerLogSheetEntry } from '@/services/api'
 import type { LogSheet, LogSheetEntryData } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isRevokedSyncError } from '@/utils/logSheetStatus'
+
+export interface EnsureLocalLogSheetOptions {
+  /** When true, pull the authoritative entry list from the server instead of local cache. */
+  refreshEntriesOnline?: boolean
+}
 
 export async function buildEntriesForTemplate(
   templateId: string
@@ -44,6 +49,60 @@ export async function buildEntriesForTemplate(
   })
 }
 
+function mapServerEntry(
+  entry: ServerLogSheetEntry,
+  formData: Record<string, unknown>
+): LogSheetEntryData {
+  return {
+    assetId: toIdString(entry.assetId),
+    assetName: entry.assetName ?? '',
+    subFunctionCode: entry.subFunctionCode ?? '',
+    subFunctionTag: entry.subFunctionTag ?? '',
+    nfcTagId: entry.nfcTagId ?? undefined,
+    classId: toIdString(entry.classId),
+    formData
+  }
+}
+
+/** Pull authoritative rows from the server and keep any local form values for matching assets. */
+export async function refreshEntriesFromServer(
+  serverId: number | string,
+  existingEntries?: LogSheetEntryData[]
+): Promise<LogSheetEntryData[]> {
+  const serverEntries = await fetchLogSheetEntries(serverId)
+  const formByAsset = new Map(
+    (existingEntries ?? []).map(entry => [toIdString(entry.assetId), entry.formData ?? {}])
+  )
+  return serverEntries.map(entry =>
+    mapServerEntry(entry, formByAsset.get(toIdString(entry.assetId)) ?? entry.formData ?? {})
+  )
+}
+
+async function resolveEntries(
+  serverSheet: ServerLogSheet,
+  existingEntries: LogSheetEntryData[] | undefined,
+  options?: EnsureLocalLogSheetOptions
+): Promise<LogSheetEntryData[] | undefined> {
+  const templateId = toIdString(serverSheet.templateId)
+  const needsEntries = !existingEntries || existingEntries.length === 0
+
+  if (options?.refreshEntriesOnline) {
+    const refreshed = await refreshEntriesFromServer(serverSheet.id, existingEntries)
+    if (refreshed.length > 0) {
+      return refreshed
+    }
+  }
+
+  if (needsEntries && templateId) {
+    const rebuilt = await buildEntriesForTemplate(templateId)
+    if (rebuilt.length > 0) {
+      return rebuilt
+    }
+  }
+
+  return undefined
+}
+
 /** User was reassigned away earlier; server put the sheet back in their inbox. */
 function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null {
   if (!isRevokedSyncError(local.syncError)) return null
@@ -55,17 +114,17 @@ function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null 
 }
 
 export async function ensureLocalLogSheet(
-  serverSheet: ServerLogSheet
+  serverSheet: ServerLogSheet,
+  options?: EnsureLocalLogSheetOptions
 ): Promise<LogSheet> {
   const serverId = toIdString(serverSheet.id)
   const existing = await getLogSheetByServerId(serverId)
   if (existing) {
-    const needsEntries = !existing.entries || existing.entries.length === 0
-    const templateId = toIdString(serverSheet.templateId) || existing.templateId
-    const rebuiltEntries = needsEntries && templateId
-      ? await buildEntriesForTemplate(templateId)
-      : undefined
-
+    const resolvedEntries = await resolveEntries(
+      serverSheet,
+      existing.entries,
+      options
+    )
     const revival = revivalUpdatesAfterReassign(existing)
 
     await updateLogSheet(existing.localId, {
@@ -75,7 +134,7 @@ export async function ensureLocalLogSheet(
       scopeSummary: serverSheet.scopeSummary ?? existing.scopeSummary,
       templateName: serverSheet.templateName ?? existing.templateName,
       operationalUnitId: toIdString(serverSheet.operationalUnitId) || existing.operationalUnitId,
-      ...(rebuiltEntries && rebuiltEntries.length > 0 ? { entries: rebuiltEntries } : {}),
+      ...(resolvedEntries && resolvedEntries.length > 0 ? { entries: resolvedEntries } : {}),
       ...revival
     })
     const updated = await getLogSheetByServerId(serverId)
@@ -84,7 +143,9 @@ export async function ensureLocalLogSheet(
   }
 
   const templateId = toIdString(serverSheet.templateId)
-  const entries = templateId ? await buildEntriesForTemplate(templateId) : []
+  const entries =
+    (await resolveEntries(serverSheet, undefined, options)) ??
+    (templateId ? await buildEntriesForTemplate(templateId) : [])
   const settings = await getSettings()
   const now = Date.now()
   const localId = serverSheet.localId ?? uuidv4()
@@ -107,11 +168,20 @@ export async function ensureLocalLogSheet(
   })
 }
 
+export interface MergeInboxOptions {
+  refreshEntriesOnline?: boolean
+}
+
 /** Provision local copies (with asset entries) and merge inbox metadata for assigned sheets. */
-export async function mergeInboxIntoLocalSheets(assigned: ServerLogSheet[]): Promise<void> {
+export async function mergeInboxIntoLocalSheets(
+  assigned: ServerLogSheet[],
+  options?: MergeInboxOptions
+): Promise<void> {
   const now = Date.now()
   for (const serverSheet of assigned) {
-    await ensureLocalLogSheet(serverSheet)
+    await ensureLocalLogSheet(serverSheet, {
+      refreshEntriesOnline: options?.refreshEntriesOnline
+    })
 
     const serverId = toIdString(serverSheet.id)
     const local = await getLogSheetByServerId(serverId)

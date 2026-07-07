@@ -35,7 +35,7 @@ import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
 import { toIdString } from '@/utils/ids'
 import { isSupervisorRole } from '@/types/auth'
-import { isInvalidLocalLogSheet, SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isExpiredDraft, resolveLocalLogSheetStatusChip } from '@/utils/logSheetStatus'
+import { isInvalidLocalLogSheet, SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLocalLogSheetStatusChip } from '@/utils/logSheetStatus'
 import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
@@ -118,14 +118,16 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     async (serverSheet: ServerLogSheet) => {
       setActionError(null)
       try {
-        const local = await ensureLocalLogSheet(serverSheet)
+        const local = await ensureLocalLogSheet(serverSheet, {
+          refreshEntriesOnline: canUseServer
+        })
         await refreshLocal()
         navigate(`/logsheets/${local.localId}`)
       } catch (err) {
         setActionError(err instanceof Error ? err.message : 'خطا در باز کردن کار')
       }
     },
-    [navigate, refreshLocal]
+    [navigate, refreshLocal, canUseServer]
   )
 
   const handleClaim = async (sheet: ServerLogSheet) => {
@@ -218,24 +220,24 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   }
 
   const localActiveWork = useMemo(
-    () =>
-      logs.filter(
-        l =>
-          l.serverId &&
-          !isInvalidLocalLogSheet(l) &&
-          !isExpiredDraft(l) &&
-          (l.status === 'draft' ||
-            (l.status === 'submitted' && l.syncStatus !== 'synced'))
-      ),
+    () => logs.filter(l => l.serverId && isActiveLogSheet(l)),
     [logs]
   )
 
   const localByServerId = useMemo(() => {
     const map = new Map<string, LogSheet>()
     for (const log of logs) {
-      if (log.serverId) {
-        map.set(toIdString(log.serverId), log)
+      if (!log.serverId) continue
+      const key = toIdString(log.serverId)
+      const existing = map.get(key)
+      if (!existing) {
+        map.set(key, log)
+        continue
       }
+      const preferCurrent =
+        (log.status === 'submitted' && existing.status !== 'submitted') ||
+        (log.status === existing.status && log.updatedAt > existing.updatedAt)
+      if (preferCurrent) map.set(key, log)
     }
     return map
   }, [logs])
@@ -265,7 +267,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
 
   const filteredAssigned = inboxAssigned.filter(s => {
     const local = localByServerId.get(toIdString(s.id))
-    if (local?.status === 'submitted') return false
+    if (local?.status === 'submitted' && local.syncStatus === 'synced') return false
     const q = search.toLowerCase()
     if (!q) return true
     return (

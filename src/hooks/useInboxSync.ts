@@ -46,7 +46,11 @@ export function useInboxSync(): {
       try {
         const { assigned, available, teamOpen, serverTime } = await pullInbox()
         await pullMasterDataIfStale(MASTER_DATA_STALE_MS)
-        await mergeInboxIntoLocalSheets(assigned)
+        const refreshEntriesOnline = canReachServer(
+          useAppStore.getState().isOnline,
+          useAppStore.getState().serverReachable
+        )
+        await mergeInboxIntoLocalSheets(assigned, { refreshEntriesOnline })
         const syncAt = Date.now()
         await saveInboxSnapshot({
           assigned,
