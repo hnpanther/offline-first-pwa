@@ -3,12 +3,15 @@ import SyncIcon from '@mui/icons-material/Sync'
 import CloudDoneIcon from '@mui/icons-material/CloudDone'
 import CloudOffIcon from '@mui/icons-material/CloudOff'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useAppStore } from '@/store'
 import { useManualSync } from '@/hooks/useSync'
+import { canReachServer } from '@/utils/connectivity'
 import { t } from '@/i18n'
 
 export function SyncStatusBar() {
   const isOnline = useAppStore(s => s.isOnline)
+  const serverReachable = useAppStore(s => s.serverReachable)
   const isSyncing = useAppStore(s => s.isSyncing)
   const pendingCount = useAppStore(s => s.pendingCount)
   const syncError = useAppStore(s => s.syncError)
@@ -17,6 +20,13 @@ export function SyncStatusBar() {
   const getStatus = () => {
     if (!isOnline) return { label: t.sync.offline, color: 'default' as const, icon: <CloudOffIcon fontSize="small" /> }
     if (isSyncing) return { label: t.sync.syncing, color: 'info' as const, icon: <CircularProgress size={14} color="inherit" /> }
+    if (serverReachable === false) {
+      return {
+        label: t.sync.serverUnreachable,
+        color: 'warning' as const,
+        icon: <WarningAmberIcon fontSize="small" />
+      }
+    }
     if (syncError) return { label: t.sync.failed, color: 'error' as const, icon: <ErrorOutlineIcon fontSize="small" /> }
     if (pendingCount > 0) return {
       label: t.sync.pendingCount.replace('{{count}}', String(pendingCount)),
@@ -42,7 +52,7 @@ export function SyncStatusBar() {
           '& .MuiChip-icon': { width: 18, height: 18, flexShrink: 0 }
         }}
       />
-      {isOnline && pendingCount > 0 && !isSyncing && (
+      {canReachServer(isOnline, serverReachable) && pendingCount > 0 && !isSyncing && (
         <Tooltip title={t.sync.manualSync}>
           <IconButton size="small" onClick={manualSync}>
             <SyncIcon fontSize="small" />

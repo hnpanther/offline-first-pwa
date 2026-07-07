@@ -1,18 +1,19 @@
 import { db } from '@/services/storage/db'
 import type { AuthSession, LoginResponse } from '@/types/auth'
 import { isSessionValid } from '@/types/auth'
-
+import { useAppStore } from '@/store'
 const AUTH_KEY = 'authSession'
 
 export async function getAuthSession(): Promise<AuthSession | null> {
   const row = await db.syncMeta.get(AUTH_KEY)
   const value = row?.value as AuthSession | undefined
   if (!value?.accessToken) return null
-  if (!isSessionValid(value)) {
-    if (navigator.onLine) {
+  if (!isSessionValid(value, Date.now(), useAppStore.getState().serverReachable)) {
+    if (useAppStore.getState().serverReachable === true) {
       await clearAuthSession()
+      return null
     }
-    return null
+    return value
   }
   return value
 }

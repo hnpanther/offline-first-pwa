@@ -76,3 +76,41 @@ export function canSubmitLogSheet(sheet: LogSheet, now = Date.now()): { ok: bool
   }
   return { ok: true }
 }
+
+export function isExpiredDraft(
+  sheet: Pick<LogSheet, 'status' | 'dueAt' | 'serverStatus' | 'syncError'>,
+  now = Date.now()
+): boolean {
+  if (sheet.status !== 'draft') return false
+  if (sheet.serverStatus === 'EXPIRED' || sheet.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) {
+    return true
+  }
+  return isLogSheetExpired(sheet, now)
+}
+
+/** Submitted sheets and expired local drafts belong in history. */
+export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+  if (sheet.status === 'submitted') return true
+  return isExpiredDraft(sheet, now)
+}
+
+export function resolveLocalLogSheetStatusChip(
+  sheet: LogSheet
+): { label: string; color: 'primary' | 'warning' | 'success' | 'error' | 'default' } {
+  if (sheet.status === 'submitted') {
+    if (sheet.syncStatus === 'synced') {
+      return { label: 'ارسال شده', color: 'success' }
+    }
+    if (sheet.syncStatus === 'failed') {
+      return { label: 'خطا در ارسال', color: 'error' }
+    }
+    return { label: 'تکمیل شده — در انتظار ارسال', color: 'warning' }
+  }
+  if (isExpiredDraft(sheet)) {
+    return { label: 'پیش‌نویس منقضی', color: 'error' }
+  }
+  if (isInvalidLocalLogSheet(sheet)) {
+    return { label: 'غیرقابل ادامه', color: 'default' }
+  }
+  return { label: 'پیش‌نویس', color: 'warning' }
+}

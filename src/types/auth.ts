@@ -1,3 +1,5 @@
+import { useAppStore } from '@/store'
+
 export interface AuthSession {
   accessToken: string
   tokenType: string
@@ -23,10 +25,15 @@ export interface LoginResponse {
   expiresAt: number
 }
 
-export function isSessionValid(session: AuthSession | null, now = Date.now()): boolean {
+export function isSessionValid(
+  session: AuthSession | null,
+  now = Date.now(),
+  serverReachable: boolean | null = useAppStore.getState().serverReachable
+): boolean {
   if (!session?.accessToken) return false
-  // Offline-first: stored session stays usable offline even past JWT expiry.
   if (!navigator.onLine) return true
+  // Until server is confirmed reachable, keep local session (offline / host down).
+  if (serverReachable !== true) return true
   return now < session.expiresAt - 60_000
 }
 

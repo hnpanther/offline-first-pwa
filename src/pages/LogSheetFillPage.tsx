@@ -45,9 +45,11 @@ import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import {
   canSubmitLogSheet,
   isLogSheetExpired,
+  isExpiredDraft,
   isSupersededSyncError,
   isInvalidLocalLogSheet,
   isRevokedSyncError,
+  resolveLocalLogSheetStatusChip,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
@@ -475,6 +477,7 @@ export function LogSheetFillPage() {
       const clientActionId = logSheet.clientActionId ?? uuidv4()
       await updateLogSheet(localId, {
         status: 'submitted',
+        syncStatus: 'pending',
         submittedAt: completedAt,
         completedAt,
         clientActionId
@@ -516,7 +519,8 @@ export function LogSheetFillPage() {
   }
 
   const isSubmitted = logSheet.status === 'submitted'
-  const isExpired = isLogSheetExpired(logSheet)
+  const isExpired = isLogSheetExpired(logSheet) || isExpiredDraft(logSheet)
+  const statusChip = resolveLocalLogSheetStatusChip(logSheet)
   const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
   const isRevoked = logSheet.syncStatus === 'failed' && isRevokedSyncError(logSheet.syncError)
   const isInvalid = isInvalidLocalLogSheet(logSheet)
@@ -541,8 +545,8 @@ export function LogSheetFillPage() {
           <ScopeLabel scopeSummary={logSheet.scopeSummary} templateId={logSheet.templateId} />
         </Box>
         <Chip
-          label={isSubmitted ? 'ارسال شده' : 'پیش‌نویس'}
-          color={isSubmitted ? 'success' : 'warning'}
+          label={statusChip.label}
+          color={statusChip.color}
           size="small"
         />
       </Box>

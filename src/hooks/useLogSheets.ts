@@ -11,6 +11,7 @@ import {
   updateLogSheet,
   deleteLogSheet
 } from '@/services/storage'
+import { expireStaleLocalDrafts } from '@/services/sync/logSheetSync'
 import type { LogSheetTemplate, LogSheet } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ export function useLogSheets() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
+      await expireStaleLocalDrafts()
       setLogs(await getAllLogSheets())
     } finally {
       setLoading(false)

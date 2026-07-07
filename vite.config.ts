@@ -85,7 +85,7 @@ export default defineConfig(({ mode }) => {
           skipWaiting: true
         },
         devOptions: {
-          enabled: mobileDev && process.argv.includes('dev'),
+          enabled: mobileDev,
           navigateFallback: '/index.html'
         }
       })

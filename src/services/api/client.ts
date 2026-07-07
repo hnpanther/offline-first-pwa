@@ -1,5 +1,6 @@
 import { getSettings } from '@/services/storage'
 import { getAccessToken, clearAuthSession } from '@/services/auth'
+import { useAppStore } from '@/store'
 
 /**
  * Centralized HTTP client for all server communication.
@@ -69,12 +70,18 @@ async function request<T>(
   const baseUrl = await getBaseUrl()
   const url = `${baseUrl}${path}`
 
-  const response = await fetch(url, {
-    method,
-    headers: await buildHeaders(),
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal
-  })
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method,
+      headers: await buildHeaders(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal
+    })
+  } catch {
+    useAppStore.getState().setServerReachable(false)
+    throw new ApiError(0, 'ارتباط با سرور برقرار نشد.')
+  }
 
   if (response.status === 401 && authRequired) {
     await clearAuthSession()
@@ -92,8 +99,13 @@ async function request<T>(
       errorBody,
       `HTTP ${response.status}: ${response.statusText}`
     )
+    if (response.status >= 502 && response.status <= 504) {
+      useAppStore.getState().setServerReachable(false)
+    }
     throw new ApiError(response.status, message, errorBody)
   }
+
+  useAppStore.getState().setServerReachable(true)
 
   if (response.status === 204) return undefined as T
 

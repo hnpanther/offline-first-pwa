@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
-  getAuthSession,
+  peekAuthSession,
   saveAuthSession,
   clearAuthSession
 } from '@/services/auth'
@@ -21,7 +21,7 @@ export function useAuthInit(): void {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const session = await getAuthSession()
+      const session = await peekAuthSession()
       if (cancelled) return
       setAuthSession(session)
       setAuthLoaded(true)
@@ -73,7 +73,8 @@ export function useAuth() {
     navigate('/login', { replace: true })
   }, [setAuthSession, clearInbox, navigate])
 
-  const isAuthenticated = isSessionValid(authSession)
+  const serverReachable = useAppStore(s => s.serverReachable)
+  const isAuthenticated = isSessionValid(authSession, Date.now(), serverReachable)
 
   return {
     authSession: authSession as AuthSession | null,

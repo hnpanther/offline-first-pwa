@@ -24,6 +24,11 @@ import { DynamicFormField } from './DynamicFormField'
 import type { FieldDefinition } from '@/types/sync'
 import type { FormField } from '@/types'
 import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
+import {
+  evaluateNumericSeverity,
+  severityMessage,
+  type FieldValidationSeverity
+} from '@/utils/fieldValidation'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,6 +71,12 @@ function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: strin
     return { value: text, unit: def.unit }
   }
   return { value: text }
+}
+
+function readOnlyValueColor(severity: FieldValidationSeverity): string | undefined {
+  if (severity === 'warning') return 'warning.main'
+  if (severity === 'danger') return 'error.main'
+  return undefined
 }
 
 /**
@@ -154,7 +165,14 @@ export function DynamicClassForm({
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {sorted.map(def => {
-          const { value, unit } = formatReadOnlyValue(def, readOnlyValues[def.key])
+          const rawValue = readOnlyValues[def.key]
+          const { value, unit } = formatReadOnlyValue(def, rawValue)
+          const rangeSeverity =
+            def.dataType === 'number' && def.validation
+              ? evaluateNumericSeverity(rawValue, def.validation)
+              : 'ok'
+          const rangeFeedback = severityMessage(rangeSeverity)
+          const valueColor = readOnlyValueColor(rangeSeverity)
 
           return (
             <Box
@@ -164,6 +182,13 @@ export function DynamicClassForm({
                 px: 0.5,
                 borderBottom: '1px solid',
                 borderColor: 'divider',
+                borderRight: rangeSeverity !== 'ok' ? 3 : 0,
+                borderRightColor:
+                  rangeSeverity === 'danger'
+                    ? 'error.main'
+                    : rangeSeverity === 'warning'
+                      ? 'warning.main'
+                      : undefined,
                 '&:last-child': { borderBottom: 'none' }
               }}
             >
@@ -172,7 +197,12 @@ export function DynamicClassForm({
                 {def.required ? ' *' : ''}
               </Typography>
               <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2, flexWrap: 'wrap' }}>
-                <Typography variant="body1" fontWeight={600} component="span">
+                <Typography
+                  variant="body1"
+                  fontWeight={600}
+                  component="span"
+                  sx={{ color: valueColor }}
+                >
                   {value}
                 </Typography>
                 {unit && (
@@ -186,6 +216,14 @@ export function DynamicClassForm({
                   </Typography>
                 )}
               </Box>
+              {rangeFeedback && (
+                <Typography
+                  variant="caption"
+                  sx={{ color: valueColor, fontWeight: 600, display: 'block', mt: 0.5 }}
+                >
+                  {rangeFeedback}
+                </Typography>
+              )}
             </Box>
           )
         })}

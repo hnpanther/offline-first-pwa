@@ -35,7 +35,8 @@ import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
 import { toIdString } from '@/utils/ids'
 import { isSupervisorRole } from '@/types/auth'
-import { isInvalidLocalLogSheet, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
+import { isInvalidLocalLogSheet, SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isExpiredDraft, resolveLocalLogSheetStatusChip } from '@/utils/logSheetStatus'
+import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import { AssignOperatorDialog } from '@/components/logsheet/AssignOperatorDialog'
@@ -63,12 +64,9 @@ function serverStatusLabel(status?: string | null): string {
 function resolveAssignedStatusChip(
   sheet: ServerLogSheet,
   local?: LogSheet
-): { label: string; color: 'primary' | 'warning' | 'success' | 'default' } {
-  if (local?.status === 'submitted') {
-    if (local.syncStatus === 'synced') {
-      return { label: 'ارسال شده', color: 'success' }
-    }
-    return { label: t.inbox.completedPendingSync, color: 'warning' }
+): { label: string; color: 'primary' | 'warning' | 'success' | 'error' | 'default' } {
+  if (local) {
+    return resolveLocalLogSheetStatusChip(local)
   }
   return { label: serverStatusLabel(sheet.status), color: 'primary' }
 }
@@ -76,12 +74,16 @@ function resolveAssignedStatusChip(
 export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const navigate = useNavigate()
   const isOnline = useAppStore(s => s.isOnline)
+  const serverReachable = useAppStore(s => s.serverReachable)
+  const canUseServer = canReachServer(isOnline, serverReachable)
+  const effectivelyOffline = isEffectivelyOffline(isOnline, serverReachable)
   const authSession = useAppStore(s => s.authSession)
   const inboxAssigned = useAppStore(s => s.inboxAssigned)
   const inboxAvailable = useAppStore(s => s.inboxAvailable)
   const inboxTeamOpen = useAppStore(s => s.inboxTeamOpen)
   const inboxLoading = useAppStore(s => s.inboxLoading)
   const inboxError = useAppStore(s => s.inboxError)
+  const inboxWarning = useAppStore(s => s.inboxWarning)
   const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
   const isSupervisor = isSupervisorRole(authSession?.roles ?? [])
   const { refreshInbox } = useInboxSync()
@@ -100,6 +102,18 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
 
   useEffect(() => setPage(1), [search, mode])
 
+  useEffect(() => {
+    if (mode === 'active') {
+      void refreshLocal()
+    }
+  }, [mode, refreshLocal])
+
+  useEffect(() => {
+    if (mode === 'active' && inboxLastSyncAt != null) {
+      void refreshLocal()
+    }
+  }, [mode, inboxLastSyncAt, refreshLocal])
+
   const openSheet = useCallback(
     async (serverSheet: ServerLogSheet) => {
       setActionError(null)
@@ -115,7 +129,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   )
 
   const handleClaim = async (sheet: ServerLogSheet) => {
-    if (!isOnline) {
+    if (!canUseServer) {
       setActionError(t.inbox.pickupRequiresOnline)
       return
     }
@@ -135,11 +149,12 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const handleOpenAssigned = async (sheet: ServerLogSheet) => {
     const serverId = toIdString(sheet.id)
     const existing = await getLogSheetByServerId(serverId)
-    if (existing && isInvalidLocalLogSheet(existing)) {
+    const backInMyInbox = inboxAssigned.some(s => toIdString(s.id) === serverId)
+    if (existing && isInvalidLocalLogSheet(existing) && !backInMyInbox) {
       setActionError(SYNC_OUTCOME_MESSAGES.REVOKED)
       return
     }
-    if (!existing && !isOnline) {
+    if (!existing && !canUseServer) {
       setActionError(t.inbox.pickupRequiresOnline)
       return
     }
@@ -148,7 +163,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   }
 
   const handleRelease = async (sheet: ServerLogSheet) => {
-    if (!isOnline) {
+    if (!canUseServer) {
       setActionError(t.inbox.pickupRequiresOnline)
       return
     }
@@ -174,7 +189,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   }
 
   const handleAssignConfirm = async (operatorId: number) => {
-    if (!assignTarget || !isOnline) return
+    if (!assignTarget || !canUseServer) return
     setAssigning(true)
     setActionError(null)
     try {
@@ -202,13 +217,15 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     }
   }
 
-  const localOpenDrafts = useMemo(
+  const localActiveWork = useMemo(
     () =>
       logs.filter(
         l =>
-          l.status === 'draft' &&
           l.serverId &&
-          !isInvalidLocalLogSheet(l)
+          !isInvalidLocalLogSheet(l) &&
+          !isExpiredDraft(l) &&
+          (l.status === 'draft' ||
+            (l.status === 'submitted' && l.syncStatus !== 'synced'))
       ),
     [logs]
   )
@@ -224,17 +241,17 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   }, [logs])
 
   const offlineLocalCards = useMemo(() => {
-    if (isOnline) return []
+    if (!effectivelyOffline) return []
     const inboxIds = new Set([
       ...inboxAssigned.map(s => toIdString(s.id)),
       ...inboxTeamOpen.map(s => toIdString(s.id))
     ])
-    return localOpenDrafts.filter(l => !inboxIds.has(toIdString(l.serverId!)))
-  }, [isOnline, inboxAssigned, inboxTeamOpen, localOpenDrafts])
+    return localActiveWork.filter(l => !inboxIds.has(toIdString(l.serverId!)))
+  }, [effectivelyOffline, inboxAssigned, inboxTeamOpen, localActiveWork])
 
   // Active: assigned from server inbox + local drafts not yet in history
-  // History: locally submitted sheets
-  const historyLogs = logs.filter(log => log.status === 'submitted')
+  // History: submitted sheets + expired local drafts
+  const historyLogs = logs.filter(log => isHistoryLogSheet(log))
 
   const filteredHistory = historyLogs.filter(log => {
     const q = search.toLowerCase()
@@ -247,6 +264,8 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   })
 
   const filteredAssigned = inboxAssigned.filter(s => {
+    const local = localByServerId.get(toIdString(s.id))
+    if (local?.status === 'submitted') return false
     const q = search.toLowerCase()
     if (!q) return true
     return (
@@ -281,19 +300,9 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
 
   const paginatedHistory = filteredHistory.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  const syncStatusColor = (log: LogSheet) => {
-    if (log.syncStatus === 'synced') return 'success'
-    if (log.syncStatus === 'failed') return 'error'
-    if (log.syncStatus === 'syncing') return 'info'
-    return 'warning'
-  }
+  const syncStatusLabel = (log: LogSheet) => resolveLocalLogSheetStatusChip(log).label
 
-  const syncStatusLabel = (log: LogSheet) => {
-    if (log.syncStatus === 'synced') return 'ارسال شده'
-    if (log.syncStatus === 'failed') return 'خطا در ارسال'
-    if (log.syncStatus === 'syncing') return 'در حال ارسال'
-    return 'در انتظار ارسال'
-  }
+  const syncStatusColor = (log: LogSheet) => resolveLocalLogSheetStatusChip(log).color
 
   const renderServerCard = (
     sheet: ServerLogSheet,
@@ -347,13 +356,13 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
               </Button>
             ) : variant === 'team' ? (
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                <Tooltip title={!isOnline ? t.inbox.pickupRequiresOnline : ''} arrow>
+                <Tooltip title={!canUseServer ? t.inbox.pickupRequiresOnline : ''} arrow>
                   <span>
                     <Button
                       size="small"
                       variant="outlined"
                       color="warning"
-                      disabled={!isOnline || isReleasing}
+                      disabled={!canUseServer || isReleasing}
                       startIcon={
                         isReleasing ? <CircularProgress size={14} color="inherit" /> : <UndoIcon />
                       }
@@ -364,12 +373,12 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                   </span>
                 </Tooltip>
                 {isSupervisor && (
-                  <Tooltip title={!isOnline ? t.inbox.pickupRequiresOnline : ''} arrow>
+                  <Tooltip title={!canUseServer ? t.inbox.pickupRequiresOnline : ''} arrow>
                     <span>
                       <Button
                         size="small"
                         variant="outlined"
-                        disabled={!isOnline}
+                        disabled={!canUseServer}
                         startIcon={<SwapHorizIcon />}
                         onClick={() => setAssignTarget({ sheet, mode: 'reassign' })}
                       >
@@ -381,17 +390,17 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
               </Stack>
             ) : (
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                <Tooltip title={!isOnline ? t.inbox.pickupRequiresOnline : ''} arrow>
+                <Tooltip title={!canUseServer ? t.inbox.pickupRequiresOnline : ''} arrow>
                   <span>
                     <Button
                       size="small"
                       variant="contained"
                       color="info"
-                      disabled={!isOnline || isClaiming}
+                      disabled={!canUseServer || isClaiming}
                       startIcon={
                         isClaiming ? (
                           <CircularProgress size={14} color="inherit" />
-                        ) : !isOnline ? (
+                        ) : !canUseServer ? (
                           <CloudOffIcon />
                         ) : (
                           <BackHandIcon />
@@ -404,13 +413,13 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                   </span>
                 </Tooltip>
                 {isSupervisor && (
-                  <Tooltip title={!isOnline ? t.inbox.pickupRequiresOnline : ''} arrow>
+                  <Tooltip title={!canUseServer ? t.inbox.pickupRequiresOnline : ''} arrow>
                     <span>
                       <Button
                         size="small"
                         variant="outlined"
                         color="secondary"
-                        disabled={!isOnline}
+                        disabled={!canUseServer}
                         startIcon={<PersonAddIcon />}
                         onClick={() => setAssignTarget({ sheet, mode: 'assign' })}
                       >
@@ -456,16 +465,22 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
             variant="outlined"
             startIcon={inboxLoading ? <CircularProgress size={14} /> : <SyncIcon />}
             onClick={() => void refreshInbox(true)}
-            disabled={!isOnline || inboxLoading}
+            disabled={!canUseServer || inboxLoading}
           >
             {t.inbox.refresh}
           </Button>
         )}
       </Box>
 
-      {mode === 'active' && !isOnline && (
+      {mode === 'active' && effectivelyOffline && (
         <Alert severity="warning" sx={{ mb: 2 }} icon={<CloudOffIcon />}>
           {t.inbox.offlineHint}
+        </Alert>
+      )}
+
+      {inboxWarning && mode === 'active' && (
+        <Alert severity="warning" sx={{ mb: 2 }} onClose={() => useAppStore.getState().setInboxWarning(null)}>
+          {inboxWarning}
         </Alert>
       )}
 
@@ -515,7 +530,9 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
           ) : (
             <Stack spacing={1.5} sx={{ mb: 3 }}>
               {filteredAssigned.map(s => renderServerCard(s, 'assigned'))}
-              {offlineLocalCards.map(log => (
+              {offlineLocalCards.map(log => {
+                const statusChip = resolveLocalLogSheetStatusChip(log)
+                return (
                 <Card
                   key={`local-${log.localId}`}
                   variant="outlined"
@@ -528,10 +545,13 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                           {log.templateName}
                         </Typography>
                         <ScopeLabel scopeSummary={log.scopeSummary} templateId={log.templateId} />
-                        <Typography variant="caption" color="text.secondary" display="block">
-                          {t.inbox.offlineDraft}
-                        </Typography>
                       </Box>
+                      <Chip
+                        label={statusChip.label}
+                        size="small"
+                        color={statusChip.color}
+                        variant="outlined"
+                      />
                       <Button
                         size="small"
                         variant="outlined"
@@ -542,7 +562,8 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                     </Box>
                   </CardContent>
                 </Card>
-              ))}
+                )
+              })}
             </Stack>
           )}
 

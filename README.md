@@ -692,11 +692,40 @@ Backend: `backend-offline-first`, default port **8081**.
 
 Stored in Settings (`serverUrl` in IndexedDB). If configured origin equals `window.location.origin`, requests use relative `/api/...` (same-origin nginx or Vite proxy).
 
+**You do not put the data-server IP in the app when using nginx proxy.** The PWA always calls its own origin; nginx forwards `/api` to Spring.
+
 ---
 
 ## Production Deployment
 
-Build static assets — **no Node.js required on the server**:
+### PWA host vs data server (split deployment)
+
+The app does **not** call the Spring URL directly in the normal setup. All API requests go to the **same address as the PWA**, and the web server proxies `/api` to the backend.
+
+```
+Phone / tablet
+    │
+    ▼
+https://192.168.1.101:4173/api/log-sheets/inbox   ← same origin as the PWA
+    │
+    ▼
+nginx (192.168.1.101:4173)
+    ├── /           → static files from dist/  (PWA UI, Service Worker)
+    └── /api/*      → proxy → http://192.168.1.105:8082/api/...  (Spring)
+```
+
+| What | Where to configure | Example |
+|------|-------------------|---------|
+| PWA URL (what users open / install) | nginx `listen` + DNS / IP | `https://192.168.1.101:4173` |
+| Data server (Spring) | **nginx `proxy_pass` only** | `http://192.168.1.105:8082` |
+| **Settings → server URL** in the app | Same as PWA origin (not the data server) | `https://192.168.1.101:4173` |
+| Default on first install (optional) | `.env.mobile` → `VITE_SERVER_URL` | `https://192.168.1.101:4173` |
+
+If `serverUrl` in Settings matches `window.location.origin`, the API client uses relative paths (`/api/...`). nginx must route those to Spring.
+
+> **Dev / preview:** Vite on `:4173` or `:5173` plays the same role as nginx — it serves the PWA and proxies `/api` to `127.0.0.1:8081`.
+
+Build static assets — **no Node.js required on the production PWA server**:
 
 ```bash
 npm run build
@@ -707,10 +736,12 @@ Copy `dist/` to your web server. **Do not copy `certs/` or use mkcert in product
 
 ### nginx example (real SSL)
 
+Example: PWA on `192.168.1.101`, Spring on another machine `192.168.1.105:8082`.
+
 ```nginx
 server {
-    listen 443 ssl;
-    server_name pwa.plant.local;
+    listen 4173 ssl;
+    server_name 192.168.1.101;
 
     ssl_certificate     /path/fullchain.pem;
     ssl_certificate_key /path/privkey.pem;
@@ -718,13 +749,18 @@ server {
     root /var/www/offline-pwa/dist;
     index index.html;
 
+    # PWA static files + SPA fallback
     location / {
         try_files $uri $uri/ /index.html;
     }
 
+    # API → data server (different host/port is fine)
     location /api/ {
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass http://192.168.1.105:8082/api/;
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location /sw.js {
@@ -733,11 +769,20 @@ server {
 }
 ```
 
+Same machine (Spring on localhost):
+
+```nginx
+    location /api/ {
+        proxy_pass http://127.0.0.1:8081/api/;
+        proxy_set_header Host $host;
+    }
+```
+
 **Differences from dev:**
 
-- Single origin for UI + API (no Vite proxy).
+- Single origin for UI + API from the browser’s point of view (nginx proxies `/api`; no Vite).
 - Real certificate (Let's Encrypt, internal CA, etc.) — not mkcert.
-- Set `serverUrl` in admin Settings to the public app URL (e.g. `https://pwa.plant.local`).
+- Set `serverUrl` in admin Settings to the **PWA URL** (e.g. `https://192.168.1.101:4173`), not the Spring host.
 
 After each deploy: replace `dist/`, reload nginx. Service Worker updates on next app open (`autoUpdate`).
 

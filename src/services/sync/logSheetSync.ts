@@ -12,7 +12,7 @@ import {
 import type { ServerLogSheet } from '@/services/api'
 import type { LogSheet, LogSheetEntryData } from '@/types'
 import { toIdString } from '@/utils/ids'
-import { isLogSheetExpiredForSync, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet } from '@/utils/logSheetStatus'
+import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isRevokedSyncError } from '@/utils/logSheetStatus'
 
 export async function buildEntriesForTemplate(
   templateId: string
@@ -44,6 +44,16 @@ export async function buildEntriesForTemplate(
   })
 }
 
+/** User was reassigned away earlier; server put the sheet back in their inbox. */
+function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null {
+  if (!isRevokedSyncError(local.syncError)) return null
+  const updates: Partial<LogSheet> = { syncError: undefined }
+  if (local.syncStatus === 'failed') {
+    updates.syncStatus = 'pending'
+  }
+  return updates
+}
+
 export async function ensureLocalLogSheet(
   serverSheet: ServerLogSheet
 ): Promise<LogSheet> {
@@ -56,6 +66,8 @@ export async function ensureLocalLogSheet(
       ? await buildEntriesForTemplate(templateId)
       : undefined
 
+    const revival = revivalUpdatesAfterReassign(existing)
+
     await updateLogSheet(existing.localId, {
       serverStatus: serverSheet.status ?? existing.serverStatus,
       assignmentType: serverSheet.assignmentType ?? existing.assignmentType,
@@ -63,7 +75,8 @@ export async function ensureLocalLogSheet(
       scopeSummary: serverSheet.scopeSummary ?? existing.scopeSummary,
       templateName: serverSheet.templateName ?? existing.templateName,
       operationalUnitId: toIdString(serverSheet.operationalUnitId) || existing.operationalUnitId,
-      ...(rebuiltEntries && rebuiltEntries.length > 0 ? { entries: rebuiltEntries } : {})
+      ...(rebuiltEntries && rebuiltEntries.length > 0 ? { entries: rebuiltEntries } : {}),
+      ...revival
     })
     const updated = await getLogSheetByServerId(serverId)
     if (updated) return updated
@@ -116,7 +129,8 @@ export async function mergeInboxIntoLocalSheets(assigned: ServerLogSheet[]): Pro
       serverStatus,
       templateName: serverSheet.templateName ?? local.templateName,
       scopeSummary: serverSheet.scopeSummary ?? local.scopeSummary,
-      assignmentType: serverSheet.assignmentType ?? local.assignmentType
+      assignmentType: serverSheet.assignmentType ?? local.assignmentType,
+      ...revivalUpdatesAfterReassign(local)
     }
 
     if (extended) {
@@ -136,6 +150,25 @@ export async function mergeInboxIntoLocalSheets(assigned: ServerLogSheet[]): Pro
   }
 
   await reconcileInboxRevocations(assigned)
+  await expireStaleLocalDrafts(now)
+}
+
+/** Mark overdue local drafts as expired without treating them as revoked. */
+export async function expireStaleLocalDrafts(now = Date.now()): Promise<void> {
+  const all = await getAllLogSheets()
+  for (const local of all) {
+    if (local.status !== 'draft' || !local.serverId) continue
+    if (isInvalidLocalLogSheet(local)) continue
+    if (!isLogSheetExpired(local, now)) continue
+    if (local.serverStatus === 'EXPIRED' && local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) {
+      continue
+    }
+
+    await updateLogSheet(local.localId, {
+      serverStatus: 'EXPIRED',
+      syncError: SYNC_OUTCOME_MESSAGES.EXPIRED
+    })
+  }
 }
 
 /**
@@ -150,6 +183,7 @@ export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Pro
     if (local.status !== 'draft' || !local.serverId) continue
     if (local.syncStatus === 'synced') continue
     if (isInvalidLocalLogSheet(local)) continue
+    if (isLogSheetExpired(local) || local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) continue
 
     const serverId = toIdString(local.serverId)
     if (assignedIds.has(serverId)) continue

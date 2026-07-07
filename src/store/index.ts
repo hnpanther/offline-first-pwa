@@ -33,13 +33,17 @@ interface AssetSlice {
 // Sync slice
 // ---------------------------------------------------------------------------
 interface SyncSlice {
+  /** Device network (Wi‑Fi, mobile data, etc.) */
   isOnline: boolean
+  /** App/API host reachability; null until first probe */
+  serverReachable: boolean | null
   isSyncing: boolean
   lastSyncAt: number | null
   pendingCount: number
   failedCount: number
   syncError: string | null
   setOnline: (v: boolean) => void
+  setServerReachable: (v: boolean | null) => void
   setSyncing: (v: boolean) => void
   setLastSyncAt: (ts: number) => void
   setPendingCount: (n: number) => void
@@ -76,6 +80,7 @@ interface InboxSlice {
   inboxTeamOpen: ServerLogSheet[]
   inboxLoading: boolean
   inboxError: string | null
+  inboxWarning: string | null
   inboxLastSyncAt: number | null
   setInbox: (
     assigned: ServerLogSheet[],
@@ -85,6 +90,7 @@ interface InboxSlice {
   ) => void
   setInboxLoading: (v: boolean) => void
   setInboxError: (err: string | null) => void
+  setInboxWarning: (msg: string | null) => void
   clearInbox: () => void
 }
 
@@ -123,12 +129,14 @@ export const useAppStore = create<AppStore>()(
 
     // Sync
     isOnline: navigator.onLine,
+    serverReachable: null,
     isSyncing: false,
     lastSyncAt: null,
     pendingCount: 0,
     failedCount: 0,
     syncError: null,
     setOnline: (v) => set({ isOnline: v }),
+    setServerReachable: (v) => set({ serverReachable: v }),
     setSyncing: (v) => set({ isSyncing: v }),
     setLastSyncAt: (ts) => set({ lastSyncAt: ts }),
     setPendingCount: (n) => set({ pendingCount: n }),
@@ -159,6 +167,7 @@ export const useAppStore = create<AppStore>()(
     inboxTeamOpen: [],
     inboxLoading: false,
     inboxError: null,
+    inboxWarning: null,
     inboxLastSyncAt: null,
     setInbox: (assigned, available, teamOpen, syncAt) =>
       set({
@@ -166,17 +175,20 @@ export const useAppStore = create<AppStore>()(
         inboxAvailable: available,
         inboxTeamOpen: teamOpen,
         inboxLastSyncAt: syncAt,
-        inboxError: null
+        inboxError: null,
+        inboxWarning: null
       }),
     setInboxLoading: (v) => set({ inboxLoading: v }),
     setInboxError: (err) => set({ inboxError: err }),
+    setInboxWarning: (msg) => set({ inboxWarning: msg }),
     clearInbox: () =>
       set({
         inboxAssigned: [],
         inboxAvailable: [],
         inboxTeamOpen: [],
         inboxLastSyncAt: null,
-        inboxError: null
+        inboxError: null,
+        inboxWarning: null
       })
   }))
 )
