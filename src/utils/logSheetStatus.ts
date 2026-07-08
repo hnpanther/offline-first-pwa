@@ -77,6 +77,30 @@ export function canSubmitLogSheet(sheet: LogSheet, now = Date.now()): { ok: bool
   return { ok: true }
 }
 
+/** Undo local completion while still offline and before deadline — returns sheet to editable draft. */
+export function canRevertSubmittedLogSheetToDraft(
+  sheet: LogSheet,
+  effectivelyOffline: boolean,
+  now = Date.now()
+): { ok: boolean; reason?: string } {
+  if (!effectivelyOffline) {
+    return { ok: false, reason: 'فقط در حالت آفلاین امکان بازگشت به پیش‌نویس وجود دارد.' }
+  }
+  if (sheet.status !== 'submitted') {
+    return { ok: false }
+  }
+  if (sheet.syncStatus === 'synced') {
+    return { ok: false, reason: 'این کار قبلاً به سرور ارسال شده است.' }
+  }
+  if (sheet.syncStatus !== 'pending') {
+    return { ok: false }
+  }
+  if (isLogSheetExpired(sheet, now)) {
+    return { ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED }
+  }
+  return { ok: true }
+}
+
 export function isExpiredDraft(
   sheet: Pick<LogSheet, 'status' | 'dueAt' | 'serverStatus' | 'syncError'>,
   now = Date.now()

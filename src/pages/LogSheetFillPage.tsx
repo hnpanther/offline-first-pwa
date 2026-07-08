@@ -23,6 +23,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SendIcon from '@mui/icons-material/Send'
 import SaveIcon from '@mui/icons-material/Save'
+import UndoIcon from '@mui/icons-material/Undo'
 import { useState, useEffect, useCallback, useRef, type FormEvent, type MouseEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
@@ -30,6 +31,7 @@ import { v4 as uuidv4 } from 'uuid'
 import {
   getLogSheet,
   updateLogSheet,
+  revertLogSheetToDraft,
   getAllAssetClasses,
   getAllAssetEntries
 } from '@/services/storage'
@@ -44,6 +46,7 @@ import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import {
   canSubmitLogSheet,
+  canRevertSubmittedLogSheetToDraft,
   isLogSheetExpired,
   isExpiredDraft,
   isSupersededSyncError,
@@ -55,6 +58,7 @@ import {
 import { t } from '@/i18n'
 import { pullMasterData } from '@/services/sync/pullMasterData'
 import { buildEntriesForTemplate, refreshEntriesFromServer } from '@/services/sync/logSheetSync'
+import { isEffectivelyOffline } from '@/utils/connectivity'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
@@ -243,6 +247,8 @@ export function LogSheetFillPage() {
   const authSession = useAppStore(s => s.authSession)
   const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
   const isOnline = useAppStore(s => s.isOnline)
+  const serverReachable = useAppStore(s => s.serverReachable)
+  const effectivelyOffline = isEffectivelyOffline(isOnline, serverReachable)
   const allowManualEntry = canEnterTagManually(
     authSession?.roles ?? [],
     settings.allowManualEntry
@@ -271,6 +277,7 @@ export function LogSheetFillPage() {
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
+  const [confirmRevertOpen, setConfirmRevertOpen] = useState(false)
 
   // -------------------------------------------------------------------------
   // Load
@@ -508,6 +515,31 @@ export function LogSheetFillPage() {
     }
   }
 
+  const handleRevertToDraft = async () => {
+    if (!logSheet || !localId) return
+    const check = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline)
+    if (!check.ok) {
+      setSaveError(check.reason ?? 'امکان بازگشت به پیش‌نویس وجود ندارد.')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await revertLogSheetToDraft(localId)
+      const refreshed = await getLogSheet(localId)
+      if (refreshed) {
+        const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        setLogSheet({ ...refreshed, entries })
+      }
+      setConfirmRevertOpen(false)
+      setSavedMessage(t.logSheet.revertToDraftSuccess)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'خطا در بازگشت به پیش‌نویس')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
@@ -537,6 +569,7 @@ export function LogSheetFillPage() {
   const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
   const isRevoked = logSheet.syncStatus === 'failed' && isRevokedSyncError(logSheet.syncError)
   const isInvalid = isInvalidLocalLogSheet(logSheet)
+  const canRevertToDraft = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline).ok
   const canEdit = !isSubmitted && !isExpired && !isInvalid
   const entries = logSheet.entries ?? []
   const totalCount = entries.length
@@ -627,6 +660,26 @@ export function LogSheetFillPage() {
         <Alert severity="error" sx={{ mb: 2 }}>
           {logSheet.syncError}
         </Alert>
+      )}
+
+      {canRevertToDraft && (
+        <Box sx={{ mb: 2 }}>
+          <Alert severity="info" sx={{ mb: 1.5 }}>
+            {t.logSheet.revertToDraftHint}
+          </Alert>
+          <Button
+            type="button"
+            variant="outlined"
+            color="warning"
+            size="large"
+            fullWidth
+            startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <UndoIcon />}
+            onClick={() => setConfirmRevertOpen(true)}
+            disabled={saving || isScanning || dialogOpen}
+          >
+            {t.logSheet.revertToDraft}
+          </Button>
+        </Box>
       )}
 
       {/* Submit — top */}
@@ -914,6 +967,27 @@ export function LogSheetFillPage() {
             }}
           >
             تأیید ثبت نهایی
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={confirmRevertOpen} onClose={() => !saving && setConfirmRevertOpen(false)} dir="rtl">
+        <DialogTitle>{t.logSheet.revertToDraft}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">{t.logSheet.revertToDraftHint}</Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button type="button" onClick={() => setConfirmRevertOpen(false)} disabled={saving}>
+            انصراف
+          </Button>
+          <Button
+            type="button"
+            variant="contained"
+            color="warning"
+            disabled={saving}
+            onClick={() => void handleRevertToDraft()}
+          >
+            تأیید بازگشت
           </Button>
         </DialogActions>
       </Dialog>

@@ -506,6 +506,25 @@ export async function updateLogSheet(
   await db.logSheets.update(existing.id, { ...updates, updatedAt: Date.now() })
 }
 
+/** Move a locally submitted sheet back to draft (clears outbound queue metadata). */
+export async function revertLogSheetToDraft(localId: string): Promise<void> {
+  const existing = await db.logSheets.where('localId').equals(localId).first()
+  if (!existing?.id) throw new Error(`LogSheet not found: ${localId}`)
+
+  const next: LogSheet = {
+    ...existing,
+    status: 'draft',
+    syncStatus: 'pending',
+    updatedAt: Date.now()
+  }
+  delete next.submittedAt
+  delete next.completedAt
+  delete next.clientActionId
+  delete next.syncError
+
+  await db.logSheets.put(next)
+}
+
 export async function getAllLogSheets(): Promise<LogSheet[]> {
   const items = await db.logSheets.toArray()
   return items.sort((a, b) => b.createdAt - a.createdAt)
