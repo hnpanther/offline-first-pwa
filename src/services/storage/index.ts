@@ -503,6 +503,14 @@ export async function updateLogSheet(
 ): Promise<void> {
   const existing = await db.logSheets.where('localId').equals(localId).first()
   if (!existing?.id) throw new Error(`LogSheet not found: ${localId}`)
+
+  if ('syncError' in updates && updates.syncError === undefined) {
+    const next: LogSheet = { ...existing, ...updates, updatedAt: Date.now() }
+    delete next.syncError
+    await db.logSheets.put(next)
+    return
+  }
+
   await db.logSheets.update(existing.id, { ...updates, updatedAt: Date.now() })
 }
 

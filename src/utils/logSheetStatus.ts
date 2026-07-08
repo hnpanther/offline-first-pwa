@@ -49,6 +49,19 @@ export function isRevokedSyncError(syncError?: string): boolean {
   return syncError === SYNC_OUTCOME_MESSAGES.REVOKED
 }
 
+/** Local REVOKED or server message that the sheet is no longer assigned to this user. */
+export function isOwnershipReassignError(syncError?: string): boolean {
+  if (!syncError?.trim()) return false
+  if (isRevokedSyncError(syncError)) return true
+  const normalized = syncError.trim().toLowerCase()
+  return (
+    normalized.includes('مال شما نیست') ||
+    normalized.includes('تعلق ندارد') ||
+    normalized.includes('تخصیص ندارد') ||
+    normalized.includes('به شما تخصیص')
+  )
+}
+
 export function isInvalidLocalLogSheet(sheet: Pick<LogSheet, 'syncError'>): boolean {
   return isSupersededSyncError(sheet.syncError) || isRevokedSyncError(sheet.syncError)
 }

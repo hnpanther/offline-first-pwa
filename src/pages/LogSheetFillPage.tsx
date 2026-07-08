@@ -24,6 +24,7 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SendIcon from '@mui/icons-material/Send'
 import SaveIcon from '@mui/icons-material/Save'
 import UndoIcon from '@mui/icons-material/Undo'
+import SyncIcon from '@mui/icons-material/Sync'
 import { useState, useEffect, useCallback, useRef, type FormEvent, type MouseEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
@@ -52,6 +53,7 @@ import {
   shouldShowLogSheetExpiryAlert,
   isSupersededSyncError,
   isInvalidLocalLogSheet,
+  isOwnershipReassignError,
   isRevokedSyncError,
   resolveLocalLogSheetStatusChip,
   SYNC_OUTCOME_MESSAGES
@@ -59,7 +61,9 @@ import {
 import { t } from '@/i18n'
 import { pullMasterData } from '@/services/sync/pullMasterData'
 import { buildEntriesForTemplate, refreshEntriesFromServer } from '@/services/sync/logSheetSync'
-import { isEffectivelyOffline } from '@/utils/connectivity'
+import { isEffectivelyOffline, canReachServer } from '@/utils/connectivity'
+import { useInboxSync } from '@/hooks/useInboxSync'
+import { syncManager } from '@/services/sync'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
@@ -250,6 +254,8 @@ export function LogSheetFillPage() {
   const isOnline = useAppStore(s => s.isOnline)
   const serverReachable = useAppStore(s => s.serverReachable)
   const effectivelyOffline = isEffectivelyOffline(isOnline, serverReachable)
+  const canUseServer = canReachServer(isOnline, serverReachable)
+  const { refreshInbox } = useInboxSync()
   const allowManualEntry = canEnterTagManually(
     authSession?.roles ?? [],
     settings.allowManualEntry
@@ -279,6 +285,7 @@ export function LogSheetFillPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
   const [confirmRevertOpen, setConfirmRevertOpen] = useState(false)
+  const [rechecking, setRechecking] = useState(false)
 
   // -------------------------------------------------------------------------
   // Load
@@ -541,6 +548,48 @@ export function LogSheetFillPage() {
     }
   }
 
+  const handleRecheckAssignment = async () => {
+    if (!logSheet || !localId) return
+    setRechecking(true)
+    setSaveError(null)
+    try {
+      await refreshInbox(true)
+      let refreshed = await getLogSheet(localId)
+      if (!refreshed) return
+
+      if (isOwnershipReassignError(refreshed.syncError)) {
+        const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        setLogSheet({ ...refreshed, entries })
+        setSaveError(t.logSheet.recheckAssignmentStillRevoked)
+        return
+      }
+
+      const needsOutboundSync =
+        refreshed.status === 'submitted' && refreshed.syncStatus === 'pending'
+      if (needsOutboundSync) {
+        await syncManager.sync()
+        refreshed = (await getLogSheet(localId)) ?? refreshed
+      }
+
+      const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
+      setLogSheet({ ...refreshed, entries })
+
+      if (refreshed.status === 'submitted' && refreshed.syncStatus === 'synced') {
+        setSavedMessage(t.logSheet.recheckAssignmentSynced)
+      } else if (refreshed.status === 'submitted' && refreshed.syncStatus === 'failed') {
+        setSaveError(refreshed.syncError ?? t.logSheet.recheckAssignmentSyncFailed)
+      } else if (needsOutboundSync && refreshed.syncStatus === 'pending') {
+        setSaveError(t.logSheet.recheckAssignmentSyncFailed)
+      } else {
+        setSavedMessage(t.logSheet.recheckAssignmentRestored)
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'خطا در بررسی انتساب')
+    } finally {
+      setRechecking(false)
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
@@ -573,6 +622,8 @@ export function LogSheetFillPage() {
   const isRevoked = logSheet.syncStatus === 'failed' && isRevokedSyncError(logSheet.syncError)
   const isInvalid = isInvalidLocalLogSheet(logSheet)
   const canRevertToDraft = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline).ok
+  const canRecheckAssignment =
+    canUseServer && isOwnershipReassignError(logSheet.syncError)
   const canEdit = !isSubmitted && !isExpired && !isInvalid
   const entries = logSheet.entries ?? []
   const totalCount = entries.length
@@ -651,6 +702,23 @@ export function LogSheetFillPage() {
         <Alert severity="error" sx={{ mb: 2 }}>
           {SYNC_OUTCOME_MESSAGES.REVOKED}
         </Alert>
+      )}
+
+      {canRecheckAssignment && (
+        <Box sx={{ mb: 2 }}>
+          <Button
+            type="button"
+            variant="outlined"
+            color="primary"
+            size="large"
+            fullWidth
+            startIcon={rechecking ? <CircularProgress size={18} color="inherit" /> : <SyncIcon />}
+            onClick={() => void handleRecheckAssignment()}
+            disabled={rechecking || saving}
+          >
+            {t.logSheet.recheckAssignment}
+          </Button>
+        </Box>
       )}
 
       {isSuperseded && (

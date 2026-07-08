@@ -39,6 +39,7 @@ type SyncListener = (event: SyncEvent) => void
 class SyncManager {
   private listeners: Set<SyncListener> = new Set()
   private isSyncing = false
+  private syncInFlight: Promise<void> | null = null
   private intervalId: ReturnType<typeof setInterval> | null = null
   private intervalMs = 30_000
   private abortController: AbortController | null = null
@@ -75,7 +76,17 @@ class SyncManager {
   }
 
   async sync(): Promise<void> {
-    if (this.isSyncing || !navigator.onLine) return
+    if (!navigator.onLine) return
+    if (this.syncInFlight) return this.syncInFlight
+
+    this.syncInFlight = this.executeSync().finally(() => {
+      this.syncInFlight = null
+    })
+    return this.syncInFlight
+  }
+
+  private async executeSync(): Promise<void> {
+    if (this.isSyncing) return
 
     const session = await getAuthSession()
     if (!session) return

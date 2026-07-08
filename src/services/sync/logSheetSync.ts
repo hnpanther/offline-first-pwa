@@ -12,7 +12,7 @@ import {
 import { fetchLogSheetEntries, type ServerLogSheet, type ServerLogSheetEntry } from '@/services/api'
 import type { LogSheet, LogSheetEntryData } from '@/types'
 import { toIdString } from '@/utils/ids'
-import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isRevokedSyncError } from '@/utils/logSheetStatus'
+import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isOwnershipReassignError } from '@/utils/logSheetStatus'
 
 export interface EnsureLocalLogSheetOptions {
   /** When true, pull the authoritative entry list from the server instead of local cache. */
@@ -105,10 +105,13 @@ async function resolveEntries(
 
 /** User was reassigned away earlier; server put the sheet back in their inbox. */
 function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null {
-  if (!isRevokedSyncError(local.syncError)) return null
+  if (!isOwnershipReassignError(local.syncError)) return null
   const updates: Partial<LogSheet> = { syncError: undefined }
-  if (local.syncStatus === 'failed') {
+  if (local.syncStatus === 'failed' || (local.status === 'submitted' && local.syncStatus !== 'synced')) {
     updates.syncStatus = 'pending'
+  }
+  if (local.status === 'submitted') {
+    updates.clientActionId = uuidv4()
   }
   return updates
 }
