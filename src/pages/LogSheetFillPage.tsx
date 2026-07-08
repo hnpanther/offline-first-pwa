@@ -49,6 +49,7 @@ import {
   canRevertSubmittedLogSheetToDraft,
   isLogSheetExpired,
   isExpiredDraft,
+  shouldShowLogSheetExpiryAlert,
   isSupersededSyncError,
   isInvalidLocalLogSheet,
   isRevokedSyncError,
@@ -564,7 +565,9 @@ export function LogSheetFillPage() {
   }
 
   const isSubmitted = logSheet.status === 'submitted'
+  const isSynced = isSubmitted && logSheet.syncStatus === 'synced'
   const isExpired = isLogSheetExpired(logSheet) || isExpiredDraft(logSheet)
+  const showExpiryAlert = shouldShowLogSheetExpiryAlert(logSheet)
   const statusChip = resolveLocalLogSheetStatusChip(logSheet)
   const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
   const isRevoked = logSheet.syncStatus === 'failed' && isRevokedSyncError(logSheet.syncError)
@@ -637,7 +640,7 @@ export function LogSheetFillPage() {
         </CardContent>
       </Card>
 
-      {isExpired && (
+      {showExpiryAlert && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {SYNC_OUTCOME_MESSAGES.EXPIRED}
           {!isOnline && ' پس از آنلاین شدن، در صورت تمدید مهلت توسط سرپرست، وضعیت به‌روز می‌شود.'}
@@ -820,7 +823,7 @@ export function LogSheetFillPage() {
         </Alert>
       )}
 
-      {isSubmitted && (
+      {isSynced && (
         <Alert severity="success" sx={{ mb: 2 }}>
           این Log Sheet ارسال شده است. برای مشاهده اطلاعات روی هر Asset کلیک کنید.
         </Alert>

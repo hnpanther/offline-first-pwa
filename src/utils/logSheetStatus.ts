@@ -112,6 +112,17 @@ export function isExpiredDraft(
   return isLogSheetExpired(sheet, now)
 }
 
+/** Expiry banner on fill page — hide once the sheet is successfully synced to the server. */
+export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = Date.now()): boolean {
+  if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') {
+    return false
+  }
+  if (sheet.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) {
+    return true
+  }
+  return isLogSheetExpired(sheet, now) || isExpiredDraft(sheet, now)
+}
+
 /** Submitted sheets awaiting sync stay in the active list; synced/failed go to history. */
 export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
   if (isInvalidLocalLogSheet(sheet)) return false
