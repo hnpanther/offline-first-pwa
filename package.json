@@ -2,6 +2,9 @@
   "name": "offline-pwa",
   "private": true,
   "version": "1.0.0",
+  "description": "Offline-first PWA for industrial field data collection",
+  "author": "hadi_hnp",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",

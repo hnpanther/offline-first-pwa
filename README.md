@@ -1,5 +1,7 @@
 # Field Data Collection System — Offline-First PWA
 
+Copyright (C) 2026 hadi_hnp
+
 A progressive web application (PWA) for industrial field data collection. Operators use tablets on the plant floor, scan NFC tags on equipment, fill dynamic forms, and sync data to a Spring Boot backend when the network is available.
 
 This repository is the **mobile / frontend** companion to the Java backend:
@@ -1027,4 +1029,8 @@ Should show **Completed — pending sync** if local `status: submitted`. Refresh
 
 ## License
 
-Private / internal project. See repository owner for terms.
+Copyright (C) 2026 **hadi_hnp**
+
+This project is free software: you can redistribute it and/or modify it under the terms of the [GNU General Public License v3.0 or later](https://www.gnu.org/licenses/gpl-3.0.html) (GPL-3.0-or-later).
+
+See the [LICENSE](LICENSE) file for the full license text.
