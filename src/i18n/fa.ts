@@ -260,6 +260,9 @@ const fa = {
   },
   dashboard: {
     title: 'داشبورد',
+    welcome: 'خوش آمدید',
+    username: 'نام کاربری',
+    fullName: 'نام کامل',
     totalRecords: 'کل رکوردها',
     pendingSync: 'در انتظار ارسال',
     todayRecords: 'ثبت‌شده امروز',

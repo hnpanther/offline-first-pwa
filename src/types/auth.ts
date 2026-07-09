@@ -49,8 +49,29 @@ export function hasPermission(session: AuthSession | null, perm: string): boolea
   return session?.permissions.includes(perm) ?? false
 }
 
-/** Manual tag entry: global setting, or supervisor / senior operator roles. */
-export function canEnterTagManually(roles: string[], settingsEnabled: boolean): boolean {
+function normalizeRoleCode(role: string): string {
+  return role.trim().replace(/^ROLE_/i, '').toUpperCase()
+}
+
+export function hasRoleCode(roles: string[], code: string): boolean {
+  const target = normalizeRoleCode(code)
+  return roles.some(r => normalizeRoleCode(r) === target)
+}
+
+export function isSeniorOperatorRole(roles: string[]): boolean {
+  return hasRoleCode(roles, 'SENIOR_OPERATOR')
+}
+
+/** Web log-sheet fill — granted to senior operators, not plain operators. */
+const SENIOR_OPERATOR_FILL_PERMISSION = 'GET:/log-sheets/{id}/fill'
+
+/** Manual tag entry: global setting, supervisor / senior operator roles, or senior fill permission. */
+export function canEnterTagManually(
+  roles: string[],
+  settingsEnabled: boolean,
+  permissions: string[] = []
+): boolean {
   if (settingsEnabled) return true
-  return roles.some(r => r === 'SUPERVISOR' || r === 'SENIOR_OPERATOR')
+  if (hasRoleCode(roles, 'SUPERVISOR') || isSeniorOperatorRole(roles)) return true
+  return permissions.includes(SENIOR_OPERATOR_FILL_PERMISSION)
 }

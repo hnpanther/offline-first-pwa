@@ -1,6 +1,6 @@
 import Dexie, { type Table } from 'dexie'
 import { v4 as uuidv4 } from 'uuid'
-import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, FormField } from '@/types'
+import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, FormField, OperationalUnit } from '@/types'
 import type { FieldDefinition, OutboxEntry, SyncMeta } from '@/types/sync'
 
 class AppDatabase extends Dexie {
@@ -14,6 +14,7 @@ class AppDatabase extends Dexie {
   subFunctions!: Table<SubFunction>
   logSheetTemplates!: Table<LogSheetTemplate>
   logSheets!: Table<LogSheet>
+  operationalUnits!: Table<OperationalUnit>
 
   // Version 6+
   fieldDefinitions!: Table<FieldDefinition>
@@ -169,7 +170,7 @@ class AppDatabase extends Dexie {
         }
       })
 
-    this.version(7).stores({
+    this.version(8).stores({
       records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
       assetClasses: 'id, createdAt',
       assetEntries: 'id, nfcTagId, classId, subFunctionId',
@@ -182,7 +183,8 @@ class AppDatabase extends Dexie {
       settings: 'key',
       fieldDefinitions: 'id, classId, order',
       outbox: 'id, entityType, synced, createdAt',
-      syncMeta: 'key'
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId'
     })
   }
 }

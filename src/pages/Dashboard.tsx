@@ -73,6 +73,7 @@ function StatCard({
 
 export function Dashboard() {
   const navigate = useNavigate()
+  const authSession = useAppStore(s => s.authSession)
   const isOnline = useAppStore(s => s.isOnline)
   const isSyncing = useAppStore(s => s.isSyncing)
   const pendingCount = useAppStore(s => s.pendingCount)
@@ -97,9 +98,18 @@ export function Dashboard() {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       {/* Page title + status */}
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
-        <Typography variant="h5" fontWeight={700}>
-          {t.dashboard.title}
-        </Typography>
+        <Box>
+          <Typography variant="h5" fontWeight={700}>
+            {t.dashboard.title}
+          </Typography>
+          {authSession && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              {t.dashboard.username}: <Box component="span" dir="ltr" sx={{ fontWeight: 600 }}>{authSession.username}</Box>
+              {' · '}
+              {t.dashboard.fullName}: <strong>{authSession.fullName || '—'}</strong>
+            </Typography>
+          )}
+        </Box>
         <Chip
           label={isOnline ? t.sync.online : t.sync.offline}
           color={isOnline ? 'success' : 'default'}

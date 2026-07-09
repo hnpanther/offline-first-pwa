@@ -25,7 +25,7 @@ import SendIcon from '@mui/icons-material/Send'
 import SaveIcon from '@mui/icons-material/Save'
 import UndoIcon from '@mui/icons-material/Undo'
 import SyncIcon from '@mui/icons-material/Sync'
-import { useState, useEffect, useCallback, useRef, type FormEvent, type MouseEvent } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, type FormEvent, type MouseEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { v4 as uuidv4 } from 'uuid'
@@ -33,7 +33,7 @@ import {
   getLogSheet,
   updateLogSheet,
   revertLogSheetToDraft,
-  getAllAssetClasses,
+  getAssetClass,
   getAllAssetEntries
 } from '@/services/storage'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
@@ -59,16 +59,25 @@ import {
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
-import { pullMasterData } from '@/services/sync/pullMasterData'
-import { buildEntriesForTemplate, refreshEntriesFromServer } from '@/services/sync/logSheetSync'
+import { applyLogSheetBundle } from '@/services/sync/logSheetSync'
+import { fetchLogSheetBundle } from '@/services/api'
+import { syncManager } from '@/services/sync'
 import { isEffectivelyOffline, canReachServer } from '@/utils/connectivity'
 import { useInboxSync } from '@/hooks/useInboxSync'
-import { syncManager } from '@/services/sync'
+import { isLogSheetAccessibleToUser } from '@/services/auth/sessionContext'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
+
+async function loadAssetClassesForEntries(
+  entries: LogSheetEntryData[]
+): Promise<AssetClass[]> {
+  const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
+  const classes = await Promise.all(classIds.map(id => getAssetClass(id)))
+  return classes.filter((c): c is AssetClass => c != null)
+}
 
 async function enrichEntriesWithNfc(
   entries: LogSheetEntryData[]
@@ -250,15 +259,34 @@ export function LogSheetFillPage() {
   const navigate = useNavigate()
   const { settings } = useSettings()
   const authSession = useAppStore(s => s.authSession)
+  const sessionUserId = useAppStore(s => s.sessionUserId)
+  const inboxAssigned = useAppStore(s => s.inboxAssigned)
   const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
   const isOnline = useAppStore(s => s.isOnline)
   const serverReachable = useAppStore(s => s.serverReachable)
   const effectivelyOffline = isEffectivelyOffline(isOnline, serverReachable)
   const canUseServer = canReachServer(isOnline, serverReachable)
   const { refreshInbox } = useInboxSync()
+
+  const inboxAssignedIds = useMemo(
+    () => new Set(inboxAssigned.map(s => toIdString(s.id))),
+    [inboxAssigned]
+  )
+
+  const redirectIfNotAccessible = useCallback(
+    (sheet: LogSheet | null) => {
+      if (!sheet || !sessionUserId) return false
+      if (isLogSheetAccessibleToUser(sheet, sessionUserId, inboxAssignedIds)) return false
+      navigate('/logsheets/active', { replace: true })
+      return true
+    },
+    [sessionUserId, inboxAssignedIds, navigate]
+  )
+
   const allowManualEntry = canEnterTagManually(
     authSession?.roles ?? [],
-    settings.allowManualEntry
+    settings.allowManualEntry,
+    authSession?.permissions ?? []
   )
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
@@ -297,39 +325,29 @@ export function LogSheetFillPage() {
       setLoading(true)
       setLoadError(null)
       try {
-        if (navigator.onLine && authSession) {
-          await pullMasterData(true)
-        }
-        const [loadedSheet, classes] = await Promise.all([
-          getLogSheet(localId),
-          getAllAssetClasses()
-        ])
-        if (!loadedSheet) {
+        let sheet = await getLogSheet(localId)
+        if (!sheet) {
           setLoadError('Log Sheet یافت نشد')
           return
         }
-        let sheet = loadedSheet
-        const canRefreshFromServer =
+
+        if (redirectIfNotAccessible(sheet)) return
+
+        const canRefreshBundle =
           navigator.onLine && authSession && sheet.serverId && sheet.status === 'draft'
-        if (canRefreshFromServer) {
+        if (canRefreshBundle) {
           try {
-            const refreshed = await refreshEntriesFromServer(sheet.serverId!, sheet.entries)
-            if (refreshed.length > 0) {
-              await updateLogSheet(localId, { entries: refreshed })
-              sheet = (await getLogSheet(localId)) ?? { ...sheet, entries: refreshed }
-            }
+            const bundle = await fetchLogSheetBundle(sheet.serverId!)
+            sheet = await applyLogSheetBundle(bundle)
           } catch {
-            // Offline / server down — fall back to cached template scope below.
+            // Offline / server down — use cached bundle data.
           }
         }
-        if ((!sheet.entries || sheet.entries.length === 0) && sheet.templateId) {
-          const rebuilt = await buildEntriesForTemplate(sheet.templateId)
-          if (rebuilt.length > 0) {
-            await updateLogSheet(localId, { entries: rebuilt })
-            sheet = (await getLogSheet(localId)) ?? { ...sheet, entries: rebuilt }
-          }
-        }
+
+        if (redirectIfNotAccessible(sheet)) return
+
         const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
+        const classes = await loadAssetClassesForEntries(entries)
         setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
         if (nfcTagsBackfilled && localId) {
@@ -342,20 +360,21 @@ export function LogSheetFillPage() {
       }
     }
     void load()
-  }, [localId, authSession])
+  }, [localId, authSession, sessionUserId, redirectIfNotAccessible])
 
   // Refresh local sheet when inbox sync updates dueAt / status from server
   useEffect(() => {
     if (!localId || !inboxLastSyncAt) return
     void getLogSheet(localId).then(async sheet => {
       if (!sheet) return
+      if (redirectIfNotAccessible(sheet)) return
       const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
       setLogSheet({ ...sheet, entries })
       if (nfcTagsBackfilled) {
         await updateLogSheet(localId, { entries })
       }
     })
-  }, [inboxLastSyncAt, localId])
+  }, [inboxLastSyncAt, localId, redirectIfNotAccessible])
 
   // Clear stale NFC tag when entering / leaving this page
   useEffect(() => {
@@ -642,7 +661,11 @@ export function LogSheetFillPage() {
           <Typography variant="h5" fontWeight={700}>
             {logSheet.templateName}
           </Typography>
-          <ScopeLabel scopeSummary={logSheet.scopeSummary} templateId={logSheet.templateId} />
+          <ScopeLabel
+            scopeSummary={logSheet.scopeSummary}
+            templateId={logSheet.templateId}
+            scopeDisplayLabel={logSheet.scopeDisplayLabel}
+          />
         </Box>
         <Chip
           label={statusChip.label}
@@ -906,7 +929,7 @@ export function LogSheetFillPage() {
       {/* Asset status list */}
       {entries.length === 0 ? (
         <Alert severity="warning">
-          هیچ Asset ای برای این کار یافت نشد. ابتدا master-data را همگام‌سازی کنید یا با سرپرست تماس بگیرید.
+          هیچ Asset ای برای این کار یافت نشد. برای دریافت لیست تجهیزات باید آنلاین باشید یا با سرپرست تماس بگیرید.
         </Alert>
       ) : (
       <Stack spacing={1}>

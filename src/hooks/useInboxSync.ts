@@ -1,14 +1,14 @@
 import { useCallback, useEffect } from 'react'
 import { pullInbox } from '@/services/sync/pullInbox'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
-import { pullMasterDataIfStale } from '@/services/sync/pullMasterData'
+import { pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
 import { saveInboxSnapshot, loadInboxSnapshot } from '@/services/storage/inboxCache'
 import { useAppStore } from '@/store'
 import { isTransientNetworkError } from '@/utils/networkError'
 import { canReachServer } from '@/utils/connectivity'
 import { t } from '@/i18n'
 
-const MASTER_DATA_STALE_MS = 60 * 60 * 1000
+const BOOTSTRAP_STALE_MS = 60 * 60 * 1000
 
 async function applyInboxSnapshot(
   setInbox: ReturnType<typeof useAppStore.getState>['setInbox']
@@ -44,22 +44,18 @@ export function useInboxSync(): {
       }
 
       try {
-        const { assigned, available, teamOpen, serverTime } = await pullInbox()
-        await pullMasterDataIfStale(MASTER_DATA_STALE_MS)
-        const refreshEntriesOnline = canReachServer(
-          useAppStore.getState().isOnline,
-          useAppStore.getState().serverReachable
-        )
-        await mergeInboxIntoLocalSheets(assigned, { refreshEntriesOnline })
+        const { assigned, assignedSheets, available, teamOpen, serverTime } = await pullInbox()
+        await pullBootstrapIfStale(BOOTSTRAP_STALE_MS)
+        await mergeInboxIntoLocalSheets(assigned)
         const syncAt = Date.now()
         await saveInboxSnapshot({
-          assigned,
+          assigned: assignedSheets,
           available,
           teamOpen,
           lastSyncAt: syncAt,
           serverTime
         })
-        setInbox(assigned, available, teamOpen, syncAt)
+        setInbox(assignedSheets, available, teamOpen, syncAt)
       } catch (err) {
         const fromCache = await applyInboxSnapshot(setInbox)
         if (isTransientNetworkError(err)) {
@@ -87,7 +83,6 @@ export function useInboxSync(): {
     ]
   )
 
-  // Restore cached inbox when device or server is unavailable.
   useEffect(() => {
     if (!isAuthenticated) return
     if (canReachServer(isOnline, serverReachable)) return

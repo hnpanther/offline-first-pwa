@@ -28,7 +28,7 @@ import { useLogSheets } from '@/hooks/useLogSheets'
 import { useInboxSync } from '@/hooks/useInboxSync'
 import { useAppStore } from '@/store'
 import { claimLogSheet, releaseLogSheet, assignLogSheet, reassignLogSheet } from '@/services/api'
-import { ensureLocalLogSheet } from '@/services/sync/logSheetSync'
+import { ensureLocalLogSheet, applyLogSheetBundle } from '@/services/sync/logSheetSync'
 import { getLogSheetByServerId, updateLogSheet } from '@/services/storage'
 import { t } from '@/i18n'
 import type { LogSheet } from '@/types'
@@ -39,6 +39,7 @@ import { isInvalidLocalLogSheet, SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isAct
 import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
+import { filterLogSheetsForUser } from '@/services/auth/sessionContext'
 import { AssignOperatorDialog } from '@/components/logsheet/AssignOperatorDialog'
 
 const PAGE_SIZE = 20
@@ -78,6 +79,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const canUseServer = canReachServer(isOnline, serverReachable)
   const effectivelyOffline = isEffectivelyOffline(isOnline, serverReachable)
   const authSession = useAppStore(s => s.authSession)
+  const sessionUserId = useAppStore(s => s.sessionUserId)
   const inboxAssigned = useAppStore(s => s.inboxAssigned)
   const inboxAvailable = useAppStore(s => s.inboxAvailable)
   const inboxTeamOpen = useAppStore(s => s.inboxTeamOpen)
@@ -88,6 +90,16 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const isSupervisor = isSupervisorRole(authSession?.roles ?? [])
   const { refreshInbox } = useInboxSync()
   const { logs, loading, refresh: refreshLocal } = useLogSheets()
+
+  const inboxAssignedIds = useMemo(
+    () => new Set(inboxAssigned.map(s => toIdString(s.id))),
+    [inboxAssigned]
+  )
+
+  const userLogs = useMemo(
+    () => filterLogSheetsForUser(logs, sessionUserId, inboxAssignedIds),
+    [logs, sessionUserId, inboxAssignedIds]
+  )
 
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -119,7 +131,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
       setActionError(null)
       try {
         const local = await ensureLocalLogSheet(serverSheet, {
-          refreshEntriesOnline: canUseServer
+          refreshBundleOnline: canUseServer
         })
         await refreshLocal()
         navigate(`/logsheets/${local.localId}`)
@@ -138,9 +150,15 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     setActionError(null)
     setClaimingId(toIdString(sheet.id))
     try {
-      const claimed = await claimLogSheet(sheet.id)
+      const bundle = await claimLogSheet(sheet.id)
+      await applyLogSheetBundle(bundle)
       await refreshInbox()
-      await openSheet(claimed)
+      const local = await getLogSheetByServerId(toIdString(bundle.sheet.id))
+      if (local) {
+        navigate(`/logsheets/${local.localId}`)
+      } else {
+        await openSheet(bundle.sheet)
+      }
     } catch (err) {
       setActionError(err instanceof Error ? err.message : t.inbox.claimFailed)
     } finally {
@@ -160,7 +178,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
       setActionError(t.inbox.pickupRequiresOnline)
       return
     }
-    // Always ensure local copy (rebuilds empty entries from cached master data — works offline).
+    // Ensure local copy; online refresh pulls latest bundle (NFC/asset updates).
     await openSheet(sheet)
   }
 
@@ -220,13 +238,13 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   }
 
   const localActiveWork = useMemo(
-    () => logs.filter(l => l.serverId && isActiveLogSheet(l)),
-    [logs]
+    () => userLogs.filter(l => l.serverId && isActiveLogSheet(l)),
+    [userLogs]
   )
 
   const localByServerId = useMemo(() => {
     const map = new Map<string, LogSheet>()
-    for (const log of logs) {
+    for (const log of userLogs) {
       if (!log.serverId) continue
       const key = toIdString(log.serverId)
       const existing = map.get(key)
@@ -253,7 +271,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
 
   // Active: assigned from server inbox + local drafts not yet in history
   // History: submitted sheets + expired local drafts
-  const historyLogs = logs.filter(log => isHistoryLogSheet(log))
+  const historyLogs = userLogs.filter(log => isHistoryLogSheet(log))
 
   const filteredHistory = historyLogs.filter(log => {
     const q = search.toLowerCase()
@@ -339,6 +357,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
               <ScopeLabel
                 scopeSummary={sheet.scopeSummary}
                 templateId={sheet.templateId != null ? toIdString(sheet.templateId) : undefined}
+                scopeDisplayLabel={localLog?.scopeDisplayLabel}
               />
             </Box>
             <Chip
@@ -546,7 +565,11 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                         <Typography variant="subtitle1" fontWeight={700}>
                           {log.templateName}
                         </Typography>
-                        <ScopeLabel scopeSummary={log.scopeSummary} templateId={log.templateId} />
+                        <ScopeLabel
+                          scopeSummary={log.scopeSummary}
+                          templateId={log.templateId}
+                          scopeDisplayLabel={log.scopeDisplayLabel}
+                        />
                       </Box>
                       <Chip
                         label={statusChip.label}
@@ -614,7 +637,11 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                       <Typography variant="subtitle1" fontWeight={700}>
                         {log.templateName}
                       </Typography>
-                      <ScopeLabel scopeSummary={log.scopeSummary} templateId={log.templateId} />
+                      <ScopeLabel
+                        scopeSummary={log.scopeSummary}
+                        templateId={log.templateId}
+                        scopeDisplayLabel={log.scopeDisplayLabel}
+                      />
                     </Box>
                     <Chip
                       label={syncStatusLabel(log)}

@@ -67,8 +67,10 @@ interface RecordsSlice {
 interface AuthSlice {
   authSession: AuthSession | null
   authLoaded: boolean
+  sessionUserId: string | null
   setAuthSession: (session: AuthSession | null) => void
   setAuthLoaded: (v: boolean) => void
+  setSessionUserId: (id: string | null) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +160,10 @@ export const useAppStore = create<AppStore>()(
     // Auth
     authSession: null,
     authLoaded: false,
+    sessionUserId: null,
     setAuthSession: (session) => set({ authSession: session }),
     setAuthLoaded: (v) => set({ authLoaded: v }),
+    setSessionUserId: (id) => set({ sessionUserId: id }),
 
     // Inbox
     inboxAssigned: [],

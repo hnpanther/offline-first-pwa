@@ -1,10 +1,19 @@
 import { useEffect, useState } from 'react'
 import { formatScopeSummary } from '@/utils/scopeLabels'
 
-export function useScopeLabel(scopeSummary: string | undefined, templateId?: string): string {
-  const [label, setLabel] = useState(scopeSummary?.trim() || '—')
+export function useScopeLabel(
+  scopeSummary: string | undefined,
+  templateId?: string,
+  scopeDisplayLabel?: string
+): string {
+  const prefilled = scopeDisplayLabel?.trim()
+  const [label, setLabel] = useState(prefilled || scopeSummary?.trim() || '—')
 
   useEffect(() => {
+    if (prefilled) {
+      setLabel(prefilled)
+      return
+    }
     if (!scopeSummary?.trim()) {
       setLabel('—')
       return
@@ -16,7 +25,7 @@ export function useScopeLabel(scopeSummary: string | undefined, templateId?: str
     return () => {
       cancelled = true
     }
-  }, [scopeSummary, templateId])
+  }, [scopeSummary, templateId, prefilled])
 
   return label
 }

@@ -1,109 +1,81 @@
 import { v4 as uuidv4 } from 'uuid'
 import {
-  getLogSheetTemplate,
-  getAssetsInScope,
-  getAllSubFunctions,
   getSettings,
   saveLogSheet,
   updateLogSheet,
   getLogSheetByServerId,
   getAllLogSheets
 } from '@/services/storage'
-import { fetchLogSheetEntries, type ServerLogSheet, type ServerLogSheetEntry } from '@/services/api'
-import type { LogSheet, LogSheetEntryData } from '@/types'
+import {
+  fetchLogSheetBundle,
+  type LogSheetBundleDto,
+  type ServerLogSheet
+} from '@/services/api'
+import type { LogSheet } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isOwnershipReassignError } from '@/utils/logSheetStatus'
+import {
+  mergeBundleContextToDb,
+  mergeEntriesPreservingFormData,
+  bundleScopeDisplayLabel
+} from '@/services/sync/mergeLogSheetBundle'
 
 export interface EnsureLocalLogSheetOptions {
-  /** When true, pull the authoritative entry list from the server instead of local cache. */
-  refreshEntriesOnline?: boolean
+  /** When online, fetch the latest bundle from the server before opening. */
+  refreshBundleOnline?: boolean
 }
 
-export async function buildEntriesForTemplate(
-  templateId: string
-): Promise<LogSheetEntryData[]> {
-  const template = await getLogSheetTemplate(templateId)
-  if (!template) return []
+/** Apply a server bundle: refresh context in IndexedDB (server wins) and upsert local sheet. */
+export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<LogSheet> {
+  await mergeBundleContextToDb(bundle.context)
 
-  const assets = await getAssetsInScope(
-    template.scopeType,
-    template.scopeId,
-    template.classId
-  )
-  if (assets.length === 0) return []
+  const serverSheet = bundle.sheet
+  const serverId = toIdString(serverSheet.id)
+  const existing = await getLogSheetByServerId(serverId)
+  const entries = mergeEntriesPreservingFormData(bundle.entries ?? [], existing?.entries)
+  const scopeDisplayLabel = bundleScopeDisplayLabel(bundle)
 
-  const allSubFunctions = await getAllSubFunctions()
-  const sfMap = new Map(allSubFunctions.map(sf => [sf.id, sf]))
+  if (existing) {
+    await updateLogSheet(existing.localId, {
+      ...serverSheetMetadataPatch(serverSheet, existing),
+      entries,
+      ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
+    })
+    const updated = await getLogSheetByServerId(serverId)
+    if (updated) return updated
+    return existing
+  }
 
-  return assets.map(asset => {
-    const sf = sfMap.get(asset.subFunctionId)
-    return {
-      assetId: asset.id,
-      assetName: asset.assetName,
-      subFunctionCode: sf?.code ?? '',
-      subFunctionTag: sf?.tag ?? '',
-      nfcTagId: asset.nfcTagId,
-      classId: toIdString(asset.classId),
-      formData: {}
-    }
+  const settings = await getSettings()
+  const now = Date.now()
+  const localId = serverSheet.localId ?? uuidv4()
+
+  return saveLogSheet({
+    localId,
+    serverId,
+    templateId: toIdString(serverSheet.templateId),
+    templateName: serverSheet.templateName ?? '',
+    scopeSummary: serverSheet.scopeSummary ?? '',
+    scopeDisplayLabel,
+    operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
+    operatorName: serverSheet.operatorName ?? (settings.operatorName || undefined),
+    assigneeUserId:
+      serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : undefined,
+    status: 'draft',
+    serverStatus: serverSheet.status ?? undefined,
+    assignmentType: serverSheet.assignmentType ?? undefined,
+    dueAt: serverSheet.dueAt ?? undefined,
+    entries,
+    createdAt: serverSheet.createdAt ?? now,
+    updatedAt: serverSheet.updatedAt ?? now
   })
 }
 
-function mapServerEntry(
-  entry: ServerLogSheetEntry,
-  formData: Record<string, unknown>
-): LogSheetEntryData {
-  return {
-    assetId: toIdString(entry.assetId),
-    assetName: entry.assetName ?? '',
-    subFunctionCode: entry.subFunctionCode ?? '',
-    subFunctionTag: entry.subFunctionTag ?? '',
-    nfcTagId: entry.nfcTagId ?? undefined,
-    classId: toIdString(entry.classId),
-    formData
-  }
+async function fetchAndApplyBundle(serverId: number | string): Promise<LogSheet> {
+  const bundle = await fetchLogSheetBundle(serverId)
+  return applyLogSheetBundle(bundle)
 }
 
-/** Pull authoritative rows from the server and keep any local form values for matching assets. */
-export async function refreshEntriesFromServer(
-  serverId: number | string,
-  existingEntries?: LogSheetEntryData[]
-): Promise<LogSheetEntryData[]> {
-  const serverEntries = await fetchLogSheetEntries(serverId)
-  const formByAsset = new Map(
-    (existingEntries ?? []).map(entry => [toIdString(entry.assetId), entry.formData ?? {}])
-  )
-  return serverEntries.map(entry =>
-    mapServerEntry(entry, formByAsset.get(toIdString(entry.assetId)) ?? entry.formData ?? {})
-  )
-}
-
-async function resolveEntries(
-  serverSheet: ServerLogSheet,
-  existingEntries: LogSheetEntryData[] | undefined,
-  options?: EnsureLocalLogSheetOptions
-): Promise<LogSheetEntryData[] | undefined> {
-  const templateId = toIdString(serverSheet.templateId)
-  const needsEntries = !existingEntries || existingEntries.length === 0
-
-  if (options?.refreshEntriesOnline) {
-    const refreshed = await refreshEntriesFromServer(serverSheet.id, existingEntries)
-    if (refreshed.length > 0) {
-      return refreshed
-    }
-  }
-
-  if (needsEntries && templateId) {
-    const rebuilt = await buildEntriesForTemplate(templateId)
-    if (rebuilt.length > 0) {
-      return rebuilt
-    }
-  }
-
-  return undefined
-}
-
-/** User was reassigned away earlier; server put the sheet back in their inbox. */
 function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null {
   if (!isOwnershipReassignError(local.syncError)) return null
   const updates: Partial<LogSheet> = { syncError: undefined }
@@ -116,82 +88,101 @@ function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null 
   return updates
 }
 
+function serverSheetMetadataPatch(
+  serverSheet: ServerLogSheet,
+  existing: LogSheet,
+  extra?: Partial<LogSheet>
+): Partial<LogSheet> {
+  return {
+    serverStatus: serverSheet.status ?? existing.serverStatus,
+    assignmentType: serverSheet.assignmentType ?? existing.assignmentType,
+    dueAt: serverSheet.dueAt ?? existing.dueAt,
+    scopeSummary: serverSheet.scopeSummary ?? existing.scopeSummary,
+    templateName: serverSheet.templateName ?? existing.templateName,
+    operationalUnitId: toIdString(serverSheet.operationalUnitId) || existing.operationalUnitId,
+    templateId: toIdString(serverSheet.templateId) || existing.templateId,
+    operatorName: serverSheet.operatorName ?? existing.operatorName,
+    assigneeUserId:
+      serverSheet.assigneeUserId != null
+        ? toIdString(serverSheet.assigneeUserId)
+        : existing.assigneeUserId,
+    ...(revivalUpdatesAfterReassign(existing) ?? {}),
+    ...extra
+  }
+}
+
 export async function ensureLocalLogSheet(
   serverSheet: ServerLogSheet,
   options?: EnsureLocalLogSheetOptions
 ): Promise<LogSheet> {
   const serverId = toIdString(serverSheet.id)
+
+  if (options?.refreshBundleOnline) {
+    try {
+      return await fetchAndApplyBundle(serverId)
+    } catch {
+      // Fall through to local cache when server is unreachable.
+    }
+  }
+
   const existing = await getLogSheetByServerId(serverId)
   if (existing) {
-    const resolvedEntries = await resolveEntries(
-      serverSheet,
-      existing.entries,
-      options
-    )
-    const revival = revivalUpdatesAfterReassign(existing)
-
-    await updateLogSheet(existing.localId, {
-      serverStatus: serverSheet.status ?? existing.serverStatus,
-      assignmentType: serverSheet.assignmentType ?? existing.assignmentType,
-      dueAt: serverSheet.dueAt ?? existing.dueAt,
-      scopeSummary: serverSheet.scopeSummary ?? existing.scopeSummary,
-      templateName: serverSheet.templateName ?? existing.templateName,
-      operationalUnitId: toIdString(serverSheet.operationalUnitId) || existing.operationalUnitId,
-      ...(resolvedEntries && resolvedEntries.length > 0 ? { entries: resolvedEntries } : {}),
-      ...revival
-    })
+    await updateLogSheet(existing.localId, serverSheetMetadataPatch(serverSheet, existing))
     const updated = await getLogSheetByServerId(serverId)
     if (updated) return updated
     return existing
   }
 
-  const templateId = toIdString(serverSheet.templateId)
-  const entries =
-    (await resolveEntries(serverSheet, undefined, options)) ??
-    (templateId ? await buildEntriesForTemplate(templateId) : [])
-  const settings = await getSettings()
-  const now = Date.now()
-  const localId = serverSheet.localId ?? uuidv4()
+  if (options?.refreshBundleOnline === false) {
+    const settings = await getSettings()
+    const now = Date.now()
+    const localId = serverSheet.localId ?? uuidv4()
+    return saveLogSheet({
+      localId,
+      serverId,
+      templateId: toIdString(serverSheet.templateId),
+      templateName: serverSheet.templateName ?? '',
+      scopeSummary: serverSheet.scopeSummary ?? '',
+      operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
+      operatorName: serverSheet.operatorName ?? (settings.operatorName || undefined),
+      assigneeUserId:
+        serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : undefined,
+      status: 'draft',
+      serverStatus: serverSheet.status ?? undefined,
+      assignmentType: serverSheet.assignmentType ?? undefined,
+      dueAt: serverSheet.dueAt ?? undefined,
+      entries: [],
+      createdAt: serverSheet.createdAt ?? now,
+      updatedAt: serverSheet.updatedAt ?? now
+    })
+  }
 
-  return saveLogSheet({
-    localId,
-    serverId,
-    templateId,
-    templateName: serverSheet.templateName ?? '',
-    scopeSummary: serverSheet.scopeSummary ?? '',
-    operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
-    operatorName: serverSheet.operatorName ?? (settings.operatorName || undefined),
-    status: 'draft',
-    serverStatus: serverSheet.status ?? undefined,
-    assignmentType: serverSheet.assignmentType ?? undefined,
-    dueAt: serverSheet.dueAt ?? undefined,
-    entries,
-    createdAt: serverSheet.createdAt ?? now,
-    updatedAt: serverSheet.updatedAt ?? now
-  })
+  return fetchAndApplyBundle(serverId)
 }
 
 export interface MergeInboxOptions {
+  /** Ignored — assigned bundles always include fresh server context. */
   refreshEntriesOnline?: boolean
 }
 
-/** Provision local copies (with asset entries) and merge inbox metadata for assigned sheets. */
+/** Provision local copies from inbox assigned bundles (always refresh server context). */
 export async function mergeInboxIntoLocalSheets(
-  assigned: ServerLogSheet[],
-  options?: MergeInboxOptions
+  assigned: LogSheetBundleDto[],
+  _options?: MergeInboxOptions
 ): Promise<void> {
   const now = Date.now()
-  for (const serverSheet of assigned) {
-    await ensureLocalLogSheet(serverSheet, {
-      refreshEntriesOnline: options?.refreshEntriesOnline
-    })
+  const assignedSheets: ServerLogSheet[] = []
 
-    const serverId = toIdString(serverSheet.id)
+  for (const bundle of assigned) {
+    await applyLogSheetBundle(bundle)
+    assignedSheets.push(bundle.sheet)
+
+    const serverId = toIdString(bundle.sheet.id)
     const local = await getLogSheetByServerId(serverId)
     if (!local) continue
 
-    const dueAt = serverSheet.dueAt ?? local.dueAt
-    const serverStatus = serverSheet.status ?? local.serverStatus
+    const dueAt = bundle.sheet.dueAt ?? local.dueAt
+    const serverStatus = bundle.sheet.status ?? local.serverStatus
     const extended =
       dueAt != null &&
       dueAt > now &&
@@ -200,9 +191,14 @@ export async function mergeInboxIntoLocalSheets(
     const updates: Partial<LogSheet> = {
       dueAt,
       serverStatus,
-      templateName: serverSheet.templateName ?? local.templateName,
-      scopeSummary: serverSheet.scopeSummary ?? local.scopeSummary,
-      assignmentType: serverSheet.assignmentType ?? local.assignmentType,
+      templateName: bundle.sheet.templateName ?? local.templateName,
+      scopeSummary: bundle.sheet.scopeSummary ?? local.scopeSummary,
+      assignmentType: bundle.sheet.assignmentType ?? local.assignmentType,
+      operatorName: bundle.sheet.operatorName ?? local.operatorName,
+      assigneeUserId:
+        bundle.sheet.assigneeUserId != null
+          ? toIdString(bundle.sheet.assigneeUserId)
+          : local.assigneeUserId,
       ...revivalUpdatesAfterReassign(local)
     }
 
@@ -222,11 +218,10 @@ export async function mergeInboxIntoLocalSheets(
     await updateLogSheet(local.localId, updates)
   }
 
-  await reconcileInboxRevocations(assigned)
+  await reconcileInboxRevocations(assignedSheets)
   await expireStaleLocalDrafts(now)
 }
 
-/** Mark overdue local drafts as expired without treating them as revoked. */
 export async function expireStaleLocalDrafts(now = Date.now()): Promise<void> {
   const all = await getAllLogSheets()
   for (const local of all) {
@@ -244,10 +239,6 @@ export async function expireStaleLocalDrafts(now = Date.now()): Promise<void> {
   }
 }
 
-/**
- * Local drafts for sheets no longer in the user's inbox were revoked server-side
- * (release / reassign / takeover) while the device was offline.
- */
 export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Promise<void> {
   const assignedIds = new Set(assigned.map(s => toIdString(s.id)))
   const all = await getAllLogSheets()

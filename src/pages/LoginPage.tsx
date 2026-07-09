@@ -10,11 +10,12 @@ import {
 } from '@mui/material'
 import LoginIcon from '@mui/icons-material/Login'
 import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useForm, Controller } from 'react-hook-form'
 import { useAuth } from '@/hooks/useAuth'
 import { useSettings } from '@/hooks/useSettings'
 import { t } from '@/i18n'
+import { postLoginPath } from '@/utils/loginRedirect'
 
 interface LoginForm {
   username: string
@@ -25,17 +26,14 @@ export function LoginPage() {
   const { signIn, isAuthenticated, authLoaded } = useAuth()
   const { settings } = useSettings()
   const navigate = useNavigate()
-  const location = useLocation()
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  const from = (location.state as { from?: string } | null)?.from ?? '/'
-
   useEffect(() => {
     if (authLoaded && isAuthenticated) {
-      navigate(from, { replace: true })
+      navigate(postLoginPath(), { replace: true })
     }
-  }, [authLoaded, isAuthenticated, from, navigate])
+  }, [authLoaded, isAuthenticated, navigate])
 
   const { control, handleSubmit } = useForm<LoginForm>({
     defaultValues: { username: '', password: '' }
@@ -61,7 +59,7 @@ export function LoginPage() {
       if (err) {
         setError(err)
       } else {
-        navigate(from, { replace: true })
+        navigate(postLoginPath(), { replace: true })
       }
     } finally {
       setSubmitting(false)

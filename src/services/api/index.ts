@@ -5,7 +5,8 @@
  *
  * Endpoint groups:
  *   - Health
- *   - Master data (pull config from server)
+ *   - Bootstrap (light user + operational units)
+ *   - Log sheet bundles (per-sheet reference data)
  *   - Asset lookup (NFC scan → asset info)
  *   - Records  (push DataRecords)
  *   - Log sheets (push submitted log sheets)
@@ -20,10 +21,10 @@ import type {
   PlantSystem,
   MainFunction,
   SubFunction,
-  LogSheetTemplate,
   LogSheetServerStatus,
   LogSheetAssignmentType,
-  DataRecord
+  DataRecord,
+  OperationalUnit
 } from '@/types'
 import type { FieldDefinition, OutboxEntry } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
@@ -104,9 +105,27 @@ export interface ServerLogSheetEntry {
   formData?: Record<string, unknown> | null
 }
 
+export interface LogSheetContextDto {
+  locations?: Location[]
+  plantSystems?: PlantSystem[]
+  mainFunctions?: MainFunction[]
+  subFunctions?: SubFunction[]
+  assetEntries?: AssetEntry[]
+  assetClasses?: AssetClass[]
+  fieldDefinitions?: FieldDefinition[]
+  scopeDisplayLabel?: string | null
+}
+
+/** Self-contained server payload for one log sheet (metadata + entries + scoped context). */
+export interface LogSheetBundleDto {
+  sheet: ServerLogSheet
+  entries: ServerLogSheetEntry[]
+  context: LogSheetContextDto | null
+}
+
 export interface LogSheetInboxResponse {
   serverTime: number
-  assigned: ServerLogSheet[]
+  assigned: LogSheetBundleDto[]
   available: ServerLogSheet[]
   teamOpen?: ServerLogSheet[]
 }
@@ -115,6 +134,13 @@ export async function fetchLogSheetInbox(
   signal?: AbortSignal
 ): Promise<LogSheetInboxResponse> {
   return apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal)
+}
+
+export async function fetchLogSheetBundle(
+  serverId: number | string,
+  signal?: AbortSignal
+): Promise<LogSheetBundleDto> {
+  return apiClient.get<LogSheetBundleDto>(`/api/log-sheets/${serverId}/bundle`, signal)
 }
 
 export async function fetchLogSheetEntries(
@@ -130,8 +156,8 @@ export async function fetchLogSheetEntries(
 export async function claimLogSheet(
   serverId: number | string,
   signal?: AbortSignal
-): Promise<ServerLogSheet> {
-  return apiClient.post<ServerLogSheet>(
+): Promise<LogSheetBundleDto> {
+  return apiClient.post<LogSheetBundleDto>(
     `/api/log-sheets/${serverId}/claim`,
     {},
     signal
@@ -189,52 +215,34 @@ export async function fetchUnitOperators(
 }
 
 // ===========================================================================
-// Master data — configuration pulled FROM the server
+// Bootstrap — lightweight app context (no plant hierarchy / assets)
 // ===========================================================================
 
-/**
- * Full snapshot of all configuration the device needs.
- * The server returns everything in one call to minimise round-trips.
- * Pass `since` (Unix ms) to get only records updated after that timestamp
- * (incremental pull).  If `since` is omitted the server sends the full set.
- */
-export interface MasterDataResponse {
-  locations: Location[]
-  plantSystems: PlantSystem[]
-  mainFunctions: MainFunction[]
-  subFunctions: SubFunction[]
-  assetClasses: AssetClass[]
-  /** Each AssetClass has its FieldDefinitions inlined here */
-  fieldDefinitions: FieldDefinition[]
-  assetEntries: AssetEntry[]
-  logSheetTemplates: LogSheetTemplate[]
-  operationalUnits?: OperationalUnit[]
-  /** Server-side timestamp of this snapshot — save as lastPullAt in syncMeta */
+export interface BootstrapResponse {
   serverTime: number
+  userId: number
+  operationalUnits: Array<Omit<OperationalUnit, 'id' | 'parentId'> & {
+    id: string | number
+    parentId?: string | number | null
+  }>
+  accessibleUnitIds: number[]
+  supervisorScopeUnitIds: number[]
+  primaryUnitId?: number | null
 }
 
-export interface OperationalUnit {
-  id: string | number
-  code: string
-  name: string
-  parentId?: string | number | null
-  createdAt: number
-  updatedAt: number
+/** @deprecated Use BootstrapResponse */
+export type MasterDataResponse = BootstrapResponse
+
+export async function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
+  return apiClient.get<BootstrapResponse>('/api/bootstrap', signal)
 }
 
-/**
- * GET /api/master-data[?since=<ms>]
- *
- * Pull master data (config) from the server.
- * On first run call with no `since`.
- * On subsequent runs pass the `serverTime` from the previous response.
- */
+/** Backward-compat alias — always returns slim bootstrap, never full master data. */
 export async function fetchMasterData(
-  since?: number,
+  _since?: number,
   signal?: AbortSignal
-): Promise<MasterDataResponse> {
-  const qs = since != null ? `?since=${since}` : ''
-  return apiClient.get<MasterDataResponse>(`/api/master-data${qs}`, signal)
+): Promise<BootstrapResponse> {
+  return fetchBootstrap(signal)
 }
 
 // ===========================================================================

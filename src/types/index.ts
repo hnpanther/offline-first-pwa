@@ -152,6 +152,15 @@ export interface SubFunction {
   updatedAt: number
 }
 
+export interface OperationalUnit {
+  id: string
+  code: string
+  name: string
+  parentId?: string
+  createdAt: number
+  updatedAt: number
+}
+
 // ---------------------------------------------------------------------------
 // Log Sheet entities
 // ---------------------------------------------------------------------------
@@ -195,8 +204,12 @@ export interface LogSheet {
   templateId: string
   templateName: string
   scopeSummary: string
+  /** Human-readable scope from server bundle (offline-friendly). */
+  scopeDisplayLabel?: string
   operationalUnitId?: string
   operatorName?: string
+  /** Server assignee user id — used to isolate sheets between logins on a shared device. */
+  assigneeUserId?: string
   /** Local workflow: draft = in progress on device, submitted = ready to sync */
   status: 'draft' | 'submitted'
   /** Server lifecycle status from last inbox/claim sync */

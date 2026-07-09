@@ -5,15 +5,39 @@ import {
   saveAuthSession,
   clearAuthSession
 } from '@/services/auth'
-import { login as apiLogin } from '@/services/api'
+import {
+  activateUserSession,
+  clearUserSessionContext,
+  getLastSessionUsername,
+  getSessionUserId
+} from '@/services/auth/sessionContext'
+import { login as apiLogin, fetchBootstrap } from '@/services/api'
 import { setUnauthorizedHandler } from '@/services/api/client'
 import { useAppStore } from '@/store'
 import type { AuthSession } from '@/types/auth'
 import { isSessionValid } from '@/types/auth'
+import { postLoginPath } from '@/utils/loginRedirect'
+import { toIdString } from '@/utils/ids'
+
+async function bindSessionUserContext(username: string): Promise<void> {
+  const setSessionUserId = useAppStore.getState().setSessionUserId
+  try {
+    const bootstrap = await fetchBootstrap()
+    await activateUserSession(username, bootstrap.userId)
+    setSessionUserId(toIdString(bootstrap.userId))
+  } catch {
+    const lastUsername = await getLastSessionUsername()
+    if (lastUsername === username) {
+      const cachedUserId = await getSessionUserId()
+      if (cachedUserId) setSessionUserId(cachedUserId)
+    }
+  }
+}
 
 export function useAuthInit(): void {
   const setAuthSession = useAppStore(s => s.setAuthSession)
   const setAuthLoaded = useAppStore(s => s.setAuthLoaded)
+  const setSessionUserId = useAppStore(s => s.setSessionUserId)
   const clearInbox = useAppStore(s => s.clearInbox)
   const navigate = useNavigate()
   const location = useLocation()
@@ -24,30 +48,42 @@ export function useAuthInit(): void {
       const session = await peekAuthSession()
       if (cancelled) return
       setAuthSession(session)
+      if (session) {
+        const lastUsername = await getLastSessionUsername()
+        if (lastUsername === session.username) {
+          const userId = await getSessionUserId()
+          setSessionUserId(userId)
+        }
+      } else {
+        setSessionUserId(null)
+      }
       setAuthLoaded(true)
       if (session && location.pathname === '/login') {
-        navigate('/', { replace: true })
+        navigate(postLoginPath(), { replace: true })
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [setAuthSession, setAuthLoaded, navigate, location.pathname])
+  }, [setAuthSession, setAuthLoaded, setSessionUserId, navigate, location.pathname])
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
       setAuthSession(null)
+      setSessionUserId(null)
       clearInbox()
+      void clearUserSessionContext()
       navigate('/login', { replace: true })
     })
     return () => setUnauthorizedHandler(null)
-  }, [navigate, setAuthSession, clearInbox])
+  }, [navigate, setAuthSession, setSessionUserId, clearInbox])
 }
 
 export function useAuth() {
   const authSession = useAppStore(s => s.authSession)
   const authLoaded = useAppStore(s => s.authLoaded)
   const setAuthSession = useAppStore(s => s.setAuthSession)
+  const setSessionUserId = useAppStore(s => s.setSessionUserId)
   const clearInbox = useAppStore(s => s.clearInbox)
   const navigate = useNavigate()
 
@@ -56,6 +92,7 @@ export function useAuth() {
       try {
         const response = await apiLogin({ username, password })
         const session = await saveAuthSession(response)
+        await bindSessionUserContext(response.username)
         setAuthSession(session)
         return null
       } catch (err) {
@@ -67,11 +104,13 @@ export function useAuth() {
   )
 
   const signOut = useCallback(async () => {
+    await clearUserSessionContext()
     await clearAuthSession()
     setAuthSession(null)
+    setSessionUserId(null)
     clearInbox()
     navigate('/login', { replace: true })
-  }, [setAuthSession, clearInbox, navigate])
+  }, [setAuthSession, setSessionUserId, clearInbox, navigate])
 
   const serverReachable = useAppStore(s => s.serverReachable)
   const isAuthenticated = isSessionValid(authSession, Date.now(), serverReachable)
