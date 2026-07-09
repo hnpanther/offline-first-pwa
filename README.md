@@ -42,7 +42,8 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 - **PWA** — installable on Android tablets; app shell cached by Workbox
 - **NFC tag scanning** — Web NFC on Android Chrome; manual tag entry for supervisors / senior operators
 - **Log sheet inbox (kartabl)** — assigned work, pickup pool, supervisor team view
-- **Automatic pre-provisioning** — assigned log sheets and their assets are stored locally on inbox sync (no need to open the sheet first)
+- **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
+- **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
 - **Background sync** — submitted log sheets and approved records push to the server when online
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin master data and settings; supervisor assign/release/reassign
@@ -74,7 +75,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 | UI | React 18 + TypeScript |
 | Build | Vite 5 + `vite-plugin-pwa` (Workbox `generateSW`) |
 | Components | MUI v5, full RTL via `@emotion/cache` + `stylis-plugin-rtl` |
-| Local storage | Dexie 4 (IndexedDB), schema version **7** |
+| Local storage | Dexie 4 (IndexedDB), schema version **8** |
 | Global state | Zustand |
 | Forms | React Hook Form |
 | Routing | React Router v6 |
@@ -91,13 +92,13 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 │  React UI                                                    │
 │    ↕ Zustand store                                           │
 │  IndexedDB (Dexie)  ← local source of truth                  │
-│    • authSession, settings, master data, log sheets, …       │
+│    • authSession, settings, per-sheet bundles, log sheets, …  │
 │  Service Worker (Workbox)  ← precached app shell (dist/)     │
 └─────────────────────────────────────────────────────────────┘
          │ online                              │ offline
          ▼                                     ▼
    Spring Backend (:8081)              IndexedDB + SW cache only
-   /api/master-data, inbox, batch
+   /api/bootstrap, inbox bundles, batch
 ```
 
 **Core rule:** UI and hooks never call `fetch()` or `db` directly. All server access goes through `src/services/api/index.ts`. All IndexedDB access goes through `src/services/storage/index.ts`.
@@ -130,7 +131,7 @@ src/
 ├── hooks/
 │   ├── useAuth.ts              Session restore, login/logout
 │   ├── useInboxSync.ts         Inbox pull + offline snapshot + pre-provision
-│   ├── useMasterDataSync.ts    Master data pull on start / online
+│   ├── useMasterDataSync.ts    Bootstrap pull on start / online (operational units only)
 │   ├── useSync.ts              SyncManager lifecycle
 │   ├── useLogSheets.ts         Local log sheet list
 │   ├── useFieldDefinitions.ts  Field definitions per asset class
@@ -148,7 +149,7 @@ src/
 │   ├── auth/           Session in IndexedDB
 │   ├── nfc/            Web NFC abstraction
 │   ├── storage/        Dexie db, repository, fieldDefinitions, inboxCache
-│   └── sync/           SyncManager, pullMasterData, pullInbox, logSheetSync, cleanup
+│   └── sync/           SyncManager, pullBootstrap, pullInbox, mergeLogSheetBundle, logSheetSync, cleanup
 ├── store/              Zustand
 ├── types/              Domain types + auth + sync
 ├── utils/              logSheetStatus, fieldValidation, ids, scopeLabels, fieldOptions
@@ -168,8 +169,8 @@ scripts/
 |---------|------|-------|---------|-------------|
 | `npm run dev` | 5173 | No | Desktop development | No |
 | `npm run dev:mobile` | 5173 | Yes (mkcert or self-signed) | Mobile dev with hot reload | **Do not install PWA from this** |
-| `npm run build` | — | — | Production build → `dist/` | — |
-| `npm run build:mobile` | — | — | Same build with `--mode mobile` | — |
+| `npm run build` | — | — | Production build → `dist/` (uses `.env.production`) | — |
+| `npm run build:mobile` | — | — | **Tablet / nginx deploy** → `dist/` (uses `.env.mobile`) | **Yes** |
 | `npm run preview` | 4173 | No | Preview production build locally | Partial |
 | `npm run preview:mobile` | **4173** | Yes (mkcert) | **Real PWA test and install** | **Yes** |
 | `npm run setup:mkcert` | — | — | Create trusted dev certificates | — |
@@ -379,6 +380,8 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 2. Valid session → dashboard (no login screen).
 3. **Online** + expired JWT → session cleared, redirect to login.
 4. **Offline** + expired JWT → session still accepted (offline-first).
+5. **Login** always redirects to `/` (never restores a previous user’s deep link).
+6. **User switch** on a shared tablet clears inbox cache and hides other users’ local drafts (`sessionContext.ts`).
 
 ### Roles (frontend checks)
 
@@ -417,34 +420,33 @@ Operators see Dashboard and Log Sheets only.
 
 ```
 GET /api/log-sheets/inbox
-  → assigned[]     — my work (self-claimed or supervisor-assigned)
-  → available[]    — pickup pool
-  → teamOpen[]     — supervisor: in-progress work in the unit
+  → assigned[]     — full bundles (sheet + entries + scoped context) for my work
+  → available[]    — pickup pool (metadata only)
+  → teamOpen[]     — supervisor: in-progress work in the unit (metadata only)
 ```
 
 Snapshot saved to IndexedDB (`inboxSnapshot`) for offline inbox display.
 
 ### 2. Pre-provisioning (online, automatic)
 
-For every sheet in **assigned**:
+For every sheet in **assigned** (each item is a `LogSheetBundleDto`):
 
 ```
-pullMasterDataIfStale (if older than 1 hour)
-  → ensureLocalLogSheet(serverSheet)
-  → buildEntriesForTemplate(templateId)
-  → entries[] with assetId, assetName, nfcTagId, classId, formData: {}
-  → saved to IndexedDB logSheets table
-  → merge inbox metadata (dueAt, serverStatus, …)
+mergeInboxIntoLocalSheets(assigned[])
+  → mergeBundleContextToDb()   — locations…assets for this sheet only (server wins)
+  → applyLogSheetBundle()      — entries[] + local logSheets row
+  → merge inbox metadata (dueAt, serverStatus, operatorName, assigneeUserId, …)
 ```
 
-The user does **not** need to open the sheet first. After one successful inbox sync while online, assets and NFC tag IDs are on the device for offline use.
+The user does **not** need to open the sheet first. After one successful inbox sync while online, assets, NFC tag IDs, and field definitions for that work are on the device for offline use.
 
 **Note:** Pre-provision applies to **assigned** work only, not the pickup pool until claimed.
 
 ### 3. Opening a sheet
 
-- **My Work → Start:** `ensureLocalLogSheet()` again (rebuilds empty entries from cached master data — works offline).
+- **My Work → Start:** `ensureLocalLogSheet()` with optional online bundle refresh.
 - **Never synced locally + offline:** blocked with “online required” message.
+- **Shared tablet:** after login, user always lands on dashboard; only sheets assigned to the current user are shown.
 
 ### 4. Filling
 
@@ -482,7 +484,7 @@ Submit is local only until sync succeeds.
 |------------|---------|
 | PWA UI (installed from :4173) | Yes |
 | Session (even expired JWT) | Yes |
-| Cached master data | Yes |
+| Cached per-sheet reference data (from bundles) | Yes |
 | Assigned log sheets pre-provisioned earlier | Yes |
 | Open / fill / save log sheets | Yes |
 | NFC scan against current log sheet entries | Yes |
@@ -497,7 +499,7 @@ Submit is local only until sync succeeds.
 | Login (first time) | No |
 | Inbox refresh | No |
 | Claim / release / assign / reassign | No |
-| Master data pull (automatic) | No |
+| Bootstrap pull (operational units) | No |
 | Push sync to server | No |
 | First open of never-provisioned work | No |
 
@@ -513,7 +515,8 @@ Submit is local only until sync succeeds.
 
 - Inbox snapshot may show revoked work until next online sync.
 - Extended deadlines from supervisor apply after inbox sync.
-- New assets on server appear after master data pull (default stale interval: 1 hour).
+- Updated asset metadata (e.g. NFC tag change) applies on the next inbox bundle or online bundle refresh (server wins).
+- Shared tablet: logging in as a different user clears the previous inbox cache and hides other users’ local drafts.
 
 ---
 
@@ -573,17 +576,18 @@ Logic mirrors backend `FieldValidationSupport` in `src/utils/fieldValidation.ts`
 
 Three separate paths:
 
-### A. Master data pull (config)
+### A. Bootstrap pull (lightweight app context)
 
-**When:** App start (if stale > 1 hour), coming online, before inbox pre-provision, Settings “sync configuration”.
+**When:** App start (if stale > 1 hour), coming online, before inbox merge.
 
 ```
-GET /api/master-data[?since=lastPullAt]
-  → locations, systems, functions, subFunctions,
-     assetClasses, fieldDefinitions, assetEntries, logSheetTemplates
-  → bulkPut IndexedDB
-  → syncMeta.lastPullAt = serverTime
+GET /api/bootstrap
+  → operationalUnits, userId, accessibleUnitIds, supervisorScopeUnitIds
+  → bulkPut operationalUnits in IndexedDB
+  → syncMeta.lastBootstrapAt = serverTime
 ```
+
+**No full plant hierarchy or assets** are downloaded. Reference data arrives per log sheet bundle only.
 
 ### B. Inbox pull (kartabl)
 
@@ -591,11 +595,13 @@ GET /api/master-data[?since=lastPullAt]
 
 ```
 GET /api/log-sheets/inbox
-  → pullMasterDataIfStale
-  → ensureLocalLogSheet for each assigned
-  → merge metadata + reconcile revocations
-  → save inbox snapshot
+  → assigned[] as LogSheetBundleDto (sheet + entries + scoped context)
+  → pullBootstrapIfStale
+  → mergeInboxIntoLocalSheets(assigned)   — server-wins merge for each bundle
+  → reconcile revocations + save inbox snapshot
 ```
+
+Opening a draft sheet online also refreshes via `GET /api/log-sheets/{id}/bundle`.
 
 ### C. Push (outbound data)
 
@@ -624,19 +630,20 @@ Log sheet batch payload includes `completedAt` (device completion time) and `cli
 
 ## IndexedDB Schema
 
-Dexie version **7** — main tables:
+Dexie version **8** — main tables:
 
 | Table | Purpose |
 |-------|---------|
 | `records` | Legacy field DataRecords |
-| `assetClasses` | Asset class templates |
-| `assetEntries` | NFC tag → asset mapping |
+| `assetClasses` | Asset class templates (per-sheet bundles only) |
+| `assetEntries` | NFC tag → asset mapping (per-sheet bundles only) |
 | `fieldDefinitions` | Normalized form fields per class |
-| `locations`, `plantSystems`, `mainFunctions`, `subFunctions` | Hierarchy |
-| `logSheetTemplates` | Log sheet templates |
-| `logSheets` | Local log sheets + entries + sync state |
+| `locations`, `plantSystems`, `mainFunctions`, `subFunctions` | Hierarchy slice per active work |
+| `logSheetTemplates` | Log sheet templates (legacy / admin) |
+| `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
+| `operationalUnits` | From bootstrap |
 | `settings` | App settings (server URL, operator name, …) |
-| `syncMeta` | `authSession`, `lastPullAt`, `inboxSnapshot`, … |
+| `syncMeta` | `authSession`, `lastBootstrapAt`, `inboxSnapshot`, `sessionUserId`, … |
 | `outbox` | Future bidirectional sync infrastructure |
 
 ---
@@ -653,14 +660,16 @@ Backend: `backend-offline-first`, default port **8081**.
 |--------|------|---------|
 | GET | `/api/health` | Health check |
 | POST | `/api/auth/login` | Login → JWT |
-| GET | `/api/master-data[?since=]` | Master data pull |
-| GET | `/api/log-sheets/inbox` | Inbox (assigned, available, teamOpen) |
-| POST | `/api/log-sheets/{id}/claim` | Pick up work (online) |
+| GET | `/api/bootstrap` | Operational units + user context (no full master dump) |
+| GET | `/api/master-data` | Backward-compat alias → same as bootstrap |
+| GET | `/api/log-sheets/inbox` | Inbox (`assigned` = full bundles) |
+| GET | `/api/log-sheets/{id}/bundle` | Single sheet bundle (entries + scoped context) |
+| POST | `/api/log-sheets/{id}/claim` | Pick up work → returns bundle |
 | POST | `/api/log-sheets/{id}/release` | Return to pool (supervisor) |
 | POST | `/api/log-sheets/{id}/assign` | Assign to operator |
 | POST | `/api/log-sheets/{id}/reassign` | Reassign |
 | GET | `/api/operational-units/{id}/operators` | Operator list for assign dialog |
-| GET | `/api/asset-entries/nfc/{tagId}` | Global NFC lookup (not used on fill page) |
+| GET | `/api/asset-entries/nfc/{tagId}` | Global NFC lookup (optional; fill page uses local entries) |
 | POST | `/api/log-sheets/batch` | Push submitted log sheets |
 | POST | `/api/records/batch` | Push approved DataRecords |
 
@@ -698,99 +707,259 @@ Stored in Settings (`serverUrl` in IndexedDB). If configured origin equals `wind
 
 ## Production Deployment
 
-### PWA host vs data server (split deployment)
+### Reference architecture (split hosts)
 
-The app does **not** call the Spring URL directly in the normal setup. All API requests go to the **same address as the PWA**, and the web server proxies `/api` to the backend.
+Typical plant setup:
+
+| Role | Host | Example |
+|------|------|---------|
+| **PWA** (nginx + static `dist/`) | `192.168.1.4` | `https://192.168.1.4` |
+| **API** (Spring Boot) | `192.168.1.2:8081` | `http://192.168.1.2:8081` (not exposed to tablets directly) |
+
+The tablet browser talks only to the **PWA origin**. nginx proxies `/api/` to Spring on the data server.
 
 ```
-Phone / tablet
+Tablet
     │
     ▼
-https://192.168.1.101:4173/api/log-sheets/inbox   ← same origin as the PWA
+https://192.168.1.4/api/log-sheets/inbox   ← same origin as the PWA
     │
     ▼
-nginx (192.168.1.101:4173)
-    ├── /           → static files from dist/  (PWA UI, Service Worker)
-    └── /api/*      → proxy → http://192.168.1.105:8082/api/...  (Spring)
+nginx (192.168.1.4:443)
+    ├── /           → /var/www/html/offline-first-pwa/dist
+    └── /api/*      → proxy → http://192.168.1.2:8081/api/
 ```
 
 | What | Where to configure | Example |
 |------|-------------------|---------|
-| PWA URL (what users open / install) | nginx `listen` + DNS / IP | `https://192.168.1.101:4173` |
-| Data server (Spring) | **nginx `proxy_pass` only** | `http://192.168.1.105:8082` |
-| **Settings → server URL** in the app | Same as PWA origin (not the data server) | `https://192.168.1.101:4173` |
-| Default on first install (optional) | `.env.mobile` → `VITE_SERVER_URL` | `https://192.168.1.101:4173` |
+| PWA URL (open / install) | nginx `listen` + SSL | `https://192.168.1.4` |
+| Data server (Spring) | **nginx `proxy_pass` only** | `http://192.168.1.2:8081` |
+| Build-time default `serverUrl` | `.env.mobile` → `VITE_SERVER_URL` | `https://192.168.1.4` |
+| Settings → server URL in app | Same as PWA origin | `https://192.168.1.4` |
 
-If `serverUrl` in Settings matches `window.location.origin`, the API client uses relative paths (`/api/...`). nginx must route those to Spring.
+When `serverUrl` matches `window.location.origin`, the API client uses relative paths (`/api/...`).
 
-> **Dev / preview:** Vite on `:4173` or `:5173` plays the same role as nginx — it serves the PWA and proxies `/api` to `127.0.0.1:8081`.
+> **Dev / preview:** Vite on `:4173` plays the same role as nginx — serves the PWA and proxies `/api` to `127.0.0.1:8081`.
 
-Build static assets — **no Node.js required on the production PWA server**:
+---
 
-```bash
-npm run build
-# output: dist/
+### Step 1 — Build on a dev machine
+
+```powershell
+cd offline-first-pwa
+copy .env.mobile.example .env.mobile
 ```
 
-Copy `dist/` to your web server. **Do not copy `certs/` or use mkcert in production.**
+Edit `.env.mobile` — use the **PWA public URL**, not the Spring host:
 
-### nginx example (real SSL)
+```env
+VITE_SERVER_URL=https://192.168.1.4
+```
 
-Example: PWA on `192.168.1.101`, Spring on another machine `192.168.1.105:8082`.
+```powershell
+$env:PATH = "C:\Program Files\nodejs;$env:PATH"
+npm install
+npm run build:mobile
+```
+
+Output: `dist/`. Copy the entire folder to the nginx server:
+
+```bash
+# example
+scp -r dist/* root@192.168.1.4:/var/www/html/offline-first-pwa/dist/
+```
+
+**Use `build:mobile`**, not plain `npm run build` — it reads `.env.mobile` and embeds the correct default `serverUrl`.
+
+Node.js is **not** required on the production PWA server after build.
+
+---
+
+### Step 2 — Self-signed SSL with internal CA (LAN / intranet)
+
+For plant-floor tablets without public DNS, create a local CA and a server cert for the PWA IP. Install **`localCA.crt`** on each Android tablet (CA certificate) so Web NFC and PWA install work with a trusted lock.
+
+On the **nginx server** (`192.168.1.4`):
+
+```bash
+sudo mkdir -p /etc/nginx/ssl/local
+cd /etc/nginx/ssl/local
+
+# 1) Root CA (keep localCA.key private — do not deploy to tablets)
+sudo openssl genrsa -out localCA.key 4096
+sudo openssl req -x509 -new -nodes \
+  -key localCA.key -sha256 -days 3650 \
+  -out localCA.crt \
+  -subj "/C=IR/ST=Local/L=Local/O=Local Dev/CN=Local Dev Root CA"
+
+# 2) Server key
+sudo openssl genrsa -out nginx.key 2048
+
+# 3) CSR config — set your PWA server IP in CN and alt_names
+sudo nano server-cert.cnf
+```
+
+`server-cert.cnf`:
+
+```ini
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+req_extensions = req_ext
+
+[dn]
+CN = 192.168.1.4
+
+[req_ext]
+subjectAltName = @alt_names
+
+[v3_ext]
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+IP.1 = 192.168.1.4
+DNS.1 = localhost
+```
+
+```bash
+# 4) CSR + signed server cert
+sudo openssl req -new -key nginx.key -out nginx.csr -config server-cert.cnf
+sudo openssl x509 -req -in nginx.csr \
+  -CA localCA.crt -CAkey localCA.key -CAcreateserial \
+  -out nginx.crt -days 825 -sha256 \
+  -extfile server-cert.cnf -extensions v3_ext
+
+sudo chmod 600 localCA.key nginx.key
+sudo chmod 644 localCA.crt nginx.crt
+```
+
+**On each Android tablet:**
+
+1. Copy **`localCA.crt`** to the device (not `nginx.crt`).
+2. Settings → Security → Encryption & credentials → Install a certificate → **CA certificate**
+3. Select `localCA.crt`.
+4. Force-stop Chrome and reopen.
+
+**Do not copy `certs/` from mkcert dev setup to production nginx** — production uses `/etc/nginx/ssl/local/` above.
+
+---
+
+### Step 3 — nginx site config
+
+File: `/etc/nginx/sites-available/default` (or a dedicated site under `sites-available/offline-pwa`).
 
 ```nginx
 server {
-    listen 4173 ssl;
-    server_name 192.168.1.101;
+    listen 80;
+    server_name 192.168.1.4;
+    return 301 https://$host$request_uri;
+}
 
-    ssl_certificate     /path/fullchain.pem;
-    ssl_certificate_key /path/privkey.pem;
+server {
+    listen 443 ssl;
+    server_name 192.168.1.4;
 
-    root /var/www/offline-pwa/dist;
+    ssl_certificate     /etc/nginx/ssl/local/nginx.crt;
+    ssl_certificate_key /etc/nginx/ssl/local/nginx.key;
+
+    root /var/www/html/offline-first-pwa/dist;
     index index.html;
 
-    # PWA static files + SPA fallback
+    # PWA + SPA routing
     location / {
         try_files $uri $uri/ /index.html;
     }
 
-    # API → data server (different host/port is fine)
+    # API → Spring Boot on data server (different host is fine)
     location /api/ {
-        proxy_pass http://192.168.1.105:8082/api/;
+        proxy_pass http://192.168.1.2:8081/api/;
+
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location /sw.js {
+    # Service Worker — avoid aggressive caching
+    location ~* (sw\.js|workbox-.*\.js)$ {
         add_header Cache-Control "no-cache";
     }
 }
 ```
 
-Same machine (Spring on localhost):
+Enable and reload:
 
-```nginx
-    location /api/ {
-        proxy_pass http://127.0.0.1:8081/api/;
-        proxy_set_header Host $host;
-    }
+```bash
+sudo ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-**Differences from dev:**
+Verify from a PC on the LAN:
 
-- Single origin for UI + API from the browser’s point of view (nginx proxies `/api`; no Vite).
-- Real certificate (Let's Encrypt, internal CA, etc.) — not mkcert.
-- Set `serverUrl` in admin Settings to the **PWA URL** (e.g. `https://192.168.1.101:4173`), not the Spring host.
+```bash
+curl -k https://192.168.1.4/api/health
+# better: curl https://192.168.1.4/api/health  (after trusting localCA on that PC)
+```
 
-After each deploy: replace `dist/`, reload nginx. Service Worker updates on next app open (`autoUpdate`).
+---
+
+### Step 4 — Tablet install
+
+1. Open `https://192.168.1.4` in Chrome (trusted lock after CA install).
+2. Log in.
+3. Wait for inbox sync (assigned work appears).
+4. Chrome menu → **Install app** (or use the in-app install prompt).
+
+---
+
+### Step 5 — Subsequent deploys
+
+```powershell
+npm run build:mobile
+# copy dist/ to /var/www/html/offline-first-pwa/dist/
+```
+
+```bash
+sudo systemctl reload nginx
+```
+
+Service Worker uses `autoUpdate` — tablets pick up the new build on next app open.
+
+**Differences from dev (`preview:mobile`):**
+
+| | Dev (`preview:mobile`) | Production (nginx) |
+|--|------------------------|---------------------|
+| HTTPS | mkcert in `certs/` | `/etc/nginx/ssl/local/` |
+| Port | 4173 | 443 (or your choice) |
+| API proxy | Vite → `127.0.0.1:8081` | nginx → `192.168.1.2:8081` |
+| Build command | `build:mobile` | `build:mobile` |
 
 ---
 
 ## Troubleshooting
 
-### Red SSL lock on phone
+### Empty log sheet / no assets
+
+- Inbox sync not run yet — open app online, wait for assigned bundles
+- Work not in **assigned** (still in pickup pool) — claim first while online
+- Offline before first bundle sync for that sheet — open once online
+
+### Red SSL lock on phone (production)
+
+| Cause | Fix |
+|-------|-----|
+| `localCA.crt` not installed on tablet | Install as **CA certificate** on Android |
+| Wrong cert type (Wi‑Fi user cert) | Remove → install CA cert |
+| IP in browser ≠ IP in cert SAN | Regenerate cert with correct `IP.1` in `server-cert.cnf` |
+
+### Red SSL lock on phone (dev only)
 
 | Cause | Fix |
 |-------|-----|
@@ -802,9 +971,10 @@ After each deploy: replace `dist/`, reload nginx. Service Worker updates on next
 ### Install prompt does not appear
 
 1. Trusted HTTPS (green lock)
-2. Install from **4173**
-3. Force-stop Chrome, reopen
-4. iOS: Add to Home Screen manually
+2. **Production:** install from `https://192.168.1.4` (or your PWA URL)
+3. **Dev:** install from `https://<PC-IP>:4173`, not `:5173`
+4. Force-stop Chrome, reopen
+5. iOS: Add to Home Screen manually
 
 ### White screen offline after install
 
