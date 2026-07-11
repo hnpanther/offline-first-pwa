@@ -104,9 +104,28 @@ export interface ServerLogSheetEntry {
   formData?: Record<string, unknown> | null
 }
 
+/** Scoped reference data shipped with a log-sheet bundle for offline fill. */
+export interface LogSheetContextDto {
+  locations?: Location[]
+  plantSystems?: PlantSystem[]
+  mainFunctions?: MainFunction[]
+  subFunctions?: SubFunction[]
+  assetEntries?: AssetEntry[]
+  assetClasses?: AssetClass[]
+  fieldDefinitions?: FieldDefinition[]
+  scopeDisplayLabel?: string | null
+}
+
+/** Self-contained payload: sheet metadata + entries + scoped context. */
+export interface LogSheetBundleDto {
+  sheet: ServerLogSheet
+  entries?: ServerLogSheetEntry[] | null
+  context?: LogSheetContextDto | null
+}
+
 export interface LogSheetInboxResponse {
   serverTime: number
-  assigned: ServerLogSheet[]
+  assigned: LogSheetBundleDto[]
   available: ServerLogSheet[]
   teamOpen?: ServerLogSheet[]
 }
@@ -127,11 +146,21 @@ export async function fetchLogSheetEntries(
   )
 }
 
+export async function fetchLogSheetBundle(
+  serverId: number | string,
+  signal?: AbortSignal
+): Promise<LogSheetBundleDto> {
+  return apiClient.get<LogSheetBundleDto>(
+    `/api/log-sheets/${serverId}/bundle`,
+    signal
+  )
+}
+
 export async function claimLogSheet(
   serverId: number | string,
   signal?: AbortSignal
-): Promise<ServerLogSheet> {
-  return apiClient.post<ServerLogSheet>(
+): Promise<LogSheetBundleDto> {
+  return apiClient.post<LogSheetBundleDto>(
     `/api/log-sheets/${serverId}/claim`,
     {},
     signal
@@ -193,10 +222,8 @@ export async function fetchUnitOperators(
 // ===========================================================================
 
 /**
- * Full snapshot of all configuration the device needs.
- * The server returns everything in one call to minimise round-trips.
- * Pass `since` (Unix ms) to get only records updated after that timestamp
- * (incremental pull).  If `since` is omitted the server sends the full set.
+ * @deprecated Full master-data snapshot — server now returns bootstrap only.
+ *             Plant hierarchy and assets arrive per log-sheet bundle.
  */
 export interface MasterDataResponse {
   locations: Location[]
@@ -204,13 +231,21 @@ export interface MasterDataResponse {
   mainFunctions: MainFunction[]
   subFunctions: SubFunction[]
   assetClasses: AssetClass[]
-  /** Each AssetClass has its FieldDefinitions inlined here */
   fieldDefinitions: FieldDefinition[]
   assetEntries: AssetEntry[]
   logSheetTemplates: LogSheetTemplate[]
   operationalUnits?: OperationalUnit[]
-  /** Server-side timestamp of this snapshot — save as lastPullAt in syncMeta */
   serverTime: number
+}
+
+/** Lightweight bootstrap: user context and accessible operational units. */
+export interface BootstrapResponse {
+  serverTime: number
+  userId?: number
+  operationalUnits?: OperationalUnit[]
+  accessibleUnitIds?: Array<number | string>
+  supervisorScopeUnitIds?: Array<number | string>
+  primaryUnitId?: number | string | null
 }
 
 export interface OperationalUnit {
@@ -223,18 +258,25 @@ export interface OperationalUnit {
 }
 
 /**
+ * GET /api/bootstrap
+ *
+ * Preferred lightweight bootstrap for mobile clients.
+ */
+export async function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
+  return apiClient.get<BootstrapResponse>('/api/bootstrap', signal)
+}
+
+/**
  * GET /api/master-data[?since=<ms>]
  *
- * Pull master data (config) from the server.
- * On first run call with no `since`.
- * On subsequent runs pass the `serverTime` from the previous response.
+ * Backward-compatible alias — server returns bootstrap, not full master data.
  */
 export async function fetchMasterData(
   since?: number,
   signal?: AbortSignal
-): Promise<MasterDataResponse> {
+): Promise<BootstrapResponse> {
   const qs = since != null ? `?since=${since}` : ''
-  return apiClient.get<MasterDataResponse>(`/api/master-data${qs}`, signal)
+  return apiClient.get<BootstrapResponse>(`/api/master-data${qs}`, signal)
 }
 
 // ===========================================================================

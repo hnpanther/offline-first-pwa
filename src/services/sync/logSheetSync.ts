@@ -9,14 +9,23 @@ import {
   getLogSheetByServerId,
   getAllLogSheets
 } from '@/services/storage'
-import { fetchLogSheetEntries, type ServerLogSheet, type ServerLogSheetEntry } from '@/services/api'
+import {
+  fetchLogSheetBundle,
+  fetchLogSheetEntries,
+  type LogSheetBundleDto,
+  type ServerLogSheet,
+  type ServerLogSheetEntry
+} from '@/services/api'
+import { mergeBundleContext } from '@/services/sync/mergeBundleContext'
 import type { LogSheet, LogSheetEntryData } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isOwnershipReassignError } from '@/utils/logSheetStatus'
 
 export interface EnsureLocalLogSheetOptions {
-  /** When true, pull the authoritative entry list from the server instead of local cache. */
+  /** When true, pull the authoritative bundle from the server. */
   refreshEntriesOnline?: boolean
+  /** Pre-loaded entries from an inbox/claim bundle — skips network. */
+  serverEntries?: ServerLogSheetEntry[]
 }
 
 export async function buildEntriesForTemplate(
@@ -64,18 +73,40 @@ function mapServerEntry(
   }
 }
 
-/** Pull authoritative rows from the server and keep any local form values for matching assets. */
-export async function refreshEntriesFromServer(
-  serverId: number | string,
+function mapServerEntries(
+  serverEntries: ServerLogSheetEntry[],
   existingEntries?: LogSheetEntryData[]
-): Promise<LogSheetEntryData[]> {
-  const serverEntries = await fetchLogSheetEntries(serverId)
+): LogSheetEntryData[] {
   const formByAsset = new Map(
     (existingEntries ?? []).map(entry => [toIdString(entry.assetId), entry.formData ?? {}])
   )
   return serverEntries.map(entry =>
     mapServerEntry(entry, formByAsset.get(toIdString(entry.assetId)) ?? entry.formData ?? {})
   )
+}
+
+/** Pull authoritative rows from the server and keep any local form values for matching assets. */
+export async function refreshEntriesFromServer(
+  serverId: number | string,
+  existingEntries?: LogSheetEntryData[]
+): Promise<LogSheetEntryData[]> {
+  const serverEntries = await fetchLogSheetEntries(serverId)
+  return mapServerEntries(serverEntries, existingEntries)
+}
+
+/** Pull full bundle (entries + scoped context) and merge local form values. */
+export async function refreshFromBundle(
+  serverId: number | string,
+  existingEntries?: LogSheetEntryData[]
+): Promise<LogSheetEntryData[]> {
+  const bundle = await fetchLogSheetBundle(serverId)
+  if (bundle.context) {
+    await mergeBundleContext(bundle.context)
+  }
+  if (!bundle.entries || bundle.entries.length === 0) {
+    return refreshEntriesFromServer(serverId, existingEntries)
+  }
+  return mapServerEntries(bundle.entries, existingEntries)
 }
 
 async function resolveEntries(
@@ -86,10 +117,21 @@ async function resolveEntries(
   const templateId = toIdString(serverSheet.templateId)
   const needsEntries = !existingEntries || existingEntries.length === 0
 
+  if (options?.serverEntries && options.serverEntries.length > 0) {
+    return mapServerEntries(options.serverEntries, existingEntries)
+  }
+
   if (options?.refreshEntriesOnline) {
-    const refreshed = await refreshEntriesFromServer(serverSheet.id, existingEntries)
-    if (refreshed.length > 0) {
-      return refreshed
+    try {
+      const refreshed = await refreshFromBundle(serverSheet.id, existingEntries)
+      if (refreshed.length > 0) {
+        return refreshed
+      }
+    } catch {
+      const refreshed = await refreshEntriesFromServer(serverSheet.id, existingEntries)
+      if (refreshed.length > 0) {
+        return refreshed
+      }
     }
   }
 
@@ -171,21 +213,36 @@ export async function ensureLocalLogSheet(
   })
 }
 
+export async function ensureLocalLogSheetFromBundle(
+  bundle: LogSheetBundleDto,
+  options?: Omit<EnsureLocalLogSheetOptions, 'serverEntries'>
+): Promise<LogSheet> {
+  if (bundle.context) {
+    await mergeBundleContext(bundle.context)
+  }
+  return ensureLocalLogSheet(bundle.sheet, {
+    ...options,
+    serverEntries: bundle.entries ?? undefined,
+    refreshEntriesOnline: false
+  })
+}
+
 export interface MergeInboxOptions {
   refreshEntriesOnline?: boolean
 }
 
 /** Provision local copies (with asset entries) and merge inbox metadata for assigned sheets. */
 export async function mergeInboxIntoLocalSheets(
-  assigned: ServerLogSheet[],
+  assigned: LogSheetBundleDto[],
   options?: MergeInboxOptions
 ): Promise<void> {
   const now = Date.now()
-  for (const serverSheet of assigned) {
-    await ensureLocalLogSheet(serverSheet, {
+  for (const bundle of assigned) {
+    await ensureLocalLogSheetFromBundle(bundle, {
       refreshEntriesOnline: options?.refreshEntriesOnline
     })
 
+    const serverSheet = bundle.sheet
     const serverId = toIdString(serverSheet.id)
     const local = await getLogSheetByServerId(serverId)
     if (!local) continue
@@ -222,7 +279,7 @@ export async function mergeInboxIntoLocalSheets(
     await updateLogSheet(local.localId, updates)
   }
 
-  await reconcileInboxRevocations(assigned)
+  await reconcileInboxRevocations(assigned.map(bundle => bundle.sheet))
   await expireStaleLocalDrafts(now)
 }
 

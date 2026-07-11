@@ -1,26 +1,29 @@
-import { fetchLogSheetInbox } from '@/services/api'
-import type { ServerLogSheet } from '@/services/api'
-
-export interface InboxState {
-  assigned: ServerLogSheet[]
-  available: ServerLogSheet[]
-  serverTime: number | null
-  lastSyncAt: number | null
-  error: string | null
-  loading: boolean
-}
-
-export async function pullInbox(signal?: AbortSignal): Promise<{
-  assigned: ServerLogSheet[]
-  available: ServerLogSheet[]
-  teamOpen: ServerLogSheet[]
-  serverTime: number
-}> {
-  const response = await fetchLogSheetInbox(signal)
-  return {
-    assigned: response.assigned ?? [],
-    available: response.available ?? [],
-    teamOpen: response.teamOpen ?? [],
-    serverTime: response.serverTime
-  }
-}
+import { fetchLogSheetInbox } from '@/services/api'
+import type { LogSheetBundleDto, ServerLogSheet } from '@/services/api'
+
+export interface InboxState {
+  assigned: ServerLogSheet[]
+  available: ServerLogSheet[]
+  serverTime: number | null
+  lastSyncAt: number | null
+  error: string | null
+  loading: boolean
+}
+
+export async function pullInbox(signal?: AbortSignal): Promise<{
+  assignedBundles: LogSheetBundleDto[]
+  assigned: ServerLogSheet[]
+  available: ServerLogSheet[]
+  teamOpen: ServerLogSheet[]
+  serverTime: number
+}> {
+  const response = await fetchLogSheetInbox(signal)
+  const assignedBundles = response.assigned ?? []
+  return {
+    assignedBundles,
+    assigned: assignedBundles.map(bundle => bundle.sheet),
+    available: response.available ?? [],
+    teamOpen: response.teamOpen ?? [],
+    serverTime: response.serverTime
+  }
+}

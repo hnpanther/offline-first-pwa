@@ -28,7 +28,7 @@ import { useLogSheets } from '@/hooks/useLogSheets'
 import { useInboxSync } from '@/hooks/useInboxSync'
 import { useAppStore } from '@/store'
 import { claimLogSheet, releaseLogSheet, assignLogSheet, reassignLogSheet } from '@/services/api'
-import { ensureLocalLogSheet } from '@/services/sync/logSheetSync'
+import { ensureLocalLogSheet, ensureLocalLogSheetFromBundle } from '@/services/sync/logSheetSync'
 import { getLogSheetByServerId, updateLogSheet } from '@/services/storage'
 import { t } from '@/i18n'
 import type { LogSheet } from '@/types'
@@ -140,7 +140,9 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     try {
       const claimed = await claimLogSheet(sheet.id)
       await refreshInbox()
-      await openSheet(claimed)
+      const local = await ensureLocalLogSheetFromBundle(claimed)
+      await refreshLocal()
+      navigate(`/logsheets/${local.localId}`)
     } catch (err) {
       setActionError(err instanceof Error ? err.message : t.inbox.claimFailed)
     } finally {

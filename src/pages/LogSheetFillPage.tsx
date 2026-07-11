@@ -59,8 +59,8 @@ import {
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
 import { t } from '@/i18n'
-import { pullMasterData } from '@/services/sync/pullMasterData'
-import { buildEntriesForTemplate, refreshEntriesFromServer } from '@/services/sync/logSheetSync'
+import { pullMasterDataIfStale } from '@/services/sync/pullMasterData'
+import { buildEntriesForTemplate, refreshFromBundle } from '@/services/sync/logSheetSync'
 import { isEffectivelyOffline, canReachServer } from '@/utils/connectivity'
 import { useInboxSync } from '@/hooks/useInboxSync'
 import { syncManager } from '@/services/sync'
@@ -298,7 +298,7 @@ export function LogSheetFillPage() {
       setLoadError(null)
       try {
         if (navigator.onLine && authSession) {
-          await pullMasterData(true)
+          await pullMasterDataIfStale(60 * 60 * 1000)
         }
         const [loadedSheet, classes] = await Promise.all([
           getLogSheet(localId),
@@ -313,7 +313,7 @@ export function LogSheetFillPage() {
           navigator.onLine && authSession && sheet.serverId && sheet.status === 'draft'
         if (canRefreshFromServer) {
           try {
-            const refreshed = await refreshEntriesFromServer(sheet.serverId!, sheet.entries)
+            const refreshed = await refreshFromBundle(sheet.serverId!, sheet.entries)
             if (refreshed.length > 0) {
               await updateLogSheet(localId, { entries: refreshed })
               sheet = (await getLogSheet(localId)) ?? { ...sheet, entries: refreshed }
