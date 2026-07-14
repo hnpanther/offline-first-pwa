@@ -87,6 +87,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const inboxError = useAppStore(s => s.inboxError)
   const inboxWarning = useAppStore(s => s.inboxWarning)
   const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
+  const lastSyncAt = useAppStore(s => s.lastSyncAt)
   const isSupervisor = isSupervisorRole(authSession?.roles ?? [])
   const { refreshInbox } = useInboxSync()
   const { logs, loading, refresh: refreshLocal } = useLogSheets()
@@ -125,6 +126,12 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
       void refreshLocal()
     }
   }, [mode, inboxLastSyncAt, refreshLocal])
+
+  useEffect(() => {
+    if (mode === 'active' && lastSyncAt != null) {
+      void refreshLocal()
+    }
+  }, [mode, lastSyncAt, refreshLocal])
 
   const openSheet = useCallback(
     async (serverSheet: ServerLogSheet) => {
@@ -258,7 +265,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
       if (preferCurrent) map.set(key, log)
     }
     return map
-  }, [logs])
+  }, [userLogs])
 
   const offlineLocalCards = useMemo(() => {
     if (!effectivelyOffline) return []

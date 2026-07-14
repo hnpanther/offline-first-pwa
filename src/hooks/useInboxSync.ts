@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { pullInbox } from '@/services/sync/pullInbox'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
+import { syncManager } from '@/services/sync'
 import { pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
 import { saveInboxSnapshot, loadInboxSnapshot } from '@/services/storage/inboxCache'
 import { useAppStore } from '@/store'
@@ -10,17 +11,33 @@ import { t } from '@/i18n'
 
 const BOOTSTRAP_STALE_MS = 60 * 60 * 1000
 
-async function applyInboxSnapshot(
-  setInbox: ReturnType<typeof useAppStore.getState>['setInbox']
-): Promise<boolean> {
+type SetInbox = ReturnType<typeof useAppStore.getState>['setInbox']
+
+async function applyInboxSnapshot(setInbox: SetInbox): Promise<boolean> {
   const snap = await loadInboxSnapshot()
   if (!snap) return false
   setInbox(snap.assigned, snap.available, snap.teamOpen ?? [], snap.lastSyncAt)
   return true
 }
 
+/** Pull inbox from server, merge into local sheets, and update store snapshot. */
+export async function pullAndMergeInbox(setInbox: SetInbox): Promise<void> {
+  const { assigned, assignedSheets, available, teamOpen, serverTime } = await pullInbox()
+  await pullBootstrapIfStale(BOOTSTRAP_STALE_MS)
+  await mergeInboxIntoLocalSheets(assigned)
+  const syncAt = Date.now()
+  await saveInboxSnapshot({
+    assigned: assignedSheets,
+    available,
+    teamOpen,
+    lastSyncAt: syncAt,
+    serverTime
+  })
+  setInbox(assignedSheets, available, teamOpen, syncAt)
+}
+
 export function useInboxSync(): {
-  refreshInbox: (showLoading?: boolean) => Promise<void>
+  refreshInbox: (showLoading?: boolean, skipPostSync?: boolean) => Promise<void>
 } {
   const isOnline = useAppStore(s => s.isOnline)
   const serverReachable = useAppStore(s => s.serverReachable)
@@ -31,7 +48,7 @@ export function useInboxSync(): {
   const setInboxWarning = useAppStore(s => s.setInboxWarning)
 
   const refreshInbox = useCallback(
-    async (showLoading = false) => {
+    async (showLoading = false, skipPostSync = false) => {
       if (!navigator.onLine || !isAuthenticated) return
 
       const isFirstLoad = useAppStore.getState().inboxLastSyncAt == null
@@ -44,18 +61,10 @@ export function useInboxSync(): {
       }
 
       try {
-        const { assigned, assignedSheets, available, teamOpen, serverTime } = await pullInbox()
-        await pullBootstrapIfStale(BOOTSTRAP_STALE_MS)
-        await mergeInboxIntoLocalSheets(assigned)
-        const syncAt = Date.now()
-        await saveInboxSnapshot({
-          assigned: assignedSheets,
-          available,
-          teamOpen,
-          lastSyncAt: syncAt,
-          serverTime
-        })
-        setInbox(assignedSheets, available, teamOpen, syncAt)
+        await pullAndMergeInbox(setInbox)
+        if (!skipPostSync) {
+          await syncManager.sync()
+        }
       } catch (err) {
         const fromCache = await applyInboxSnapshot(setInbox)
         if (isTransientNetworkError(err)) {

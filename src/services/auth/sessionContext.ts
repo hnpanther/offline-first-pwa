@@ -28,12 +28,23 @@ export async function getLastSessionUsername(): Promise<string | null> {
   return typeof row?.value === 'string' ? row.value : null
 }
 
-async function revokeDraftsNotOwnedBy(userId: string): Promise<void> {
+async function isolateSheetsNotOwnedBy(userId: string): Promise<void> {
   const all = await getAllLogSheets()
   for (const sheet of all) {
-    if (sheet.status !== 'draft' || !sheet.serverId) continue
+    if (!sheet.serverId) continue
     const assignee = sheet.assigneeUserId
-    if (!assignee || assignee !== userId) {
+    if (assignee && assignee === userId) continue
+
+    if (sheet.status === 'draft') {
+      await updateLogSheet(sheet.localId, {
+        syncStatus: 'failed',
+        syncError: SYNC_OUTCOME_MESSAGES.REVOKED
+      })
+      continue
+    }
+
+    // Another user's submitted queue — keep data but block sync until they log back in.
+    if (sheet.status === 'submitted' && sheet.syncStatus !== 'synced') {
       await updateLogSheet(sheet.localId, {
         syncStatus: 'failed',
         syncError: SYNC_OUTCOME_MESSAGES.REVOKED
@@ -55,7 +66,7 @@ export async function activateUserSession(
 
   if (prevUsername && prevUsername !== username) {
     await clearInboxSnapshot()
-    await revokeDraftsNotOwnedBy(userIdStr)
+    await isolateSheetsNotOwnedBy(userIdStr)
   }
 }
 
@@ -80,6 +91,18 @@ export function isLogSheetAccessibleToUser(
 
   // Legacy rows without assignee — only if explicitly in current inbox.
   return false
+}
+
+/** Outbound sync queue: only sheets submitted by the current assignee on this device. */
+export function isLogSheetOutboundOwnedByUser(
+  sheet: Pick<LogSheet, 'assigneeUserId' | 'status' | 'syncStatus'>,
+  userId: string | null
+): boolean {
+  if (!userId) return false
+  if (sheet.status !== 'submitted') return false
+  if (sheet.syncStatus === 'synced' || sheet.syncStatus === 'failed') return false
+  if (!sheet.assigneeUserId) return false
+  return sheet.assigneeUserId === userId
 }
 
 export function filterLogSheetsForUser(

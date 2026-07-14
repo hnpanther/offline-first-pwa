@@ -516,6 +516,11 @@ export async function updateLogSheet(
 
 /** Move a locally submitted sheet back to draft (clears outbound queue metadata). */
 export async function revertLogSheetToDraft(localId: string): Promise<void> {
+  await resetLogSheetToOpenDraft(localId)
+}
+
+/** Reset stale local completion when server still shows the sheet as open. */
+export async function resetLogSheetToOpenDraft(localId: string): Promise<void> {
   const existing = await db.logSheets.where('localId').equals(localId).first()
   if (!existing?.id) throw new Error(`LogSheet not found: ${localId}`)
 
@@ -529,6 +534,7 @@ export async function revertLogSheetToDraft(localId: string): Promise<void> {
   delete next.completedAt
   delete next.clientActionId
   delete next.syncError
+  delete next.syncedAt
 
   await db.logSheets.put(next)
 }

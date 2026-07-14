@@ -12,10 +12,12 @@ import {
 import { submitRecordsBatch, submitLogSheetsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getAuthSession } from '@/services/auth'
+import { getSessionUserId, isLogSheetOutboundOwnedByUser } from '@/services/auth/sessionContext'
 import { hasPermission } from '@/types/auth'
 import {
   isLogSheetExpiredForSync,
-  syncOutcomeMessage,
+  isOwnershipReassignError,
+  normalizeLogSheetSyncError,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
 import type { DataRecord, LogSheet } from '@/types'
@@ -150,7 +152,7 @@ class SyncManager {
           const ls = pendingLogSheets.find((l: LogSheet) => l.localId === result.localId)
           if (!ls) continue
 
-          if (result.outcome === 'SUBMITTED' || result.outcome === 'DUPLICATE') {
+          if (result.outcome === 'SUBMITTED') {
             await updateLogSheet(ls.localId, {
               syncStatus: 'synced',
               syncedAt: Date.now(),
@@ -162,10 +164,32 @@ class SyncManager {
             continue
           }
 
-          const message = syncOutcomeMessage(result.outcome, result.error)
+          if (result.outcome === 'DUPLICATE' && result.serverId) {
+            await updateLogSheet(ls.localId, {
+              syncStatus: 'synced',
+              syncedAt: Date.now(),
+              serverId: toIdString(result.serverId),
+              serverStatus: 'SUBMITTED',
+              syncError: undefined
+            })
+            syncedCount++
+            continue
+          }
+
+          const syncError = normalizeLogSheetSyncError(result.outcome, result.error)
+
+          if (isOwnershipReassignError(syncError)) {
+            await updateLogSheet(ls.localId, {
+              syncStatus: 'failed',
+              syncError,
+            })
+            failedCount++
+            continue
+          }
+
           await updateLogSheet(ls.localId, {
             syncStatus: 'failed',
-            syncError: message,
+            syncError,
             serverStatus:
               result.outcome === 'EXPIRED'
                 ? 'EXPIRED'
@@ -221,12 +245,11 @@ class SyncManager {
   }
 
   private async getPendingLogSheets(): Promise<LogSheet[]> {
+    const userId = await getSessionUserId()
     const all = await getAllLogSheets()
     return all.filter(
       ls =>
-        ls.status === 'submitted' &&
-        ls.syncStatus !== 'synced' &&
-        ls.syncStatus !== 'failed' &&
+        isLogSheetOutboundOwnedByUser(ls, userId) &&
         ls.serverId &&
         !isLogSheetExpiredForSync(ls)
     )

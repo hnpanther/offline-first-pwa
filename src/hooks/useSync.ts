@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { syncManager, type SyncEvent } from '@/services/sync'
 import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { pullAndMergeInbox } from '@/hooks/useInboxSync'
 import { useAppStore } from '@/store'
 import { getSettings } from '@/services/storage'
 
@@ -33,6 +34,9 @@ export function useSyncManager(): void {
           setLastSyncAt(Date.now())
           setFailedCount(event.failedCount ?? 0)
           void syncManager.getPendingCount().then(setPendingCount)
+          if ((event.syncedCount ?? 0) > 0 && navigator.onLine) {
+            void pullAndMergeInbox(useAppStore.getState().setInbox).catch(() => {})
+          }
           break
         case 'error':
           setSyncing(false)

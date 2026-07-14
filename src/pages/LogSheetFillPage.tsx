@@ -527,14 +527,33 @@ export function LogSheetFillPage() {
         syncStatus: 'pending',
         submittedAt: completedAt,
         completedAt,
-        clientActionId
+        clientActionId,
+        ...(sessionUserId ? { assigneeUserId: sessionUserId } : {})
       })
       const refreshed = await getLogSheet(localId)
       if (refreshed) {
         const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
         setLogSheet({ ...refreshed, entries })
       }
-      setSavedMessage('Log Sheet با موفقیت ارسال شد و در صف همگام‌سازی قرار گرفت')
+
+      if (canUseServer) {
+        await syncManager.sync()
+        const afterSync = await getLogSheet(localId)
+        if (afterSync) {
+          const { entries } = await enrichEntriesWithNfc(afterSync.entries ?? [])
+          setLogSheet({ ...afterSync, entries })
+        }
+        if (afterSync?.syncStatus === 'synced') {
+          await refreshInbox(false, true)
+          setSavedMessage('Log Sheet با موفقیت ثبت و ارسال شد')
+        } else if (afterSync?.syncStatus === 'failed') {
+          setSaveError(afterSync.syncError ?? 'خطا در ارسال به سرور')
+        } else {
+          setSavedMessage('Log Sheet در صف ارسال قرار گرفت')
+        }
+      } else {
+        setSavedMessage('Log Sheet با موفقیت ارسال شد و در صف همگام‌سازی قرار گرفت')
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'خطا در ارسال')
     } finally {

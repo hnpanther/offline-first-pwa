@@ -4,7 +4,8 @@ import {
   saveLogSheet,
   updateLogSheet,
   getLogSheetByServerId,
-  getAllLogSheets
+  getAllLogSheets,
+  resetLogSheetToOpenDraft
 } from '@/services/storage'
 import {
   fetchLogSheetBundle,
@@ -36,6 +37,35 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const scopeDisplayLabel = bundleScopeDisplayLabel(bundle)
 
   if (existing) {
+    const workflow = alignLocalWorkflowWithServer(existing, serverSheet)
+    if (workflow === 'reset-draft') {
+      await resetLogSheetToOpenDraft(existing.localId)
+      const reset = await getLogSheetByServerId(serverId)
+      if (reset) {
+        await updateLogSheet(reset.localId, {
+          ...serverSheetMetadataPatch(serverSheet, reset),
+          entries,
+          ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
+        })
+        const updated = await getLogSheetByServerId(serverId)
+        if (updated) return updated
+      }
+    } else if (workflow === 'mark-synced') {
+      await updateLogSheet(existing.localId, {
+        ...serverSheetMetadataPatch(serverSheet, existing),
+        status: 'submitted',
+        syncStatus: 'synced',
+        serverStatus: 'SUBMITTED',
+        syncError: undefined,
+        syncedAt: existing.syncedAt ?? Date.now(),
+        entries,
+        ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
+      })
+      const updated = await getLogSheetByServerId(serverId)
+      if (updated) return updated
+      return existing
+    }
+
     await updateLogSheet(existing.localId, {
       ...serverSheetMetadataPatch(serverSheet, existing),
       entries,
@@ -76,8 +106,15 @@ async function fetchAndApplyBundle(serverId: number | string): Promise<LogSheet>
   return applyLogSheetBundle(bundle)
 }
 
-function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null {
+function revivalUpdatesAfterReassign(local: LogSheet, serverSheet: ServerLogSheet): Partial<LogSheet> | null {
   if (!isOwnershipReassignError(local.syncError)) return null
+
+  const serverAssignee =
+    serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : null
+  if (!serverAssignee || !local.assigneeUserId || local.assigneeUserId !== serverAssignee) {
+    return null
+  }
+
   const updates: Partial<LogSheet> = { syncError: undefined }
   if (local.syncStatus === 'failed' || (local.status === 'submitted' && local.syncStatus !== 'synced')) {
     updates.syncStatus = 'pending'
@@ -86,6 +123,62 @@ function revivalUpdatesAfterReassign(local: LogSheet): Partial<LogSheet> | null 
     updates.clientActionId = uuidv4()
   }
   return updates
+}
+
+/** Drop stale local completion when the server still has the sheet open. */
+function alignLocalWorkflowWithServer(
+  existing: LogSheet,
+  serverSheet: ServerLogSheet
+): 'reset-draft' | 'mark-synced' | null {
+  if (serverSheet.status === 'SUBMITTED') {
+    return 'mark-synced'
+  }
+
+  if (serverSheet.status === 'EXPIRED') {
+    return null
+  }
+
+  const serverStillOpen =
+    serverSheet.status === 'ASSIGNED' ||
+    serverSheet.status === 'IN_PROGRESS' ||
+    serverSheet.status === 'PENDING' ||
+    serverSheet.status == null
+
+  if (!serverStillOpen) return null
+
+  const serverAssignee =
+    serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : null
+  const localAssignee = existing.assigneeUserId ?? null
+  const assigneeMismatch =
+    serverAssignee != null &&
+    localAssignee != null &&
+    serverAssignee !== localAssignee
+
+  // False positive: marked synced locally but server never received it.
+  if (existing.syncStatus === 'synced') {
+    return 'reset-draft'
+  }
+
+  // Another user picked up — clear stale completion from the previous assignee.
+  if (assigneeMismatch && existing.status === 'submitted') {
+    return 'reset-draft'
+  }
+
+  // Ownership revoked for a different assignee — reset; same assignee revival handles below.
+  if (
+    existing.syncStatus === 'failed' &&
+    isOwnershipReassignError(existing.syncError) &&
+    assigneeMismatch
+  ) {
+    return 'reset-draft'
+  }
+
+  // Legitimate local completion awaiting outbound sync — keep draft/submitted state.
+  if (existing.status === 'submitted' && existing.syncStatus === 'pending') {
+    return null
+  }
+
+  return null
 }
 
 function serverSheetMetadataPatch(
@@ -106,7 +199,7 @@ function serverSheetMetadataPatch(
       serverSheet.assigneeUserId != null
         ? toIdString(serverSheet.assigneeUserId)
         : existing.assigneeUserId,
-    ...(revivalUpdatesAfterReassign(existing) ?? {}),
+    ...(revivalUpdatesAfterReassign(existing, serverSheet) ?? {}),
     ...extra
   }
 }
@@ -199,7 +292,7 @@ export async function mergeInboxIntoLocalSheets(
         bundle.sheet.assigneeUserId != null
           ? toIdString(bundle.sheet.assigneeUserId)
           : local.assigneeUserId,
-      ...revivalUpdatesAfterReassign(local)
+      ...revivalUpdatesAfterReassign(local, bundle.sheet)
     }
 
     if (extended) {

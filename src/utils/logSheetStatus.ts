@@ -57,9 +57,28 @@ export function isOwnershipReassignError(syncError?: string): boolean {
   return (
     normalized.includes('مال شما نیست') ||
     normalized.includes('تعلق ندارد') ||
+    normalized.includes('متعلق به') ||
+    normalized.includes('کاربر لاگین') ||
     normalized.includes('تخصیص ندارد') ||
-    normalized.includes('به شما تخصیص')
+    normalized.includes('به شما تخصیص') ||
+    normalized.includes('not assigned') ||
+    normalized.includes('not yours')
   )
+}
+
+/** Normalize server ownership failures for consistent local handling. */
+export function normalizeLogSheetSyncError(
+  outcome: string | undefined,
+  error?: string | null
+): string {
+  const message = syncOutcomeMessage(outcome, error)
+  if (outcome === 'SUPERSEDED' || outcome === 'EXPIRED') {
+    return message
+  }
+  if (isOwnershipReassignError(message)) {
+    return SYNC_OUTCOME_MESSAGES.REVOKED
+  }
+  return message
 }
 
 export function isInvalidLocalLogSheet(sheet: Pick<LogSheet, 'syncError'>): boolean {
