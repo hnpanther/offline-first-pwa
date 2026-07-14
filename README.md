@@ -28,13 +28,14 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 12. [Navigation and Permissions](#navigation-and-permissions)
 13. [Log Sheet Workflow](#log-sheet-workflow)
 14. [Offline Behavior](#offline-behavior)
-15. [NFC](#nfc)
-16. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
-17. [Synchronization](#synchronization)
-18. [IndexedDB Schema](#indexeddb-schema)
-19. [API Contract](#api-contract)
-20. [Production Deployment](#production-deployment)
-21. [Troubleshooting](#troubleshooting)
+15. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
+16. [NFC](#nfc)
+17. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
+18. [Synchronization](#synchronization)
+19. [IndexedDB Schema](#indexeddb-schema)
+20. [API Contract](#api-contract)
+21. [Production Deployment](#production-deployment)
+22. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -47,6 +48,7 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
 - **Background sync** — submitted log sheets and approved records push to the server when online
+- **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin master data and settings; supervisor assign/release/reassign
 
@@ -383,7 +385,7 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 3. **Online** + expired JWT → session cleared, redirect to login.
 4. **Offline** + expired JWT → session still accepted (offline-first).
 5. **Login** always redirects to `/` (never restores a previous user’s deep link).
-6. **User switch** on a shared tablet clears inbox cache and hides other users’ local drafts (`sessionContext.ts`).
+6. **User switch** on a shared tablet clears inbox cache and isolates other users’ local work (`sessionContext.ts`). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
 
 ### Roles (frontend checks)
 
@@ -518,7 +520,126 @@ Submit is local only until sync succeeds.
 - Inbox snapshot may show revoked work until next online sync.
 - Extended deadlines from supervisor apply after inbox sync.
 - Updated asset metadata (e.g. NFC tag change) applies on the next inbox bundle or online bundle refresh (server wins).
-- Shared tablet: logging in as a different user clears the previous inbox cache and hides other users’ local drafts.
+- Shared tablet: logging in as a different user clears the previous inbox cache and isolates other users’ local work. See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
+
+---
+
+## Shared Tablets and Enterprise Sync Policy
+
+This section documents the **intentional** sync and session model for shared tablets in enterprise field operations. It explains why only the **assignee** can push their own submitted work, and what organizations should expect in production.
+
+### Design principles
+
+| Layer | Responsibility |
+|-------|------------------|
+| **IndexedDB** | Temporary offline store for all users who have used the device |
+| **Session / isolate** | Separate visibility and outbound queue per user on user switch |
+| **Outbound sync** | Only sheets where `assigneeUserId` matches the logged-in user |
+| **Revival** | When the owner logs back in, their blocked queue is restored |
+| **Server** | Final ownership validation via JWT + server-side assignment |
+
+**Core rule:**
+
+```
+Device     = staging area (not the legal submit identity)
+Logged-in user = legal identity for API calls (JWT)
+assigneeUserId = who is allowed to submit that log sheet
+```
+
+The backend validates ownership on `POST /api/log-sheets/batch` using the **current JWT**, not “whatever is pending on this device”. The batch payload does not carry `assigneeUserId`; the server checks assignment against the authenticated user.
+
+### Intended flow (shared tablet)
+
+```
+Operator A: final submit offline → submitted + pending (assigneeUserId = A)
+Operator A: logout
+Operator B: login
+  → inbox cache cleared
+  → A’s submitted queue marked REVOKED locally (not visible, not synced)
+  → only B’s pending work enters the outbound queue
+Operator A: logs back in
+  → revival clears REVOKED, restores pending + new clientActionId
+  → sync runs under A’s JWT → SUBMITTED
+```
+
+Implementation: `src/services/auth/sessionContext.ts`, `src/services/sync/index.ts`, `src/services/sync/logSheetSync.ts`.
+
+### Why cross-user sync is not supported
+
+**Do not** push another user’s submitted sheets when a different user is logged in. That pattern was the root cause of shared-tablet bugs (ownership errors, false “sent” UI, empty server records).
+
+| If user B tries to sync user A’s work | Typical result |
+|---------------------------------------|----------------|
+| Server still assigns sheet to A | Ownership error — rejected |
+| Supervisor reassigned sheet to B | `SUPERSEDED` — A’s payload rejected |
+| B picked up the same sheet | Stale local completion reset to draft on inbox merge |
+
+Additional risks of “sync all pending on any login”:
+
+- **Audit / non-repudiation** — server logs would show the wrong actor
+- **Security** — violates least-privilege on shared devices
+- **Data integrity** — `DUPLICATE`, false `synced` state, corrupted local workflow
+
+### Enterprise acceptability
+
+For industrial field apps with **shared tablets**, this model is **acceptable and preferred** when auditability and data correctness matter more than automatic proxy upload.
+
+| Criterion | Current model |
+|-----------|---------------|
+| Data correctness / ownership | Strong |
+| Security on shared devices | Strong |
+| Audit trail (actor = assignee) | Strong |
+| Offline capability | Strong |
+| Guaranteed delivery SLA without owner login | Limited — by design |
+| Management visibility into device pending queue | Limited — local only |
+| Shift handover without operator returning | Requires operational policy |
+
+**Verdict:** Enterprise-grade for **correctness, security, and audit**. For **shift-based operations with strict delivery SLAs**, complement with operational policy and (optionally) server-side tooling — not client-side cross-user sync.
+
+### Operational requirements (recommended for production)
+
+Document these in your SOP / rollout materials:
+
+1. **Final submit always uses the assignee’s identity** — non-negotiable for audit.
+2. **The shared tablet is a staging device**, not a proxy submitter.
+3. **Operator responsibility:** before leaving shift, go online and confirm pending work has synced.
+4. **Organization responsibility:** shift handover SOP + pending-work warnings before logout.
+
+### UX expectations
+
+| Local state | Meaning for operators |
+|-------------|----------------------|
+| Submitted, pending sync | Work is complete on device; waiting for **this user** to be online and synced |
+| Submitted, synced | Successfully recorded on server |
+| Failed + REVOKED (after user switch) | Blocked until the **original assignee** logs back in |
+
+Pending count and sync status are shown in the app shell (`useSyncManager`). After online final submit, sync and inbox refresh run automatically when possible.
+
+### What we deliberately do not do
+
+| Anti-pattern | Why |
+|--------------|-----|
+| Sync all device pending sheets on any login | Fails server ownership checks; corrupts local state |
+| Delete pending work on logout | Violates offline-first — data loss |
+| Show another user’s submitted queue in the UI | Privacy and confusion on shared tablets |
+| Mark `synced` on `DUPLICATE` without `serverId` | False “sent” state |
+
+### If the business requires delivery without owner re-login
+
+That is a **server-side enterprise feature**, not a client workaround:
+
+| Approach | Notes |
+|----------|-------|
+| Device-bound outbox | Server attributes submission to the original assignee |
+| Delegated submit API | Explicit “submit on behalf” with audit |
+| Supervisor push | Role-gated retry/approve for blocked device queues |
+| Ops alerting | Device online but old pending — notify supervisor |
+
+Do not bypass ownership in the PWA; negotiate these capabilities with the backend team.
+
+### Stakeholder summary (one paragraph)
+
+> The app intentionally prevents one operator from submitting another operator’s work under the wrong identity. In exchange, final delivery requires the assignee to be logged in (or a formal server-side delegation mechanism). This is a deliberate trade-off for data integrity and audit compliance in industrial environments.
 
 ---
 
@@ -612,10 +733,14 @@ Opening a draft sheet online also refreshes via `GET /api/log-sheets/{id}/bundle
 ```
 SyncManager.sync()
   → mark expired submitted sheets
-  → POST /api/log-sheets/batch  (submitted, pending, not failed)
+  → getPendingLogSheets()  — only submitted + pending where assigneeUserId = session user
+  → POST /api/log-sheets/batch  (owner queue only)
   → POST /api/records/batch     (approved records, if permission)
   → cleanupLocalLogSheets()
+  → on success: refresh inbox (remove submitted work from assigned list)
 ```
+
+On user switch, `activateUserSession()` marks another user’s submitted (unsynced) sheets as `failed` + `REVOKED` locally. They re-enter the outbound queue only when that assignee logs back in and inbox revival runs. See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
 
 Log sheet batch payload includes `completedAt` (device completion time) and `clientActionId` for idempotency.
 
