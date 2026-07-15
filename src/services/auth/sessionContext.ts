@@ -6,6 +6,11 @@
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
 import { getAllLogSheets, updateLogSheet } from '@/services/storage'
+import {
+  archiveLogSheetForUser,
+  archivedLogSheetViewId,
+  getArchivedLogSheetsForUser
+} from '@/services/storage/logSheetArchive'
 import { clearInboxSnapshot } from '@/services/storage/inboxCache'
 import {
   SYNC_OUTCOME_MESSAGES,
@@ -13,6 +18,7 @@ import {
   isRevokedSyncError,
   isSupersededSyncError
 } from '@/utils/logSheetStatus'
+import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet } from '@/types'
 
@@ -34,12 +40,25 @@ export async function getLastSessionUsername(): Promise<string | null> {
   return typeof row?.value === 'string' ? row.value : null
 }
 
-async function isolateSheetsNotOwnedBy(userId: string): Promise<void> {
+async function isolateSheetsNotOwnedBy(userId: string | null): Promise<void> {
   const all = await getAllLogSheets()
   for (const sheet of all) {
     if (!sheet.serverId) continue
-    const assignee = sheet.assigneeUserId
-    if (assignee && assignee === userId) continue
+
+    const owner = resolveLocalWorkOwner(sheet)
+    if (userId) {
+      const isCurrentAssignee = sheet.assigneeUserId === userId
+      if (isCurrentAssignee && owner === userId) continue
+      if (owner === userId) continue
+    } else if (!owner) {
+      continue
+    }
+
+    if (owner && owner !== userId) {
+      await archiveLogSheetForUser(sheet, owner, {
+        markRevoked: sheet.status === 'submitted'
+      })
+    }
 
     if (sheet.status === 'draft') {
       await updateLogSheet(sheet.localId, {
@@ -49,7 +68,6 @@ async function isolateSheetsNotOwnedBy(userId: string): Promise<void> {
       continue
     }
 
-    // Another user's submitted queue — keep data but block sync until they log back in.
     if (sheet.status === 'submitted' && sheet.syncStatus !== 'synced') {
       await updateLogSheet(sheet.localId, {
         syncStatus: 'failed',
@@ -78,7 +96,8 @@ export async function reviveOwnedSubmittedQueueOnLogin(userId: string): Promise<
 
 function shouldReviveOwnedSubmission(sheet: LogSheet, userId: string): boolean {
   if (sheet.status !== 'submitted' || sheet.syncStatus === 'synced') return false
-  if (!sheet.assigneeUserId || sheet.assigneeUserId !== userId) return false
+  const owner = resolveLocalWorkOwner(sheet)
+  if (!owner || owner !== userId) return false
   if (isSupersededSyncError(sheet.syncError)) return false
 
   if (isRevokedSyncError(sheet.syncError)) return true
@@ -96,20 +115,24 @@ function shouldReviveOwnedSubmission(sheet: LogSheet, userId: string): boolean {
 /** Call after successful login once userId is known (from bootstrap). */
 export async function activateUserSession(
   username: string,
-  userId: number | string
+  userId: number | string | null
 ): Promise<void> {
   const prevUsername = await getLastSessionUsername()
-  const userIdStr = toIdString(userId)
+  const userIdStr = userId != null ? toIdString(userId) : null
 
   await db.syncMeta.put({ key: LAST_USERNAME_KEY, value: username })
-  await setSessionUserId(userId)
+  if (userIdStr) {
+    await setSessionUserId(userIdStr)
+  }
 
   if (prevUsername && prevUsername !== username) {
     await clearInboxSnapshot()
     await isolateSheetsNotOwnedBy(userIdStr)
   }
 
-  await reviveOwnedSubmittedQueueOnLogin(userIdStr)
+  if (userIdStr) {
+    await reviveOwnedSubmittedQueueOnLogin(userIdStr)
+  }
 }
 
 export async function clearUserSessionContext(): Promise<void> {
@@ -118,33 +141,40 @@ export async function clearUserSessionContext(): Promise<void> {
 }
 
 export function isLogSheetAccessibleToUser(
-  sheet: Pick<LogSheet, 'assigneeUserId' | 'serverId' | 'status' | 'syncError'>,
+  sheet: Pick<LogSheet, 'assigneeUserId' | 'localOwnerUserId' | 'serverId' | 'status' | 'syncError'>,
   userId: string | null,
   inboxAssignedServerIds: ReadonlySet<string>
 ): boolean {
   if (!userId) return false
 
+  const owner = resolveLocalWorkOwner(sheet)
+  if (owner === userId) return true
+
   const serverId = sheet.serverId ? toIdString(sheet.serverId) : null
-  if (serverId && inboxAssignedServerIds.has(serverId)) return true
+  if (serverId && inboxAssignedServerIds.has(serverId)) {
+    if (owner && owner !== userId) return false
+    return sheet.assigneeUserId === userId || sheet.assigneeUserId == null
+  }
 
   if (sheet.assigneeUserId) {
     return sheet.assigneeUserId === userId
   }
 
-  // Legacy rows without assignee — only if explicitly in current inbox.
   return false
 }
 
 /** Outbound sync queue: only sheets submitted by the current assignee on this device. */
 export function isLogSheetOutboundOwnedByUser(
-  sheet: Pick<LogSheet, 'assigneeUserId' | 'status' | 'syncStatus'>,
+  sheet: Pick<LogSheet, 'assigneeUserId' | 'localOwnerUserId' | 'status' | 'syncStatus'>,
   userId: string | null
 ): boolean {
   if (!userId) return false
   if (sheet.status !== 'submitted') return false
   if (sheet.syncStatus === 'synced' || sheet.syncStatus === 'failed') return false
-  if (!sheet.assigneeUserId) return false
-  return sheet.assigneeUserId === userId
+  const owner = resolveLocalWorkOwner(sheet)
+  if (!owner || owner !== userId) return false
+  if (sheet.assigneeUserId && sheet.assigneeUserId !== userId) return false
+  return true
 }
 
 export function filterLogSheetsForUser(
@@ -156,4 +186,36 @@ export function filterLogSheetsForUser(
   return sheets.filter(s =>
     isLogSheetAccessibleToUser(s, userId, inboxAssignedServerIds)
   )
+}
+
+/** Live sheets plus archived copies for this user on a shared tablet. */
+export async function loadLogSheetsForSessionUser(
+  sheets: LogSheet[],
+  userId: string | null,
+  inboxAssignedServerIds: ReadonlySet<string>
+): Promise<LogSheet[]> {
+  if (!userId) return []
+
+  const live = filterLogSheetsForUser(sheets, userId, inboxAssignedServerIds)
+  const archives = await getArchivedLogSheetsForUser(userId)
+  const liveByServer = new Map(
+    live.filter(s => s.serverId).map(s => [toIdString(s.serverId!), s])
+  )
+
+  const merged = [...live]
+  for (const archived of archives) {
+    if (!archived.serverId) continue
+    const serverId = toIdString(archived.serverId)
+    const liveRow = liveByServer.get(serverId)
+    if (!liveRow || resolveLocalWorkOwner(liveRow) !== userId) {
+      merged.push({
+        ...archived,
+        localId: archivedLogSheetViewId(serverId, userId),
+        syncStatus: 'failed',
+        syncError: SYNC_OUTCOME_MESSAGES.REASSIGNED
+      })
+    }
+  }
+
+  return merged.sort((a, b) => b.updatedAt - a.updatedAt)
 }

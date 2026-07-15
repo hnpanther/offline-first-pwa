@@ -39,7 +39,7 @@ import { SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLoca
 import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
-import { filterLogSheetsForUser } from '@/services/auth/sessionContext'
+import { loadLogSheetsForSessionUser } from '@/services/auth/sessionContext'
 import { AssignOperatorDialog } from '@/components/logsheet/AssignOperatorDialog'
 
 const PAGE_SIZE = 20
@@ -97,10 +97,19 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     [inboxAssigned]
   )
 
-  const userLogs = useMemo(
-    () => filterLogSheetsForUser(logs, sessionUserId, inboxAssignedIds),
-    [logs, sessionUserId, inboxAssignedIds]
-  )
+  const [userLogs, setUserLogs] = useState<LogSheet[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    void loadLogSheetsForSessionUser(logs, sessionUserId, inboxAssignedIds).then(
+      merged => {
+        if (!cancelled) setUserLogs(merged)
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [logs, sessionUserId, inboxAssignedIds])
 
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -116,9 +125,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   useEffect(() => setPage(1), [search, mode])
 
   useEffect(() => {
-    if (mode === 'active') {
-      void refreshLocal()
-    }
+    void refreshLocal()
   }, [mode, refreshLocal])
 
   useEffect(() => {

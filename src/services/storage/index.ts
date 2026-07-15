@@ -520,7 +520,10 @@ export async function revertLogSheetToDraft(localId: string): Promise<void> {
 }
 
 /** Reset stale local completion when server still shows the sheet as open. */
-export async function resetLogSheetToOpenDraft(localId: string): Promise<void> {
+export async function resetLogSheetToOpenDraft(
+  localId: string,
+  options?: { clearEntryFormData?: boolean }
+): Promise<void> {
   const existing = await db.logSheets.where('localId').equals(localId).first()
   if (!existing?.id) throw new Error(`LogSheet not found: ${localId}`)
 
@@ -528,7 +531,15 @@ export async function resetLogSheetToOpenDraft(localId: string): Promise<void> {
     ...existing,
     status: 'draft',
     syncStatus: 'pending',
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    entries: options?.clearEntryFormData
+      ? existing.entries.map(e => ({
+          ...e,
+          formData: {},
+          createdAt: undefined,
+          updatedAt: undefined
+        }))
+      : existing.entries
   }
   delete next.submittedAt
   delete next.completedAt

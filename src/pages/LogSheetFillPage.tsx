@@ -36,6 +36,10 @@ import {
   getAssetClass,
   getAllAssetEntries
 } from '@/services/storage'
+import {
+  getArchivedLogSheetByViewId,
+  parseArchivedLogSheetViewId
+} from '@/services/storage/logSheetArchive'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
@@ -323,6 +327,7 @@ export function LogSheetFillPage() {
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
   const [confirmRevertOpen, setConfirmRevertOpen] = useState(false)
   const [rechecking, setRechecking] = useState(false)
+  const [isArchivedView, setIsArchivedView] = useState(false)
 
   const loadFieldDefsForEntries = useCallback(async (entries: LogSheetEntryData[]) => {
     const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
@@ -349,7 +354,28 @@ export function LogSheetFillPage() {
     const load = async () => {
       setLoading(true)
       setLoadError(null)
+      setIsArchivedView(false)
       try {
+        const archivedRef = localId ? parseArchivedLogSheetViewId(localId) : null
+        if (archivedRef) {
+          if (!sessionUserId || archivedRef.userId !== sessionUserId) {
+            navigate('/logsheets/active', { replace: true })
+            return
+          }
+          const archived = await getArchivedLogSheetByViewId(localId!)
+          if (!archived) {
+            setLoadError('Log Sheet یافت نشد')
+            return
+          }
+          const { entries } = await enrichEntriesWithNfc(archived.entries ?? [])
+          const classes = await loadAssetClassesForEntries(entries)
+          await loadFieldDefsForEntries(entries)
+          setLogSheet({ ...archived, entries })
+          setAssetClasses(classes)
+          setIsArchivedView(true)
+          return
+        }
+
         let sheet = await getLogSheet(localId)
         if (!sheet) {
           setLoadError('Log Sheet یافت نشد')
@@ -510,7 +536,10 @@ export function LogSheetFillPage() {
       const updatedEntries = logSheet.entries.map(e =>
         e.assetId === assetId ? applyEntrySaveTimestamps(e, formData) : e
       )
-      await updateLogSheet(localId, { entries: updatedEntries })
+      await updateLogSheet(localId, {
+        entries: updatedEntries,
+        ...(sessionUserId ? { localOwnerUserId: sessionUserId } : {})
+      })
       const refreshed = await getLogSheet(localId)
       if (refreshed) {
         const { entries } = await enrichEntriesWithNfc(refreshed.entries ?? [])
@@ -549,7 +578,9 @@ export function LogSheetFillPage() {
         submittedAt: completedAt,
         completedAt,
         clientActionId,
-        ...(sessionUserId ? { assigneeUserId: sessionUserId } : {})
+        ...(sessionUserId
+          ? { assigneeUserId: sessionUserId, localOwnerUserId: sessionUserId }
+          : {})
       })
       const refreshed = await getLogSheet(localId)
       if (refreshed) {
@@ -685,7 +716,11 @@ export function LogSheetFillPage() {
   const canRecheckAssignment =
     canUseServer && (isOwnershipReassignError(logSheet.syncError) || isRevoked)
   const canEdit =
-    !isSubmitted && !isExpired && !isSuperseded && (!isRevoked || backInMyInbox)
+    !isArchivedView &&
+    !isSubmitted &&
+    !isExpired &&
+    !isSuperseded &&
+    (!isRevoked || backInMyInbox)
   const entries = logSheet.entries ?? []
   const totalCount = entries.length
   const filledCount = entries.filter(e => getEntryCompletion(e).isComplete).length

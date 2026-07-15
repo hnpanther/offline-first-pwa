@@ -7,6 +7,8 @@ import {
   getAllLogSheets,
   resetLogSheetToOpenDraft
 } from '@/services/storage'
+import { getSessionUserId } from '@/services/auth/sessionContext'
+import { archiveLocalWorkBeforeClear } from '@/services/storage/logSheetArchive'
 import {
   fetchLogSheetBundle,
   type LogSheetBundleDto,
@@ -14,12 +16,18 @@ import {
 } from '@/services/api'
 import type { LogSheet } from '@/types'
 import { toIdString } from '@/utils/ids'
-import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isOwnershipReassignError, completedWithinDeadline } from '@/utils/logSheetStatus'
+import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, completedWithinDeadline } from '@/utils/logSheetStatus'
+import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import {
   mergeBundleContextToDb,
   mergeEntriesPreservingFormData,
   bundleScopeDisplayLabel
 } from '@/services/sync/mergeLogSheetBundle'
+import {
+  alignLocalWorkflowWithServer,
+  shouldPreserveLocalFormData,
+  revivalUpdatesAfterReassign
+} from '@/utils/logSheetWorkflow'
 
 export interface EnsureLocalLogSheetOptions {
   /** When online, fetch the latest bundle from the server before opening. */
@@ -33,18 +41,26 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const serverSheet = bundle.sheet
   const serverId = toIdString(serverSheet.id)
   const existing = await getLogSheetByServerId(serverId)
-  const entries = mergeEntriesPreservingFormData(bundle.entries ?? [], existing?.entries)
+  const sessionUserId = await getSessionUserId()
+  const workflow = existing ? alignLocalWorkflowWithServer(existing, serverSheet) : null
+  const preserveLocal =
+    workflow !== 'reset-draft' &&
+    shouldPreserveLocalFormData(existing, serverSheet, sessionUserId)
+  const entries = mergeEntriesPreservingFormData(bundle.entries ?? [], existing?.entries, {
+    preserveLocal
+  })
   const scopeDisplayLabel = bundleScopeDisplayLabel(bundle)
 
   if (existing) {
-    const workflow = alignLocalWorkflowWithServer(existing, serverSheet)
     if (workflow === 'reset-draft') {
-      await resetLogSheetToOpenDraft(existing.localId)
+      await archiveLocalWorkBeforeClear(existing)
+      await resetLogSheetToOpenDraft(existing.localId, { clearEntryFormData: true })
       const reset = await getLogSheetByServerId(serverId)
       if (reset) {
         await updateLogSheet(reset.localId, {
           ...serverSheetMetadataPatch(serverSheet, reset),
           entries,
+          localOwnerUserId: undefined,
           ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
         })
         const updated = await getLogSheetByServerId(serverId)
@@ -106,81 +122,6 @@ async function fetchAndApplyBundle(serverId: number | string): Promise<LogSheet>
   return applyLogSheetBundle(bundle)
 }
 
-function revivalUpdatesAfterReassign(local: LogSheet, serverSheet: ServerLogSheet): Partial<LogSheet> | null {
-  if (!isOwnershipReassignError(local.syncError)) return null
-
-  const serverAssignee =
-    serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : null
-  if (!serverAssignee || !local.assigneeUserId || local.assigneeUserId !== serverAssignee) {
-    return null
-  }
-
-  const updates: Partial<LogSheet> = { syncError: undefined }
-  if (local.syncStatus === 'failed' || (local.status === 'submitted' && local.syncStatus !== 'synced')) {
-    updates.syncStatus = 'pending'
-  }
-  if (local.status === 'submitted') {
-    updates.clientActionId = uuidv4()
-  }
-  return updates
-}
-
-/** Drop stale local completion when the server still has the sheet open. */
-function alignLocalWorkflowWithServer(
-  existing: LogSheet,
-  serverSheet: ServerLogSheet
-): 'reset-draft' | 'mark-synced' | null {
-  if (serverSheet.status === 'SUBMITTED') {
-    return 'mark-synced'
-  }
-
-  if (serverSheet.status === 'EXPIRED') {
-    return null
-  }
-
-  const serverStillOpen =
-    serverSheet.status === 'ASSIGNED' ||
-    serverSheet.status === 'IN_PROGRESS' ||
-    serverSheet.status === 'PENDING' ||
-    serverSheet.status == null
-
-  if (!serverStillOpen) return null
-
-  const serverAssignee =
-    serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : null
-  const localAssignee = existing.assigneeUserId ?? null
-  const assigneeMismatch =
-    serverAssignee != null &&
-    localAssignee != null &&
-    serverAssignee !== localAssignee
-
-  // False positive: marked synced locally but server never received it.
-  if (existing.syncStatus === 'synced') {
-    return 'reset-draft'
-  }
-
-  // Another user picked up — clear stale completion from the previous assignee.
-  if (assigneeMismatch && existing.status === 'submitted') {
-    return 'reset-draft'
-  }
-
-  // Ownership revoked for a different assignee — reset; same assignee revival handles below.
-  if (
-    existing.syncStatus === 'failed' &&
-    isOwnershipReassignError(existing.syncError) &&
-    assigneeMismatch
-  ) {
-    return 'reset-draft'
-  }
-
-  // Legitimate local completion awaiting outbound sync — keep draft/submitted state.
-  if (existing.status === 'submitted' && existing.syncStatus === 'pending') {
-    return null
-  }
-
-  return null
-}
-
 function serverSheetMetadataPatch(
   serverSheet: ServerLogSheet,
   existing: LogSheet,
@@ -199,7 +140,7 @@ function serverSheetMetadataPatch(
       serverSheet.assigneeUserId != null
         ? toIdString(serverSheet.assigneeUserId)
         : existing.assigneeUserId,
-    ...(revivalUpdatesAfterReassign(existing, serverSheet) ?? {}),
+    ...(revivalUpdatesAfterReassign(existing, serverSheet, () => uuidv4()) ?? {}),
     ...extra
   }
 }
@@ -292,7 +233,7 @@ export async function mergeInboxIntoLocalSheets(
         bundle.sheet.assigneeUserId != null
           ? toIdString(bundle.sheet.assigneeUserId)
           : local.assigneeUserId,
-      ...revivalUpdatesAfterReassign(local, bundle.sheet)
+      ...revivalUpdatesAfterReassign(local, bundle.sheet, () => uuidv4())
     }
 
     if (extended) {
@@ -308,7 +249,6 @@ export async function mergeInboxIntoLocalSheets(
       local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED &&
       completedWithinDeadline(local)
     ) {
-      // Recover submissions wrongly marked expired while completion was on time.
       updates.syncError = undefined
       updates.syncStatus = 'pending'
     } else if (isLogSheetExpiredForSync({ ...local, dueAt, serverStatus }, now) && local.status === 'submitted') {
@@ -344,9 +284,10 @@ export async function expireStaleLocalDrafts(now = Date.now()): Promise<void> {
 export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Promise<void> {
   const assignedIds = new Set(assigned.map(s => toIdString(s.id)))
   const all = await getAllLogSheets()
+  const sessionUserId = await getSessionUserId()
 
   for (const local of all) {
-    if (local.status !== 'draft' || !local.serverId) continue
+    if (!local.serverId) continue
     if (local.syncStatus === 'synced') continue
     if (isInvalidLocalLogSheet(local)) continue
     if (isLogSheetExpired(local) || local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) continue
@@ -360,6 +301,22 @@ export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Pro
       local.serverStatus === 'PENDING'
 
     if (!wasOpen) continue
+
+    if (
+      local.status === 'submitted' &&
+      local.syncStatus === 'pending' &&
+      sessionUserId &&
+      resolveLocalWorkOwner(local) === sessionUserId
+    ) {
+      await archiveLocalWorkBeforeClear(local)
+      await updateLogSheet(local.localId, {
+        syncStatus: 'failed',
+        syncError: SYNC_OUTCOME_MESSAGES.REVOKED
+      })
+      continue
+    }
+
+    if (local.status !== 'draft') continue
 
     await updateLogSheet(local.localId, {
       syncStatus: 'failed',

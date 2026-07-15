@@ -22,17 +22,18 @@ import { toIdString } from '@/utils/ids'
 
 async function bindSessionUserContext(username: string): Promise<void> {
   const setSessionUserId = useAppStore.getState().setSessionUserId
+  let userId: string | null = null
   try {
     const bootstrap = await fetchBootstrap()
-    await activateUserSession(username, bootstrap.userId)
-    setSessionUserId(toIdString(bootstrap.userId))
+    userId = toIdString(bootstrap.userId)
   } catch {
     const lastUsername = await getLastSessionUsername()
     if (lastUsername === username) {
-      const cachedUserId = await getSessionUserId()
-      if (cachedUserId) setSessionUserId(cachedUserId)
+      userId = await getSessionUserId()
     }
   }
+  await activateUserSession(username, userId)
+  if (userId) setSessionUserId(userId)
 }
 
 export function useAuthInit(): void {

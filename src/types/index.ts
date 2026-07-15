@@ -214,6 +214,8 @@ export interface LogSheet {
   operatorName?: string
   /** Server assignee user id — used to isolate sheets between logins on a shared device. */
   assigneeUserId?: string
+  /** Device session user who entered/submitted local work (shared-tablet isolation). */
+  localOwnerUserId?: string
   /** Local workflow: draft = in progress on device, submitted = ready to sync */
   status: 'draft' | 'submitted'
   /** Server lifecycle status from last inbox/claim sync */
@@ -229,4 +231,13 @@ export interface LogSheet {
   clientActionId?: string
   createdAt: number
   updatedAt: number
+}
+
+/** Frozen copy of a log sheet for one user on a shared tablet (key: serverId:userId). */
+export interface LogSheetUserArchive {
+  id: string
+  serverId: string
+  userId: string
+  sheet: LogSheet
+  archivedAt: number
 }

@@ -68,4 +68,27 @@ describe('mergeEntriesPreservingFormData', () => {
     expect(merged[0].createdAt).toBe(1_600_000_000_000)
     expect(merged[0].updatedAt).toBe(1_600_000_200_000)
   })
+
+  it('uses server form data when preserveLocal is false', () => {
+    const existing: LogSheetEntryData[] = [
+      {
+        assetId: '42',
+        assetName: 'Pump A',
+        subFunctionCode: 'SF-01',
+        subFunctionTag: 'T1',
+        classId: '7',
+        formData: { temp: 30 },
+        createdAt: 1_600_000_000_000,
+        updatedAt: 1_600_000_200_000
+      }
+    ]
+
+    const merged = mergeEntriesPreservingFormData([serverEntry], existing, {
+      preserveLocal: false
+    })
+
+    expect(merged[0].formData).toEqual({ temp: 10 })
+    expect(merged[0].createdAt).toBe(1_700_000_000_000)
+    expect(merged[0].updatedAt).toBe(1_700_000_050_000)
+  })
 })

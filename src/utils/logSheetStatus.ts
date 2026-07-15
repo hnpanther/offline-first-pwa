@@ -1,8 +1,10 @@
 import type { LogSheet } from '@/types'
+import { parseArchivedLogSheetViewId } from '@/services/storage/logSheetArchive'
 
 export const SYNC_OUTCOME_MESSAGES = {
   EXPIRED: 'مهلت تکمیل این کار گذشته است و امکان سینک وجود ندارد.',
   REVOKED: 'این کار دیگر به شما تعلق ندارد و قابل ادامه نیست.',
+  REASSIGNED: 'این کار به اپراتور دیگری واگذار شده است.',
   SUPERSEDED: 'این کار قبلاً توسط شخص دیگری ثبت شده و مورد شما قابل سینک نیست.',
   DUPLICATE: 'این ارسال قبلاً ثبت شده است.',
   ERROR: 'خطا در ارسال به سرور.'
@@ -51,6 +53,11 @@ export function isSupersededSyncError(syncError?: string): boolean {
 export function isRevokedSyncError(syncError?: string): boolean {
   if (!syncError) return false
   return syncError === SYNC_OUTCOME_MESSAGES.REVOKED
+}
+
+export function isReassignedSyncError(syncError?: string): boolean {
+  if (!syncError) return false
+  return syncError === SYNC_OUTCOME_MESSAGES.REASSIGNED
 }
 
 /** Work removed from assignee (supervisor release/reassign or shared-tablet block). */
@@ -169,6 +176,7 @@ export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = Date.now())
 
 /** Submitted sheets awaiting sync stay in the active list; revoked assignments go to history. */
 export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+  if (parseArchivedLogSheetViewId(sheet.localId)) return false
   if (isInvalidLocalLogSheet(sheet)) return false
   if (isRevokedAssignment(sheet)) return false
   if (isExpiredDraft(sheet, now)) return false
@@ -177,8 +185,23 @@ export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
   return false
 }
 
-/** Synced/failed submissions, revoked work, and expired local drafts belong in history. */
+/** Archived snapshot from a shared-tablet user switch (read-only history). */
+export function isArchivedSessionSnapshot(sheet: Pick<LogSheet, 'localId'>): boolean {
+  return parseArchivedLogSheetViewId(sheet.localId) != null
+}
+
+/** Work blocked because supervisor reassigned / shared-tablet handoff. */
+export function isReassignedAwayFromUser(
+  sheet: Pick<LogSheet, 'localId' | 'status' | 'syncStatus' | 'syncError'>
+): boolean {
+  if (isArchivedSessionSnapshot(sheet)) return true
+  if (isRevokedAssignment(sheet)) return true
+  return sheet.syncStatus === 'failed' && isReassignedSyncError(sheet.syncError)
+}
+
+/** Synced/failed submissions, revoked work, archived snapshots, and expired local drafts belong in history. */
 export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+  if (isArchivedSessionSnapshot(sheet)) return true
   if (isRevokedAssignment(sheet)) return true
   if (sheet.status === 'submitted') {
     return sheet.syncStatus === 'synced' || sheet.syncStatus === 'failed'
@@ -189,8 +212,8 @@ export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
 export function resolveLocalLogSheetStatusChip(
   sheet: LogSheet
 ): { label: string; color: 'primary' | 'warning' | 'success' | 'error' | 'default' } {
-  if (isRevokedAssignment(sheet)) {
-    return { label: 'از شما گرفته شده', color: 'warning' }
+  if (isReassignedAwayFromUser(sheet)) {
+    return { label: 'واگذار شده به اپراتور دیگر', color: 'warning' }
   }
   if (sheet.status === 'submitted') {
     if (sheet.syncStatus === 'synced') {
