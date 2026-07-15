@@ -113,6 +113,10 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src')
       }
     },
+    test: {
+      environment: 'node',
+      include: ['src/**/*.test.ts']
+    },
     server: {
       host: '0.0.0.0',
       port: 5173,

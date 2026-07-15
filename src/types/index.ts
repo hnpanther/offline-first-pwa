@@ -195,6 +195,10 @@ export interface LogSheetEntryData {
   nfcTagId?: string
   classId: string          // was assetTypeId
   formData: Record<string, unknown>  // filled by operator
+  /** Device time when form data was first saved (epoch millis). */
+  createdAt?: number
+  /** Device time of the latest edit (epoch millis). */
+  updatedAt?: number
 }
 
 export interface LogSheet {

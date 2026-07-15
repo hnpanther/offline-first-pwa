@@ -103,6 +103,8 @@ export interface ServerLogSheetEntry {
   nfcTagId?: string | null
   classId?: number | null
   formData?: Record<string, unknown> | null
+  createdAt?: number | null
+  updatedAt?: number | null
 }
 
 export interface LogSheetContextDto {
@@ -322,6 +324,8 @@ export interface ApiLogSheetEntry {
   nfcTagId?: string
   classId: number
   formData: Record<string, unknown>
+  createdAt?: number
+  updatedAt?: number
 }
 
 /** Payload shape expected by POST /api/log-sheets/batch */

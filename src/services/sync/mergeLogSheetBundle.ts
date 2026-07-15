@@ -141,8 +141,13 @@ export async function mergeBundleContextToDb(
 
 export function mapServerEntryToLocal(
   entry: ServerLogSheetEntry,
-  formData: Record<string, unknown> = {}
+  existing?: LogSheetEntryData
 ): LogSheetEntryData {
+  const localForm = existing?.formData ?? {}
+  const serverForm = entry.formData ?? {}
+  const formData =
+    Object.keys(localForm).length > 0 ? localForm : serverForm
+
   return {
     assetId: toIdString(entry.assetId),
     assetName: entry.assetName ?? '',
@@ -150,20 +155,22 @@ export function mapServerEntryToLocal(
     subFunctionTag: entry.subFunctionTag ?? '',
     nfcTagId: entry.nfcTagId ?? undefined,
     classId: toIdString(entry.classId),
-    formData: Object.keys(formData).length > 0 ? formData : (entry.formData ?? {})
+    formData,
+    createdAt: existing?.createdAt ?? entry.createdAt ?? undefined,
+    updatedAt: existing?.updatedAt ?? entry.updatedAt ?? undefined
   }
 }
 
-/** Merge server entries with any locally saved form values (same assetId). */
+/** Merge server entries with locally saved form values and timestamps (same assetId). */
 export function mergeEntriesPreservingFormData(
   serverEntries: ServerLogSheetEntry[],
   existingEntries?: LogSheetEntryData[]
 ): LogSheetEntryData[] {
-  const formByAsset = new Map(
-    (existingEntries ?? []).map(e => [toIdString(e.assetId), e.formData ?? {}])
+  const existingByAsset = new Map(
+    (existingEntries ?? []).map(e => [toIdString(e.assetId), e])
   )
   return serverEntries.map(entry =>
-    mapServerEntryToLocal(entry, formByAsset.get(toIdString(entry.assetId)) ?? {})
+    mapServerEntryToLocal(entry, existingByAsset.get(toIdString(entry.assetId)))
   )
 }
 

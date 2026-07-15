@@ -58,6 +58,9 @@ import {
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
 import { evaluateEntryCompletion } from '@/utils/entryCompletion'
+import { applyEntrySaveTimestamps } from '@/utils/entryTimestamps'
+import { formatJalaliDateTime } from '@/utils/formatDate'
+import { EntryTimestampsMeta } from '@/components/logsheet/EntryTimestampsMeta'
 import { getFieldsForClass } from '@/services/storage/fieldDefinitions'
 import type { FieldDefinition } from '@/types/sync'
 import { t } from '@/i18n'
@@ -70,8 +73,7 @@ import { isLogSheetAccessibleToUser } from '@/services/auth/sessionContext'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
 
-const formatDate = (ts: number) =>
-  new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
+const formatDate = formatJalaliDateTime
 
 async function loadAssetClassesForEntries(
   entries: LogSheetEntryData[]
@@ -188,6 +190,10 @@ function AssetFillDialog({
                   {t.logSheet.nfcTag}: {entry.nfcTagId}
                 </Typography>
               )}
+              <EntryTimestampsMeta
+                createdAt={entry.createdAt}
+                updatedAt={entry.updatedAt}
+              />
             </Box>
             {assetClass && (
               <Chip label={assetClass.name} size="small" color="secondary" />
@@ -502,7 +508,7 @@ export function LogSheetFillPage() {
     setSaveError(null)
     try {
       const updatedEntries = logSheet.entries.map(e =>
-        e.assetId === assetId ? { ...e, formData } : e
+        e.assetId === assetId ? applyEntrySaveTimestamps(e, formData) : e
       )
       await updateLogSheet(localId, { entries: updatedEntries })
       const refreshed = await getLogSheet(localId)
@@ -1044,6 +1050,10 @@ export function LogSheetFillPage() {
                         />
                       )}
                     </Box>
+                    <EntryTimestampsMeta
+                      createdAt={entry.createdAt}
+                      updatedAt={entry.updatedAt}
+                    />
                   </Box>
 
                   {/* Field fill count */}
