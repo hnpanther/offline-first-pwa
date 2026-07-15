@@ -54,6 +54,8 @@ export interface FieldValidation {
   /** Regex string — converted to RegExp at runtime for react-hook-form */
   pattern?: string
   options?: Array<{ value: string; label: string }>
+  /** When true, numeric field shows ± toggle and accepts negative values. Auto-detected if any min < 0. */
+  allowNegative?: boolean
 }
 
 /**

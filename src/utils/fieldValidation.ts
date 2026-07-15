@@ -103,3 +103,62 @@ export function severityMessage(severity: FieldValidationSeverity): string | nul
   if (severity === 'danger') return FIELD_VALIDATION_MESSAGES.danger
   return null
 }
+
+/** Whether a numeric field should accept negative values (± toggle + signed input). */
+export function allowsNegative(validation?: FieldValidation | Record<string, unknown>): boolean {
+  const v = validation as Record<string, unknown> | undefined
+  if (v?.allowNegative === true) return true
+  if (v?.allowNegative === false) return false
+
+  const wr = warningRange(validation)
+  const dr = dangerRange(validation)
+  if (wr.min != null && wr.min < 0) return true
+  if (dr.min != null && dr.min < 0) return true
+  if (v && 'min' in v) {
+    const legacyMin = toNumber(v.min)
+    if (legacyMin != null && legacyMin < 0) return true
+  }
+  return false
+}
+
+const UNSIGNED_NUMERIC_INPUT = /^\d*\.?\d*$/
+const SIGNED_NUMERIC_INPUT = /^-?\d*\.?\d*$/
+
+/** Restrict keystrokes/paste to a valid in-progress decimal literal. */
+export function filterNumericInput(raw: string, allowNegative: boolean): string {
+  const trimmed = raw.replace(/\s/g, '')
+  if (!trimmed) return ''
+
+  const pattern = allowNegative ? SIGNED_NUMERIC_INPUT : UNSIGNED_NUMERIC_INPUT
+  let result = ''
+  for (const ch of trimmed) {
+    const candidate = result + ch
+    if (pattern.test(candidate)) result = candidate
+  }
+  return result
+}
+
+export function formatNumericDisplay(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : ''
+  }
+  return String(value)
+}
+
+/** Normalize partial input on blur — drop lone "-" or trailing "." */
+export function normalizeNumericOnBlur(raw: string, allowNegative: boolean): string {
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed === '-' || trimmed === '.' || trimmed === '-.') return ''
+  if (!allowNegative && trimmed.startsWith('-')) return trimmed.replace(/^-/, '')
+  if (trimmed.endsWith('.')) return trimmed.slice(0, -1)
+  return trimmed
+}
+
+/** Flip sign for ± control — keeps absolute value, toggles leading minus. */
+export function toggleNumericSign(value: unknown): string {
+  const text = formatNumericDisplay(value).trim()
+  if (!text || text === '-' || text === '.' || text === '-.') return text.startsWith('-') ? '' : '-'
+  if (text.startsWith('-')) return text.slice(1)
+  return `-${text}`
+}

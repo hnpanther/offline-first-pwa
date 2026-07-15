@@ -9,15 +9,22 @@ import {
   FormControlLabel,
   FormGroup,
   FormLabel,
-  Box
+  Box,
+  InputAdornment,
+  IconButton
 } from '@mui/material'
-import { Controller, useWatch, type Control, type RegisterOptions } from 'react-hook-form'
+import { Controller, useWatch, type Control, type RegisterOptions, type ControllerRenderProps } from 'react-hook-form'
 import type { FormField } from '@/types'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
 import {
   evaluateNumericSeverity,
   severityMessage,
   validationSummaryFa,
+  allowsNegative,
+  filterNumericInput,
+  formatNumericDisplay,
+  normalizeNumericOnBlur,
+  toggleNumericSign,
   type FieldValidationSeverity
 } from '@/utils/fieldValidation'
 import type { FieldValidation } from '@/types/sync'
@@ -43,14 +50,114 @@ function rangeFeedbackColor(severity: FieldValidationSeverity): 'warning.main' |
   return undefined
 }
 
+function resolveRangeValidation(
+  field: FormField,
+  rangeValidation?: FieldValidation
+): FieldValidation | undefined {
+  if (rangeValidation) return rangeValidation
+  if (field.type !== 'number' || (field.min == null && field.max == null)) return undefined
+  return { min: field.min, max: field.max }
+}
+
+interface NumericFieldInputProps {
+  field: FormField
+  label: string
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  f: ControllerRenderProps<any, string>
+  error?: string
+  rangeSeverity: FieldValidationSeverity
+  helper: { text: string; color?: 'warning.main' | 'error.main' } | null
+  allowNegative: boolean
+}
+
+function NumericFieldInput({
+  field,
+  label,
+  f,
+  error,
+  rangeSeverity,
+  helper,
+  allowNegative
+}: NumericFieldInputProps) {
+  return (
+    <TextField
+      name={f.name}
+      inputRef={f.ref}
+      onBlur={() => {
+        const normalized = normalizeNumericOnBlur(formatNumericDisplay(f.value), allowNegative)
+        if (normalized !== formatNumericDisplay(f.value)) {
+          f.onChange(normalized)
+        }
+        f.onBlur()
+      }}
+      value={formatNumericDisplay(f.value)}
+      onChange={e => {
+        f.onChange(filterNumericInput(e.target.value, allowNegative))
+      }}
+      label={label}
+      type="text"
+      placeholder={field.placeholder}
+      error={!!error || rangeSeverity === 'danger'}
+      helperText={helper?.text}
+      FormHelperTextProps={
+        helper?.color ? { sx: { color: helper.color, fontWeight: 600 } } : undefined
+      }
+      fullWidth
+      size="medium"
+      inputProps={{
+        inputMode: 'decimal',
+        dir: 'ltr',
+        autoComplete: 'off'
+      }}
+      InputProps={
+        allowNegative
+          ? {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton
+                    aria-label="تغییر علامت عدد"
+                    edge="end"
+                    size="small"
+                    tabIndex={-1}
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => f.onChange(toggleNumericSign(f.value))}
+                    sx={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 36 }}
+                  >
+                    ±
+                  </IconButton>
+                </InputAdornment>
+              )
+            }
+          : undefined
+      }
+      sx={{
+        '& .MuiOutlinedInput-root': { overflow: 'visible' },
+        '& input': { textAlign: 'left' },
+        ...(rangeSeverity === 'warning' && {
+          '& .MuiOutlinedInput-notchedOutline': { borderColor: 'warning.main' }
+        }),
+        ...(rangeSeverity === 'danger' && {
+          '& .MuiOutlinedInput-notchedOutline': { borderColor: 'error.main' }
+        })
+      }}
+    />
+  )
+}
+
 export function DynamicFormField({ field, control, error, rules, rangeValidation }: DynamicFormFieldProps) {
   const label = field.required ? `${field.label} *` : field.label
   const options = normalizeFieldOptions(field.options)
-  const watchedValue = useWatch({ control, name: field.name, disabled: field.type !== 'number' || !rangeValidation })
-  const rangeSummary = field.type === 'number' ? validationSummaryFa(rangeValidation) : null
+  const effectiveRangeValidation = resolveRangeValidation(field, rangeValidation)
+  const signedNumeric = field.type === 'number' && allowsNegative(effectiveRangeValidation)
+  const watchedValue = useWatch({
+    control,
+    name: field.name,
+    disabled: field.type !== 'number' || !effectiveRangeValidation
+  })
+  const rangeSummary = field.type === 'number' ? validationSummaryFa(effectiveRangeValidation) : null
   const rangeSeverity =
-    field.type === 'number' && rangeValidation
-      ? evaluateNumericSeverity(watchedValue, rangeValidation)
+    field.type === 'number' && effectiveRangeValidation
+      ? evaluateNumericSeverity(watchedValue, effectiveRangeValidation)
       : 'ok'
   const rangeFeedback = severityMessage(rangeSeverity)
 
@@ -71,8 +178,30 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
   )
 
   switch (field.type) {
-    case 'text':
     case 'number':
+      return (
+        <Controller
+          name={field.name}
+          control={control}
+          defaultValue={field.defaultValue ?? ''}
+          rules={effectiveRules}
+          render={({ field: f }) => (
+            <Box>
+              <NumericFieldInput
+                field={field}
+                label={label}
+                f={f}
+                error={error}
+                rangeSeverity={rangeSeverity}
+                helper={helper}
+                allowNegative={signedNumeric}
+              />
+            </Box>
+          )}
+        />
+      )
+
+    case 'text':
     case 'textarea':
       return (
         <Controller
@@ -85,7 +214,7 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
               <TextField
                 {...f}
                 label={label}
-                type={field.type === 'number' ? 'number' : 'text'}
+                type="text"
                 multiline={field.type === 'textarea'}
                 rows={field.type === 'textarea' ? 3 : undefined}
                 placeholder={field.placeholder}
