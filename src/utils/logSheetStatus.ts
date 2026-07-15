@@ -30,12 +30,16 @@ export function isLogSheetExpiredForSync(
   sheet: Pick<LogSheet, 'dueAt' | 'serverStatus' | 'status' | 'completedAt' | 'submittedAt'>,
   now = Date.now()
 ): boolean {
+  if (sheet.serverStatus === 'EXPIRED') return true
+
   if (sheet.status === 'submitted') {
     const completedAt = sheet.completedAt ?? sheet.submittedAt
     if (completedAt != null && sheet.dueAt != null) {
+      // On-time offline completion stays sync-eligible even after wall-clock dueAt passes.
       return completedAt > sheet.dueAt
     }
   }
+
   return isLogSheetExpired(sheet, now)
 }
 
@@ -47,6 +51,18 @@ export function isSupersededSyncError(syncError?: string): boolean {
 export function isRevokedSyncError(syncError?: string): boolean {
   if (!syncError) return false
   return syncError === SYNC_OUTCOME_MESSAGES.REVOKED
+}
+
+/** Work removed from assignee (supervisor release/reassign or shared-tablet block). */
+export function isRevokedAssignment(
+  sheet: Pick<LogSheet, 'status' | 'syncStatus' | 'syncError'>
+): boolean {
+  return sheet.syncStatus === 'failed' && isRevokedSyncError(sheet.syncError)
+}
+
+/** Only truly terminal states — revoked assignments may return after supervisor reassign. */
+export function isInvalidLocalLogSheet(sheet: Pick<LogSheet, 'syncError'>): boolean {
+  return isSupersededSyncError(sheet.syncError)
 }
 
 /** Local REVOKED or server message that the sheet is no longer assigned to this user. */
@@ -79,10 +95,6 @@ export function normalizeLogSheetSyncError(
     return SYNC_OUTCOME_MESSAGES.REVOKED
   }
   return message
-}
-
-export function isInvalidLocalLogSheet(sheet: Pick<LogSheet, 'syncError'>): boolean {
-  return isSupersededSyncError(sheet.syncError) || isRevokedSyncError(sheet.syncError)
 }
 
 export function syncOutcomeMessage(outcome?: string, error?: string | null): string {
@@ -155,17 +167,19 @@ export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = Date.now())
   return isLogSheetExpired(sheet, now) || isExpiredDraft(sheet, now)
 }
 
-/** Submitted sheets awaiting sync stay in the active list; synced/failed go to history. */
+/** Submitted sheets awaiting sync stay in the active list; revoked assignments go to history. */
 export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
   if (isInvalidLocalLogSheet(sheet)) return false
+  if (isRevokedAssignment(sheet)) return false
   if (isExpiredDraft(sheet, now)) return false
   if (sheet.status === 'draft') return true
   if (sheet.status === 'submitted' && sheet.syncStatus !== 'synced') return true
   return false
 }
 
-/** Synced/failed submissions and expired local drafts belong in history. */
+/** Synced/failed submissions, revoked work, and expired local drafts belong in history. */
 export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+  if (isRevokedAssignment(sheet)) return true
   if (sheet.status === 'submitted') {
     return sheet.syncStatus === 'synced' || sheet.syncStatus === 'failed'
   }
@@ -175,6 +189,9 @@ export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
 export function resolveLocalLogSheetStatusChip(
   sheet: LogSheet
 ): { label: string; color: 'primary' | 'warning' | 'success' | 'error' | 'default' } {
+  if (isRevokedAssignment(sheet)) {
+    return { label: 'از شما گرفته شده', color: 'warning' }
+  }
   if (sheet.status === 'submitted') {
     if (sheet.syncStatus === 'synced') {
       return { label: 'ارسال شده', color: 'success' }

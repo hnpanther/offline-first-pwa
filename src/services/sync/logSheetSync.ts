@@ -14,7 +14,7 @@ import {
 } from '@/services/api'
 import type { LogSheet } from '@/types'
 import { toIdString } from '@/utils/ids'
-import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isOwnershipReassignError } from '@/utils/logSheetStatus'
+import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, isOwnershipReassignError, completedWithinDeadline } from '@/utils/logSheetStatus'
 import {
   mergeBundleContextToDb,
   mergeEntriesPreservingFormData,
@@ -302,6 +302,15 @@ export async function mergeInboxIntoLocalSheets(
           updates.syncStatus = 'pending'
         }
       }
+    } else if (
+      local.status === 'submitted' &&
+      local.syncStatus === 'failed' &&
+      local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED &&
+      completedWithinDeadline(local)
+    ) {
+      // Recover submissions wrongly marked expired while completion was on time.
+      updates.syncError = undefined
+      updates.syncStatus = 'pending'
     } else if (isLogSheetExpiredForSync({ ...local, dueAt, serverStatus }, now) && local.status === 'submitted') {
       updates.serverStatus = 'EXPIRED'
       updates.syncStatus = 'failed'

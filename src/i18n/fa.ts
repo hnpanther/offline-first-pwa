@@ -206,6 +206,8 @@ const fa = {
     recheckAssignmentSynced: 'کار با موفقیت به سرور ارسال شد.',
     recheckAssignmentSyncFailed: 'انتساب برگشت، اما ارسال به سرور ناموفق بود.',
     recheckAssignmentStillRevoked: 'این کار هنوز در کارتابل شما نیست.',
+    revokedAssignmentHint:
+      'این کار از شما گرفته شده است. داده‌های واردشده روی دستگاه حفظ شده‌اند. در صورت انتساب مجدد، «بررسی مجدد انتساب» را بزنید.',
     saveDraft: 'ذخیره پیش‌نویس',
     noAssets: 'هیچ Asset ای در این محدوده یافت نشد',
     noLogSheets: 'هیچ Log Sheet ای ثبت نشده',

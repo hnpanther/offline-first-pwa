@@ -35,7 +35,7 @@ import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
 import { toIdString } from '@/utils/ids'
 import { isSupervisorRole } from '@/types/auth'
-import { isInvalidLocalLogSheet, SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLocalLogSheetStatusChip } from '@/utils/logSheetStatus'
+import { SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLocalLogSheetStatusChip, isRevokedAssignment, isSupersededSyncError } from '@/utils/logSheetStatus'
 import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
@@ -176,9 +176,8 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const handleOpenAssigned = async (sheet: ServerLogSheet) => {
     const serverId = toIdString(sheet.id)
     const existing = await getLogSheetByServerId(serverId)
-    const backInMyInbox = inboxAssigned.some(s => toIdString(s.id) === serverId)
-    if (existing && isInvalidLocalLogSheet(existing) && !backInMyInbox) {
-      setActionError(SYNC_OUTCOME_MESSAGES.REVOKED)
+    if (existing && isSupersededSyncError(existing.syncError)) {
+      setActionError(SYNC_OUTCOME_MESSAGES.SUPERSEDED)
       return
     }
     if (!existing && !canUseServer) {
@@ -330,6 +329,13 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const syncStatusLabel = (log: LogSheet) => resolveLocalLogSheetStatusChip(log).label
 
   const syncStatusColor = (log: LogSheet) => resolveLocalLogSheetStatusChip(log).color
+
+  const historyCardBorderColor = (log: LogSheet) => {
+    if (isRevokedAssignment(log)) return 'warning.main'
+    if (log.status === 'submitted' && log.syncStatus === 'synced') return 'success.main'
+    if (log.syncStatus === 'failed') return 'error.main'
+    return 'grey.400'
+  }
 
   const renderServerCard = (
     sheet: ServerLogSheet,
@@ -636,7 +642,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
               <Card
                 key={log.localId}
                 variant="outlined"
-                sx={{ borderRight: '4px solid', borderRightColor: 'success.main' }}
+                sx={{ borderRight: '4px solid', borderRightColor: historyCardBorderColor(log) }}
               >
                 <CardContent sx={{ pb: '8px !important' }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>

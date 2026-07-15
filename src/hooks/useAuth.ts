@@ -9,7 +9,8 @@ import {
   activateUserSession,
   clearUserSessionContext,
   getLastSessionUsername,
-  getSessionUserId
+  getSessionUserId,
+  reviveOwnedSubmittedQueueOnLogin
 } from '@/services/auth/sessionContext'
 import { login as apiLogin, fetchBootstrap } from '@/services/api'
 import { setUnauthorizedHandler } from '@/services/api/client'
@@ -52,6 +53,9 @@ export function useAuthInit(): void {
         const lastUsername = await getLastSessionUsername()
         if (lastUsername === session.username) {
           const userId = await getSessionUserId()
+          if (userId) {
+            await reviveOwnedSubmittedQueueOnLogin(userId)
+          }
           setSessionUserId(userId)
         }
       } else {

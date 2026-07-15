@@ -220,9 +220,12 @@ class SyncManager {
   }
 
   private async markExpiredSheets(): Promise<void> {
+    const userId = await getSessionUserId()
     const all = await getAllLogSheets()
     for (const ls of all) {
       if (ls.status !== 'submitted' || ls.syncStatus === 'synced') continue
+      // Shared tablet: never expire another assignee's queued submission.
+      if (ls.assigneeUserId && userId && ls.assigneeUserId !== userId) continue
       if (!isLogSheetExpiredForSync(ls)) continue
       await updateLogSheet(ls.localId, {
         syncStatus: 'failed',

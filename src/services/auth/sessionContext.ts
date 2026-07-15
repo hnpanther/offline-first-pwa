@@ -3,10 +3,16 @@
  * Ensures inbox cache and open drafts from a previous login are not shown to the next user.
  */
 
+import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
 import { getAllLogSheets, updateLogSheet } from '@/services/storage'
 import { clearInboxSnapshot } from '@/services/storage/inboxCache'
-import { SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
+import {
+  SYNC_OUTCOME_MESSAGES,
+  completedWithinDeadline,
+  isRevokedSyncError,
+  isSupersededSyncError
+} from '@/utils/logSheetStatus'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet } from '@/types'
 
@@ -53,6 +59,40 @@ async function isolateSheetsNotOwnedBy(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Restore this user's outbound queue after another user used the shared tablet.
+ * Local REVOKED is a device-side block only — not a server decision.
+ */
+export async function reviveOwnedSubmittedQueueOnLogin(userId: string): Promise<void> {
+  const all = await getAllLogSheets()
+  for (const sheet of all) {
+    if (!shouldReviveOwnedSubmission(sheet, userId)) continue
+
+    await updateLogSheet(sheet.localId, {
+      syncError: undefined,
+      syncStatus: 'pending',
+      clientActionId: uuidv4()
+    })
+  }
+}
+
+function shouldReviveOwnedSubmission(sheet: LogSheet, userId: string): boolean {
+  if (sheet.status !== 'submitted' || sheet.syncStatus === 'synced') return false
+  if (!sheet.assigneeUserId || sheet.assigneeUserId !== userId) return false
+  if (isSupersededSyncError(sheet.syncError)) return false
+
+  if (isRevokedSyncError(sheet.syncError)) return true
+
+  if (
+    sheet.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED &&
+    completedWithinDeadline(sheet)
+  ) {
+    return true
+  }
+
+  return false
+}
+
 /** Call after successful login once userId is known (from bootstrap). */
 export async function activateUserSession(
   username: string,
@@ -68,6 +108,8 @@ export async function activateUserSession(
     await clearInboxSnapshot()
     await isolateSheetsNotOwnedBy(userIdStr)
   }
+
+  await reviveOwnedSubmittedQueueOnLogin(userIdStr)
 }
 
 export async function clearUserSessionContext(): Promise<void> {

@@ -52,12 +52,14 @@ import {
   isExpiredDraft,
   shouldShowLogSheetExpiryAlert,
   isSupersededSyncError,
-  isInvalidLocalLogSheet,
   isOwnershipReassignError,
-  isRevokedSyncError,
+  isRevokedAssignment,
   resolveLocalLogSheetStatusChip,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
+import { evaluateEntryCompletion } from '@/utils/entryCompletion'
+import { getFieldsForClass } from '@/services/storage/fieldDefinitions'
+import type { FieldDefinition } from '@/types/sync'
 import { t } from '@/i18n'
 import { applyLogSheetBundle } from '@/services/sync/logSheetSync'
 import { fetchLogSheetBundle } from '@/services/api'
@@ -291,6 +293,7 @@ export function LogSheetFillPage() {
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
+  const [fieldDefsByClass, setFieldDefsByClass] = useState<Map<string, FieldDefinition[]>>(new Map())
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -314,6 +317,22 @@ export function LogSheetFillPage() {
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
   const [confirmRevertOpen, setConfirmRevertOpen] = useState(false)
   const [rechecking, setRechecking] = useState(false)
+
+  const loadFieldDefsForEntries = useCallback(async (entries: LogSheetEntryData[]) => {
+    const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
+    const pairs = await Promise.all(
+      classIds.map(async classId => [classId, await getFieldsForClass(classId)] as const)
+    )
+    setFieldDefsByClass(new Map(pairs))
+  }, [])
+
+  const getEntryCompletion = useCallback(
+    (entry: LogSheetEntryData) => {
+      const defs = fieldDefsByClass.get(toIdString(entry.classId)) ?? []
+      return evaluateEntryCompletion(entry, defs)
+    },
+    [fieldDefsByClass]
+  )
 
   // -------------------------------------------------------------------------
   // Load
@@ -348,6 +367,7 @@ export function LogSheetFillPage() {
 
         const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
         const classes = await loadAssetClassesForEntries(entries)
+        await loadFieldDefsForEntries(entries)
         setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
         if (nfcTagsBackfilled && localId) {
@@ -360,7 +380,7 @@ export function LogSheetFillPage() {
       }
     }
     void load()
-  }, [localId, authSession, sessionUserId, redirectIfNotAccessible])
+  }, [localId, authSession, sessionUserId, redirectIfNotAccessible, loadFieldDefsForEntries])
 
   // Refresh local sheet when inbox sync updates dueAt / status from server
   useEffect(() => {
@@ -369,12 +389,13 @@ export function LogSheetFillPage() {
       if (!sheet) return
       if (redirectIfNotAccessible(sheet)) return
       const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
+      await loadFieldDefsForEntries(entries)
       setLogSheet({ ...sheet, entries })
       if (nfcTagsBackfilled) {
         await updateLogSheet(localId, { entries })
       }
     })
-  }, [inboxLastSyncAt, localId, redirectIfNotAccessible])
+  }, [inboxLastSyncAt, localId, redirectIfNotAccessible, loadFieldDefsForEntries])
 
   // Clear stale NFC tag when entering / leaving this page
   useEffect(() => {
@@ -468,12 +489,6 @@ export function LogSheetFillPage() {
     (classId: string) => assetClasses.find(c => c.id === classId),
     [assetClasses]
   )
-
-  const countFilledFields = (entry: LogSheetEntryData) =>
-    Object.values(entry.formData).filter(
-      v => v !== undefined && v !== null && v !== '' &&
-        !(Array.isArray(v) && v.length === 0)
-    ).length
 
   // -------------------------------------------------------------------------
   // Save single entry
@@ -657,17 +672,17 @@ export function LogSheetFillPage() {
   const showExpiryAlert = shouldShowLogSheetExpiryAlert(logSheet)
   const statusChip = resolveLocalLogSheetStatusChip(logSheet)
   const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
-  const isRevoked = logSheet.syncStatus === 'failed' && isRevokedSyncError(logSheet.syncError)
-  const isInvalid = isInvalidLocalLogSheet(logSheet)
+  const isRevoked = isRevokedAssignment(logSheet)
+  const backInMyInbox =
+    !!logSheet.serverId && inboxAssignedIds.has(toIdString(logSheet.serverId))
   const canRevertToDraft = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline).ok
   const canRecheckAssignment =
-    canUseServer && isOwnershipReassignError(logSheet.syncError)
-  const canEdit = !isSubmitted && !isExpired && !isInvalid
+    canUseServer && (isOwnershipReassignError(logSheet.syncError) || isRevoked)
+  const canEdit =
+    !isSubmitted && !isExpired && !isSuperseded && (!isRevoked || backInMyInbox)
   const entries = logSheet.entries ?? []
   const totalCount = entries.length
-  const filledCount = entries.filter(
-    e => countFilledFields(e) > 0
-  ).length
+  const filledCount = entries.filter(e => getEntryCompletion(e).isComplete).length
 
   return (
     <Box sx={{ maxWidth: 720, mx: 'auto' }}>
@@ -740,9 +755,9 @@ export function LogSheetFillPage() {
         </Alert>
       )}
 
-      {isRevoked && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {SYNC_OUTCOME_MESSAGES.REVOKED}
+      {isRevoked && !backInMyInbox && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {t.logSheet.revokedAssignmentHint}
         </Alert>
       )}
 
@@ -954,10 +969,10 @@ export function LogSheetFillPage() {
       <Stack spacing={1}>
         {entries.map(entry => {
           const assetClass = getAssetClass(entry.classId)
-          const totalFields = assetClass?.fields?.length ?? 0
-          const filledFields = countFilledFields(entry)
-          const isFilled = totalFields > 0 && filledFields >= totalFields
-          const isPartial = filledFields > 0 && !isFilled
+          const completion = getEntryCompletion(entry)
+          const { filledCount: filledFields, totalCount: totalFields, isComplete: isFilled, hasData } =
+            completion
+          const isPartial = hasData && !isFilled
 
           return (
             <Card
