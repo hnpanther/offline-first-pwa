@@ -26,15 +26,27 @@ function baseSheet(overrides: Partial<LogSheet> = {}): LogSheet {
 }
 
 describe('isHistoryLogSheet', () => {
-  it('treats archived view ids as history with reassigned chip', () => {
+  it('treats archived view ids as history with reassigned chip when marked reassigned', () => {
     const sheet = baseSheet({
       localId: archivedLogSheetViewId('100', '1'),
-      syncStatus: 'pending'
+      syncStatus: 'failed',
+      syncError: SYNC_OUTCOME_MESSAGES.REASSIGNED
     })
 
     expect(isHistoryLogSheet(sheet)).toBe(true)
     expect(isActiveLogSheet(sheet)).toBe(false)
     expect(resolveLocalLogSheetStatusChip(sheet).label).toBe('واگذار شده به اپراتور دیگر')
+  })
+
+  it('shows archived completed work as sent', () => {
+    const sheet = baseSheet({
+      localId: archivedLogSheetViewId('100', '1'),
+      status: 'submitted',
+      syncStatus: 'synced',
+      syncError: undefined
+    })
+
+    expect(resolveLocalLogSheetStatusChip(sheet).label).toBe('ارسال شده')
   })
 
   it('treats revoked submitted sheets as history', () => {
@@ -45,5 +57,14 @@ describe('isHistoryLogSheet', () => {
 
     expect(isHistoryLogSheet(sheet)).toBe(true)
     expect(resolveLocalLogSheetStatusChip(sheet).label).toBe('واگذار شده به اپراتور دیگر')
+  })
+
+  it('prefers synced chip over stale revoke flag', () => {
+    const sheet = baseSheet({
+      syncStatus: 'synced',
+      syncError: SYNC_OUTCOME_MESSAGES.REVOKED
+    })
+
+    expect(resolveLocalLogSheetStatusChip(sheet).label).toBe('ارسال شده')
   })
 })

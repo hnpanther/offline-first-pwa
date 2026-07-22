@@ -13,6 +13,7 @@ import { submitRecordsBatch, submitLogSheetsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getAuthSession } from '@/services/auth'
 import { getSessionUserId, isLogSheetOutboundOwnedByUser } from '@/services/auth/sessionContext'
+import { removeArchivedLogSheet } from '@/services/storage/logSheetArchive'
 import { hasPermission } from '@/types/auth'
 import {
   isLogSheetExpiredForSync,
@@ -160,6 +161,11 @@ class SyncManager {
               serverStatus: 'SUBMITTED',
               syncError: undefined
             })
+            const ownerId = await getSessionUserId()
+            const serverId = toIdString(result.serverId ?? ls.serverId)
+            if (ownerId && serverId) {
+              await removeArchivedLogSheet(serverId, ownerId)
+            }
             syncedCount++
             continue
           }
@@ -172,6 +178,10 @@ class SyncManager {
               serverStatus: 'SUBMITTED',
               syncError: undefined
             })
+            const ownerId = await getSessionUserId()
+            if (ownerId) {
+              await removeArchivedLogSheet(toIdString(result.serverId), ownerId)
+            }
             syncedCount++
             continue
           }

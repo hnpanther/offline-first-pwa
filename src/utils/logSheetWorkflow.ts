@@ -32,8 +32,10 @@ export function alignLocalWorkflowWithServer(
   const serverAssignee = serverAssigneeId(serverSheet.assigneeUserId)
   const assigneeMismatch = isAssigneeMismatch(existing, serverAssignee)
 
+  // Local already synced successfully — do not wipe it just because inbox lag still
+  // shows the sheet as open. Only clear when ownership actually moved away.
   if (existing.syncStatus === 'synced') {
-    return 'reset-draft'
+    return assigneeMismatch ? 'reset-draft' : null
   }
 
   if (assigneeMismatch && existing.status === 'submitted') {

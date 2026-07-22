@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { toBatchPayload } from '@/services/sync/logSheetSync'
+import { toBatchPayload, shouldMarkDraftRevokedForMissingInbox } from '@/services/sync/logSheetSync'
 import type { LogSheet } from '@/types'
+import { SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 
 describe('toBatchPayload', () => {
   it('includes entry createdAt and updatedAt in batch payload', () => {
@@ -68,5 +69,66 @@ describe('toBatchPayload', () => {
 
     expect(payload.entries?.[0].createdAt).toBeUndefined()
     expect(payload.entries?.[0].updatedAt).toBeUndefined()
+  })
+})
+
+describe('shouldMarkDraftRevokedForMissingInbox', () => {
+  const assigned = new Set(['10'])
+
+  it('does not revoke submitted pending sheets missing from inbox', () => {
+    expect(
+      shouldMarkDraftRevokedForMissingInbox(
+        {
+          serverId: '20',
+          status: 'submitted',
+          syncStatus: 'pending',
+          serverStatus: 'IN_PROGRESS'
+        },
+        assigned
+      )
+    ).toBe(false)
+  })
+
+  it('revokes open drafts missing from inbox', () => {
+    expect(
+      shouldMarkDraftRevokedForMissingInbox(
+        {
+          serverId: '20',
+          status: 'draft',
+          syncStatus: 'pending',
+          serverStatus: 'IN_PROGRESS'
+        },
+        assigned
+      )
+    ).toBe(true)
+  })
+
+  it('keeps drafts that are still assigned', () => {
+    expect(
+      shouldMarkDraftRevokedForMissingInbox(
+        {
+          serverId: '10',
+          status: 'draft',
+          syncStatus: 'pending',
+          serverStatus: 'ASSIGNED'
+        },
+        assigned
+      )
+    ).toBe(false)
+  })
+
+  it('ignores expired drafts', () => {
+    expect(
+      shouldMarkDraftRevokedForMissingInbox(
+        {
+          serverId: '20',
+          status: 'draft',
+          syncStatus: 'failed',
+          serverStatus: 'EXPIRED',
+          syncError: SYNC_OUTCOME_MESSAGES.EXPIRED
+        },
+        assigned
+      )
+    ).toBe(false)
   })
 })

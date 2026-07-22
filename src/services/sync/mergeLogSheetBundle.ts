@@ -21,6 +21,7 @@ import type {
 import type { FieldDefinition } from '@/types/sync'
 import { toIdString } from '@/utils/ids'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
+import { toFormFields } from '@/services/storage/fieldDefinitions'
 import type { LogSheetEntryData } from '@/types'
 
 async function bulkPutIfAny<T extends { id: string }>(
@@ -70,7 +71,8 @@ function normalizeAssetClasses(items: AssetClass[] = []): AssetClass[] {
   return items.map(c => ({
     ...c,
     id: toIdString(c.id),
-    fields: c.fields ?? []
+    // Accept server FieldDefinition-shaped embeds and local FormField shape.
+    fields: toFormFields(c.fields as unknown[])
   }))
 }
 

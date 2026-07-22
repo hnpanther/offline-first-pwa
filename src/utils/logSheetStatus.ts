@@ -194,7 +194,9 @@ export function isArchivedSessionSnapshot(sheet: Pick<LogSheet, 'localId'>): boo
 export function isReassignedAwayFromUser(
   sheet: Pick<LogSheet, 'localId' | 'status' | 'syncStatus' | 'syncError'>
 ): boolean {
-  if (isArchivedSessionSnapshot(sheet)) return true
+  if (isArchivedSessionSnapshot(sheet)) {
+    return isRevokedAssignment(sheet) || isReassignedSyncError(sheet.syncError)
+  }
   if (isRevokedAssignment(sheet)) return true
   return sheet.syncStatus === 'failed' && isReassignedSyncError(sheet.syncError)
 }
@@ -212,13 +214,14 @@ export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
 export function resolveLocalLogSheetStatusChip(
   sheet: LogSheet
 ): { label: string; color: 'primary' | 'warning' | 'success' | 'error' | 'default' } {
+  // Synced completion wins over any stale revoke/reassign flag.
+  if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') {
+    return { label: 'ارسال شده', color: 'success' }
+  }
   if (isReassignedAwayFromUser(sheet)) {
     return { label: 'واگذار شده به اپراتور دیگر', color: 'warning' }
   }
   if (sheet.status === 'submitted') {
-    if (sheet.syncStatus === 'synced') {
-      return { label: 'ارسال شده', color: 'success' }
-    }
     if (sheet.syncStatus === 'failed') {
       return { label: 'خطا در ارسال', color: 'error' }
     }

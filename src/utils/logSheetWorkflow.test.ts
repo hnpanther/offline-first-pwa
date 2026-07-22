@@ -67,6 +67,30 @@ describe('alignLocalWorkflowWithServer', () => {
 
     expect(alignLocalWorkflowWithServer(local, server)).toBe('mark-synced')
   })
+
+  it('keeps local synced sheet when inbox lag still shows open for same assignee', () => {
+    const local = baseLocal({
+      status: 'submitted',
+      syncStatus: 'synced',
+      assigneeUserId: '2',
+      localOwnerUserId: '2'
+    })
+    const server = baseServer({ assigneeUserId: 2, status: 'IN_PROGRESS' })
+
+    expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
+  })
+
+  it('resets synced sheet only when assignee actually changed', () => {
+    const local = baseLocal({
+      status: 'submitted',
+      syncStatus: 'synced',
+      assigneeUserId: '1',
+      localOwnerUserId: '1'
+    })
+    const server = baseServer({ assigneeUserId: 2, status: 'IN_PROGRESS' })
+
+    expect(alignLocalWorkflowWithServer(local, server)).toBe('reset-draft')
+  })
 })
 
 describe('shouldPreserveLocalFormData', () => {

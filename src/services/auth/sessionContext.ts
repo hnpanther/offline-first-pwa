@@ -9,7 +9,8 @@ import { getAllLogSheets, updateLogSheet } from '@/services/storage'
 import {
   archiveLogSheetForUser,
   archivedLogSheetViewId,
-  getArchivedLogSheetsForUser
+  getArchivedLogSheetsForUser,
+  removeArchivedLogSheet
 } from '@/services/storage/logSheetArchive'
 import { clearInboxSnapshot } from '@/services/storage/inboxCache'
 import {
@@ -207,14 +208,37 @@ export async function loadLogSheetsForSessionUser(
     if (!archived.serverId) continue
     const serverId = toIdString(archived.serverId)
     const liveRow = liveByServer.get(serverId)
-    if (!liveRow || resolveLocalWorkOwner(liveRow) !== userId) {
-      merged.push({
-        ...archived,
-        localId: archivedLogSheetViewId(serverId, userId),
-        syncStatus: 'failed',
-        syncError: SYNC_OUTCOME_MESSAGES.REASSIGNED
-      })
+
+    // Live owned copy always wins — drop stale archive rows (e.g. false revoke during sync).
+    if (liveRow && resolveLocalWorkOwner(liveRow) === userId) {
+      if (
+        liveRow.status === 'submitted' &&
+        liveRow.syncStatus === 'synced'
+      ) {
+        await removeArchivedLogSheet(serverId, userId)
+      }
+      continue
     }
+
+    const completedOwnWork =
+      archived.status === 'submitted' &&
+      (archived.syncStatus === 'synced' || archived.serverStatus === 'SUBMITTED')
+
+    merged.push({
+      ...archived,
+      localId: archivedLogSheetViewId(serverId, userId),
+      ...(completedOwnWork
+        ? {
+            status: 'submitted' as const,
+            syncStatus: 'synced' as const,
+            syncError: undefined,
+            serverStatus: archived.serverStatus ?? 'SUBMITTED'
+          }
+        : {
+            syncStatus: 'failed' as const,
+            syncError: SYNC_OUTCOME_MESSAGES.REASSIGNED
+          })
+    })
   }
 
   return merged.sort((a, b) => b.updatedAt - a.updatedAt)

@@ -8,7 +8,7 @@ import {
   resetLogSheetToOpenDraft
 } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
-import { archiveLocalWorkBeforeClear } from '@/services/storage/logSheetArchive'
+import { archiveLocalWorkBeforeClear, removeArchivedLogSheet } from '@/services/storage/logSheetArchive'
 import {
   fetchLogSheetBundle,
   type LogSheetBundleDto,
@@ -17,7 +17,6 @@ import {
 import type { LogSheet } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isInvalidLocalLogSheet, completedWithinDeadline } from '@/utils/logSheetStatus'
-import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import {
   mergeBundleContextToDb,
   mergeEntriesPreservingFormData,
@@ -77,6 +76,9 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         entries,
         ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
       })
+      if (sessionUserId) {
+        await removeArchivedLogSheet(serverId, sessionUserId)
+      }
       const updated = await getLogSheetByServerId(serverId)
       if (updated) return updated
       return existing
@@ -284,45 +286,42 @@ export async function expireStaleLocalDrafts(now = Date.now()): Promise<void> {
 export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Promise<void> {
   const assignedIds = new Set(assigned.map(s => toIdString(s.id)))
   const all = await getAllLogSheets()
-  const sessionUserId = await getSessionUserId()
 
   for (const local of all) {
-    if (!local.serverId) continue
-    if (local.syncStatus === 'synced') continue
-    if (isInvalidLocalLogSheet(local)) continue
-    if (isLogSheetExpired(local) || local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) continue
-
-    const serverId = toIdString(local.serverId)
-    if (assignedIds.has(serverId)) continue
-
-    const wasOpen =
-      local.serverStatus === 'ASSIGNED' ||
-      local.serverStatus === 'IN_PROGRESS' ||
-      local.serverStatus === 'PENDING'
-
-    if (!wasOpen) continue
-
-    if (
-      local.status === 'submitted' &&
-      local.syncStatus === 'pending' &&
-      sessionUserId &&
-      resolveLocalWorkOwner(local) === sessionUserId
-    ) {
-      await archiveLocalWorkBeforeClear(local)
-      await updateLogSheet(local.localId, {
-        syncStatus: 'failed',
-        syncError: SYNC_OUTCOME_MESSAGES.REVOKED
-      })
-      continue
-    }
-
-    if (local.status !== 'draft') continue
+    if (!shouldMarkDraftRevokedForMissingInbox(local, assignedIds)) continue
 
     await updateLogSheet(local.localId, {
       syncStatus: 'failed',
       syncError: SYNC_OUTCOME_MESSAGES.REVOKED
     })
   }
+}
+
+/**
+ * Only open drafts that disappeared from the assigned inbox are treated as revoked.
+ * Submitted+pending sheets must NOT be revoked here: after a successful server submit they
+ * also leave the inbox, and marking them REVOKED races with outbound sync (false
+ * "واگذار شده به اپراتور دیگر" until the user opens the sheet and refreshes from bundle).
+ * Real ownership loss for submitted work is handled by batch submit outcomes instead.
+ */
+export function shouldMarkDraftRevokedForMissingInbox(
+  local: Pick<LogSheet, 'serverId' | 'status' | 'syncStatus' | 'serverStatus' | 'syncError'>,
+  assignedIds: ReadonlySet<string>
+): boolean {
+  if (!local.serverId) return false
+  if (local.status !== 'draft') return false
+  if (local.syncStatus === 'synced') return false
+  if (isInvalidLocalLogSheet(local)) return false
+  if (isLogSheetExpired(local) || local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) return false
+
+  const serverId = toIdString(local.serverId)
+  if (assignedIds.has(serverId)) return false
+
+  return (
+    local.serverStatus === 'ASSIGNED' ||
+    local.serverStatus === 'IN_PROGRESS' ||
+    local.serverStatus === 'PENDING'
+  )
 }
 
 export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogSheetBatchItem {

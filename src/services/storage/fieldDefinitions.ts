@@ -7,72 +7,106 @@
 
 import { db } from './db'
 import { Repository } from './repository'
-import type { FieldDefinition, FieldDataType } from '@/types/sync'
-import type { FormField } from '@/types'
+import type { FieldDefinition } from '@/types/sync'
+import type { FormField, FormFieldType } from '@/types'
 import { toIdString } from '@/utils/ids'
 
 const repo = new Repository<FieldDefinition>(db.fieldDefinitions, 'field_definition')
+
+/**
+ * Server embeds fields as FieldDefinition-shaped maps ({ key, dataType }).
+ * Local admin UI uses FormField ({ name, type }). Accept both.
+ */
+export function toFormFields(fields: unknown[] | undefined | null): FormField[] {
+  if (!fields?.length) return []
+  return fields
+    .map(raw => {
+      const f = raw as Record<string, unknown>
+      const name = String(f.name ?? f.key ?? '').trim()
+      if (!name) return null
+      const type = String(f.type ?? f.dataType ?? 'text').toLowerCase() as FormFieldType
+      const validation =
+        f.validation && typeof f.validation === 'object'
+          ? (f.validation as Record<string, unknown>)
+          : undefined
+      const field: FormField = {
+        name,
+        label: String(f.label ?? name),
+        type,
+        required: Boolean(f.required),
+        unit: f.unit != null ? String(f.unit) : undefined,
+        min:
+          typeof f.min === 'number'
+            ? f.min
+            : typeof validation?.min === 'number'
+              ? validation.min
+              : undefined,
+        max:
+          typeof f.max === 'number'
+            ? f.max
+            : typeof validation?.max === 'number'
+              ? validation.max
+              : undefined,
+        options: Array.isArray(f.options)
+          ? (f.options as FormField['options'])
+          : Array.isArray(validation?.options)
+            ? (validation.options as FormField['options'])
+            : undefined,
+        helperText: f.helperText != null ? String(f.helperText) : undefined
+      }
+      return field
+    })
+    .filter((f): f is FormField => f != null)
+}
+
+/** Prefer server/numeric ids and newer rows when the same key appears twice. */
+function dedupeByKey(fields: FieldDefinition[]): FieldDefinition[] {
+  const byKey = new Map<string, FieldDefinition>()
+  for (const field of fields) {
+    if (!field.key) continue
+    const prev = byKey.get(field.key)
+    if (!prev) {
+      byKey.set(field.key, field)
+      continue
+    }
+    const prevIsUuid = prev.id.includes('-')
+    const nextIsUuid = field.id.includes('-')
+    if (prevIsUuid && !nextIsUuid) {
+      byKey.set(field.key, field)
+      continue
+    }
+    if (prevIsUuid === nextIsUuid && (field.updatedAt ?? 0) >= (prev.updatedAt ?? 0)) {
+      byKey.set(field.key, field)
+    }
+  }
+  return [...byKey.values()]
+}
 
 /** Sorted by order, excludes soft-deleted entries. */
 export async function getFieldsForClass(classId: string | undefined): Promise<FieldDefinition[]> {
   const normalizedClassId = toIdString(classId)
   if (!normalizedClassId) return []
 
-  let fields = (await repo.findAll()).filter(
-    f => toIdString(f.classId) === normalizedClassId
+  let fields = dedupeByKey(
+    (await repo.findAll()).filter(f => toIdString(f.classId) === normalizedClassId)
   )
 
-  const assetClass = await db.assetClasses.get(normalizedClassId)
-
-  if (assetClass?.fields?.length) {
-    const classKeys = assetClass.fields.map(f => f.name)
-    const defKeys = fields.map(f => f.key)
-    const needsSync =
-      fields.length === 0 ||
-      classKeys.length !== defKeys.length ||
-      classKeys.some((k, i) => k !== defKeys[i]) ||
-      assetClass.fields.some((f, i) => {
-        const def = fields[i]
-        return !def || def.label !== f.label || def.dataType !== f.type
-      })
-
-    if (needsSync) {
-      await syncClassFieldsFromFormFields(normalizedClassId, assetClass.fields)
-      fields = (await repo.findAll()).filter(
-        f => toIdString(f.classId) === normalizedClassId
-      )
-    }
+  // Authoritative rows from the server bundle — never re-import AssetClass.fields on top.
+  if (fields.length > 0) {
+    return fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
   }
 
-  if (fields.length === 0 && assetClass?.fields?.length) {
-    return formFieldsToDefinitions(normalizedClassId, assetClass.fields)
+  // Legacy fallback: only when fieldDefinitions is empty.
+  const assetClass = await db.assetClasses.get(normalizedClassId)
+  const embedded = toFormFields(assetClass?.fields)
+  if (embedded.length > 0) {
+    await syncClassFieldsFromFormFields(normalizedClassId, embedded)
+    fields = dedupeByKey(
+      (await repo.findAll()).filter(f => toIdString(f.classId) === normalizedClassId)
+    )
   }
 
   return fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-}
-
-function formFieldsToDefinitions(classId: string, fields: FormField[]): FieldDefinition[] {
-  const now = Date.now()
-  return fields.map((field, index) => ({
-    id: `embedded-${classId}-${field.name}`,
-    classId,
-    key: field.name,
-    label: field.label,
-    dataType: field.type as FieldDataType,
-    unit: field.unit,
-    required: field.required ?? false,
-    validation: {
-      min: field.min,
-      max: field.max,
-      options: field.options
-    },
-    order: index,
-    createdAt: now,
-    updatedAt: now,
-    version: 1,
-    deleted: false,
-    synced: true
-  }))
 }
 
 export async function getFieldDefinition(id: string): Promise<FieldDefinition | undefined> {
@@ -138,12 +172,13 @@ export async function syncClassFieldsFromFormFields(
   classId: string,
   fields: FormField[]
 ): Promise<void> {
+  const formFields = toFormFields(fields)
   const existing = await repo.findWhere('classId', classId)
   const existingByKey = new Map(existing.map(f => [f.key, f]))
-  const newKeys = new Set(fields.map(f => f.name))
+  const newKeys = new Set(formFields.map(f => f.name))
 
   await Promise.all(
-    fields.map(async (field, index) => {
+    formFields.map(async (field, index) => {
       const data = formFieldToDefinitionData(field, classId, index)
       const match = existingByKey.get(field.name)
       if (match) {
