@@ -182,6 +182,7 @@ export type LogSheetServerStatus =
   | 'ASSIGNED'
   | 'IN_PROGRESS'
   | 'SUBMITTED'
+  | 'VOIDED'
   | 'EXPIRED'
   | 'CANCELLED'
 
