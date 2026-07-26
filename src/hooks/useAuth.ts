@@ -78,7 +78,7 @@ export function useAuthInit(): void {
       setSessionUserId(null)
       clearInbox()
       void clearUserSessionContext()
-      navigate('/login', { replace: true })
+      navigate('/login', { replace: true, state: { sessionEnded: true } })
     })
     return () => setUnauthorizedHandler(null)
   }, [navigate, setAuthSession, setSessionUserId, clearInbox])
