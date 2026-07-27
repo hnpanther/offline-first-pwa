@@ -10,6 +10,8 @@ This repository is the **mobile / frontend** companion to the Java backend:
 
 The UI is **Persian (RTL)**. This document is in English for developers and operators setting up the system.
 
+**AI coding agents:** start with [`AGENTS.md`](AGENTS.md) for architecture, invariants, and commands; use this README for full deployment and troubleshooting.
+
 ---
 
 ## Table of Contents
@@ -26,16 +28,19 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 10. [Installing the PWA on a Phone](#installing-the-pwa-on-a-phone)
 11. [Authentication and Roles](#authentication-and-roles)
 12. [Navigation and Permissions](#navigation-and-permissions)
-13. [Log Sheet Workflow](#log-sheet-workflow)
-14. [Offline Behavior](#offline-behavior)
-15. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
-16. [NFC](#nfc)
-17. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
-18. [Synchronization](#synchronization)
-19. [IndexedDB Schema](#indexeddb-schema)
-20. [API Contract](#api-contract)
-21. [Production Deployment](#production-deployment)
-22. [Troubleshooting](#troubleshooting)
+13. [Device Configuration (Settings)](#device-configuration-settings)
+14. [Dashboard](#dashboard)
+15. [Log Sheet Workflow](#log-sheet-workflow)
+16. [Offline Behavior](#offline-behavior)
+17. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
+18. [NFC](#nfc)
+19. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
+20. [Synchronization](#synchronization)
+21. [IndexedDB Schema](#indexeddb-schema)
+22. [Legacy DataRecords](#legacy-datarecords)
+23. [API Contract](#api-contract)
+24. [Production Deployment](#production-deployment)
+25. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -47,7 +52,8 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 - **Log sheet inbox (kartabl)** — assigned work, pickup pool, supervisor team view
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
-- **Background sync** — submitted log sheets and approved records push to the server when online
+- **Background sync** — submitted log sheets (and legacy DataRecords when permitted) push when online
+- **History & archives** — completed work plus per-user snapshots on shared tablets
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin master data and settings; supervisor assign/release/reassign
@@ -79,12 +85,12 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 | UI | React 18 + TypeScript |
 | Build | Vite 5 + `vite-plugin-pwa` (Workbox `generateSW`) |
 | Components | MUI v5, full RTL via `@emotion/cache` + `stylis-plugin-rtl` |
-| Local storage | Dexie 4 (IndexedDB), schema version **8** |
+| Local storage | Dexie 4 (IndexedDB), schema version **9** |
 | Global state | Zustand |
 | Forms | React Hook Form |
 | Routing | React Router v6 |
 | Font | Vazirmatn (self-hosted) |
-| i18n | Typed object in `src/i18n/fa.ts` (no i18next runtime) |
+| i18n | Custom module `src/i18n/` + `fa.ts` (`i18next` is listed in `package.json` but not used in app code) |
 | Dev HTTPS | mkcert (`certs/`) or `@vitejs/plugin-basic-ssl` fallback |
 
 ---
@@ -105,9 +111,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
    /api/bootstrap, inbox bundles, batch
 ```
 
-**Core rule:** UI and hooks never call `fetch()` or `db` directly. All server access goes through `src/services/api/index.ts`. All IndexedDB access goes through `src/services/storage/index.ts`.
-
-**Layering:**
+**Layering (target):** Prefer `src/services/api/index.ts` for REST and `src/services/storage/index.ts` for IndexedDB. Hooks and most UI follow this; a few pages call the API module directly for operational actions (claim, bundle refresh on fill page).
 
 ```
 Server REST API
@@ -131,11 +135,11 @@ src/
 │   ├── forms/          DynamicClassForm, DynamicFormField, DataEntryForm
 │   ├── layout/         AppLayout, Header, Sidebar
 │   ├── logsheet/       AssignOperatorDialog
-│   └── nfc/            NFCReader
+│   └── nfc/            NFCReader (standalone component; fill page uses inline NFC UI)
 ├── hooks/
 │   ├── useAuth.ts              Session restore, login/logout
 │   ├── useInboxSync.ts         Inbox pull + offline snapshot + pre-provision
-│   ├── useMasterDataSync.ts    Bootstrap pull on start / online (operational units only)
+│   ├── useMasterDataSync.ts    Bootstrap pull on start / online (operational units only; name is legacy)
 │   ├── useSync.ts              SyncManager lifecycle
 │   ├── useLogSheets.ts         Local log sheet list
 │   ├── useFieldDefinitions.ts  Field definitions per asset class
@@ -146,11 +150,12 @@ src/
 │   ├── LogSheetListPage.tsx    Inbox (active) + history
 │   ├── LogSheetFillPage.tsx    Fill log sheet + NFC
 │   ├── LogSheetTemplatePage.tsx
-│   ├── AdminPage.tsx           Master data CRUD
+│   ├── AdminPage.tsx           Master data CRUD (admin tablet UI; operators use bundles only)
+│   ├── RecordsPage.tsx         Legacy DataRecords UI (not routed — see Legacy DataRecords)
 │   └── SettingsPage.tsx          Admin only
 ├── services/
 │   ├── api/            client.ts + all endpoints (index.ts)
-│   ├── auth/           Session in IndexedDB
+│   ├── auth/           Session in IndexedDB + sessionContext (shared tablet isolation)
 │   ├── nfc/            Web NFC abstraction
 │   ├── storage/        Dexie db, repository, fieldDefinitions, inboxCache
 │   └── sync/           SyncManager, pullBootstrap, pullInbox, mergeLogSheetBundle, logSheetSync, cleanup
@@ -160,6 +165,7 @@ src/
 └── i18n/fa.ts          Persian UI strings
 
 certs/                  mkcert output (gitignored): cert.pem, key.pem, rootCA.crt
+tsconfig.vitest.json    TypeScript project for unit tests (vitest imports)
 scripts/
   setup-mkcert.ps1      Generate trusted LAN certificates + phone instructions
   generate-icons.js     PWA icons
@@ -179,6 +185,9 @@ scripts/
 | `npm run preview:mobile` | **4173** | Yes (mkcert) | **Real PWA test and install** | **Yes** |
 | `npm run setup:mkcert` | — | — | Create trusted dev certificates | — |
 | `npm run lint` | — | — | ESLint | — |
+| `npm test` | — | — | Vitest unit tests (`src/**/*.test.ts`; TypeScript via `tsconfig.vitest.json`) | — |
+
+**Typecheck:** `build` / `build:mobile` run `tsc` with test files excluded from `tsconfig.json`.
 
 ### Why two ports (5173 vs 4173)?
 
@@ -207,7 +216,7 @@ cd offline-first-pwa
 npm run dev              # http://localhost:5173
 ```
 
-API calls use the server URL from **Settings** (stored in IndexedDB). For local dev you can set `http://localhost:8081` in Settings after login (admin account).
+API calls use `serverUrl` from IndexedDB settings (initialized from `VITE_SERVER_URL` on first run). **Settings** is admin-only; for production tablets, set the correct URL at **build time** in `.env.mobile` (or have an admin save Settings once on each device). For local desktop dev, an admin can set `http://localhost:8081` in Settings after login, or use `dev:mobile` / `preview:mobile` so the app origin matches the configured URL and `/api` is proxied.
 
 ```bash
 npm run build
@@ -392,11 +401,13 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 | Role | Code | Typical access |
 |------|------|----------------|
 | Admin | `ADMIN`, `HIGH_USER` | Master data, log sheet templates, **Settings** |
-| Supervisor | `SUPERVISOR` (+ admin roles) | Team inbox, release, assign/reassign |
-| Senior operator | `SENIOR_OPERATOR` | Manual NFC tag entry (when setting off) |
-| Operator | default | Dashboard, log sheets, NFC |
+| Supervisor | `SUPERVISOR` (+ admin roles) | Team inbox, release, assign/reassign; manual NFC; pickup pool visibility per backend rules |
+| Senior operator | `SENIOR_OPERATOR` | Manual NFC tag entry (always); web fill permission |
+| Operator | `OPERATOR` | Dashboard, log sheets, NFC scan only (manual tag only if admin enabled **Allow manual tag entry** on the tablet) |
 
 Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnterTagManually()`.
+
+**Note:** `ADMIN` / `HIGH_USER` also get manual entry via permission `GET:/log-sheets/{id}/fill` if they use the mobile fill UI.
 
 ---
 
@@ -406,13 +417,60 @@ Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnter
 |-------|-----|
 | `/` | All authenticated users |
 | `/logsheets/active` | All — inbox + my work |
-| `/logsheets/history` | All — submitted local history |
+| `/logsheets/history` | All — completed / failed / archived snapshots (see below) |
 | `/logsheets/:localId` | All — fill page |
 | `/logsheet-templates` | Admin only (sidebar) |
-| `/master-data/*` | Admin only (sidebar) |
-| `/settings` | Admin only (`AdminRoute` + sidebar) |
+| `/master-data/*` | Admin only (sidebar) — edits IndexedDB via API; **does not** replace per-sheet bundle sync for operators |
+| `/settings` | Admin only (`AdminRoute` + sidebar) — server URL, sync interval, operator/location labels, **Allow manual tag entry** (applies to all users on that device) |
 
 Operators see Dashboard and Log Sheets only.
+
+Legacy route `/records` redirects to `/` (see [Legacy DataRecords](#legacy-datarecords)).
+
+---
+
+## Device Configuration (Settings)
+
+**Who:** `ADMIN` / `HIGH_USER` only (`/settings`).
+
+Settings are stored in IndexedDB (`settings` table, single row). They apply to **every user** on that tablet after save (not per login).
+
+| Field | Purpose |
+|-------|---------|
+| **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). |
+| **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
+| **Operator name / location** | Optional labels for legacy DataRecords and display metadata (log sheets use server `operatorName` from inbox). |
+| **Allow manual tag entry** | When on, all roles may type NFC IDs on the fill page. When off, only supervisor / senior operator / users with web fill permission. |
+
+### Server URL rules (`src/services/api/client.ts`)
+
+1. On first launch, settings are seeded from **`VITE_SERVER_URL`** in the build (`.env.mobile` for `build:mobile`).
+2. At request time, if `new URL(serverUrl).origin === window.location.origin`, the client uses **relative** paths (`/api/...`).
+3. Otherwise the client calls the configured absolute URL (e.g. direct `http://192.168.1.2:8081` — rare; bypasses nginx same-origin).
+
+| Deployment | Set `VITE_SERVER_URL` / Settings to |
+|------------|--------------------------------------|
+| nginx PWA + proxy | `https://192.168.1.4` (PWA origin only) |
+| Local `preview:mobile` | `https://<PC-LAN-IP>:4173` |
+| Local desktop dev (no proxy) | `http://localhost:8081` (only if API is on another origin than the Vite page) |
+
+**Production checklist:** build with `.env.mobile`, copy `dist/` to nginx, install CA on tablets, open PWA URL once as admin and confirm Settings → server URL matches that origin (or rely on build default if unchanged).
+
+---
+
+## Dashboard
+
+Route: `/` (all authenticated users).
+
+| UI block | Behavior |
+|----------|----------|
+| Welcome | `username` and `fullName` from JWT session |
+| Stat cards | **Total records** / **Today** count legacy `DataRecord` rows in IndexedDB (card links to **Active log sheets**, not a records page) |
+| Pending sync | From `SyncManager.getPendingCount()` — submitted log sheets owned by current user **plus** pending DataRecords if role has `POST:/api/records/batch` |
+| Quick actions | Jump to `/logsheets/active` and `/logsheets/history` |
+| Sync card | Last sync time, pending/failed counts, manual sync button when online |
+
+Primary operator workflow is **Log sheets → Active**, not the dashboard record stats.
 
 ---
 
@@ -470,6 +528,10 @@ The user does **not** need to open the sheet first. After one successful inbox s
 
 Submit is local only until sync succeeds.
 
+**Revert to draft (offline only):** If the sheet is locally submitted but not yet synced (`syncStatus: pending`), still before deadline, and the device is **effectively offline**, the operator may undo completion and return to editable draft (`revertLogSheetToDraft`). Not available after successful sync or while online.
+
+**Recheck assignment:** When sync failed with ownership/revoked errors, **Recheck assignment** refreshes inbox, retries outbound sync if needed, and updates local state (e.g. work returned to assignee after supervisor reassignment).
+
 ### 6. Status in My Work
 
 | Local state | Chip in inbox list |
@@ -477,6 +539,38 @@ Submit is local only until sync succeeds.
 | Draft, in progress | Server status (e.g. In progress) |
 | Submitted, not synced | **Completed — pending sync** |
 | Submitted, synced | **Sent** |
+
+### 7. Active inbox UI (`LogSheetListPage` — mode `active`)
+
+| Section | Source | Actions (online) |
+|---------|--------|------------------|
+| **My assigned** | `inbox.assigned[]` + local merge | Open / continue; status chips from local + server |
+| **Pickup pool** | `inbox.available[]` | **Claim** → `POST /api/log-sheets/{id}/claim` → bundle merged locally → fill page |
+| **Team open** | `inbox.teamOpen[]` (supervisor roles) | Open read-only context; **Release**, **Assign**, **Reassign** where permitted |
+
+Offline: last **inbox snapshot** still lists assigned/available/team metadata; claim/release/assign require network. Local drafts not in the current inbox snapshot may appear as extra cards when offline.
+
+**Refresh inbox** triggers `pullAndMergeInbox()` then optional outbound sync (unless skipped).
+
+### 8. History (`/logsheets/history`)
+
+List is built with `loadLogSheetsForSessionUser()` — live rows the current user may access **plus** archived copies from `logSheetUserArchives` on shared tablets.
+
+A sheet appears in **History** when `isHistoryLogSheet()` is true:
+
+| Condition | Meaning |
+|-----------|---------|
+| `status: submitted` and `syncStatus: synced` or `failed` | Finished or failed upload |
+| Revoked / reassigned away | Supervisor took work back or another user logged in |
+| Expired local draft | Missed deadline locally |
+| Archived snapshot | User B logged in while User A had work on device — A’s copy moved to archive |
+
+Opening a history item:
+
+- Normal `localId` → fill page in read-only or limited edit (submitted / archived).
+- Archived view id (`archivedLogSheetViewId`) → load from `logSheetUserArchives`; **view-only**; cannot edit or re-submit.
+
+When the original assignee returns and sync succeeds, stale archive rows for synced work are removed automatically.
 
 ---
 
@@ -495,6 +589,7 @@ Submit is local only until sync succeeds.
 | Field definitions from IndexedDB | Yes |
 | Local submit (queue for sync) | Yes |
 | View last inbox snapshot | Yes |
+| Open **History** (including archived snapshots) | Yes (view-only for archives) |
 
 ### Online only
 
@@ -520,7 +615,7 @@ Submit is local only until sync succeeds.
 - Inbox snapshot may show revoked work until next online sync.
 - Extended deadlines from supervisor apply after inbox sync.
 - Updated asset metadata (e.g. NFC tag change) applies on the next inbox bundle or online bundle refresh (server wins).
-- Shared tablet: logging in as a different user clears the previous inbox cache and isolates other users’ local work. See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
+- Shared tablet: logging in as a different user clears the previous inbox cache and isolates other users’ local work. Archived snapshots for each user are kept in `logSheetUserArchives` and appear under **History** (view-only). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
 
 ---
 
@@ -668,7 +763,15 @@ No network call. Works offline if entries were pre-provisioned or built when the
 
 ### Manual entry
 
-Controlled by Settings **Allow manual tag entry** (admin) and roles `SUPERVISOR` / `SENIOR_OPERATOR` (always allowed when setting is off).
+Who can type a tag ID instead of scanning (see `canEnterTagManually()` in `src/types/auth.ts`):
+
+| Condition | Effect |
+|-----------|--------|
+| Settings **Allow manual tag entry** = on (admin saves in Settings) | **All** roles, including `OPERATOR` |
+| Role `SUPERVISOR` or `SENIOR_OPERATOR` | Allowed even when the setting is off |
+| Permission `GET:/log-sheets/{id}/fill` in JWT | Allowed (e.g. `ADMIN`, `HIGH_USER`, senior/supervisor roles) |
+
+Plain operators on a shared tablet need the admin toggle **or** NFC. iOS has no Web NFC — enable manual entry or use Android for scanning.
 
 ---
 
@@ -705,9 +808,9 @@ Three separate paths:
 
 ```
 GET /api/bootstrap
-  → operationalUnits, userId, accessibleUnitIds, supervisorScopeUnitIds
-  → bulkPut operationalUnits in IndexedDB
-  → syncMeta.lastBootstrapAt = serverTime
+  → Response includes serverTime, userId, operationalUnits, accessibleUnitIds, supervisorScopeUnitIds, primaryUnitId
+  → Client persists: operationalUnits (bulkPut) + syncMeta.lastBootstrapAt = serverTime
+  → Unit scope for inbox/API is enforced on the server via JWT; scope ids in bootstrap are not stored locally today
 ```
 
 **No full plant hierarchy or assets** are downloaded. Reference data arrives per log sheet bundle only.
@@ -757,7 +860,7 @@ Log sheet batch payload includes `completedAt` (device completion time) and `cli
 
 ## IndexedDB Schema
 
-Dexie version **8** — main tables:
+Dexie version **9** — main tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -768,10 +871,40 @@ Dexie version **8** — main tables:
 | `locations`, `plantSystems`, `mainFunctions`, `subFunctions` | Hierarchy slice per active work |
 | `logSheetTemplates` | Log sheet templates (legacy / admin) |
 | `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
+| `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only) |
 | `operationalUnits` | From bootstrap |
 | `settings` | App settings (server URL, operator name, …) |
-| `syncMeta` | `authSession`, `lastBootstrapAt`, `inboxSnapshot`, `sessionUserId`, … |
+| `syncMeta` | Key/value store (see below) |
 | `outbox` | Future bidirectional sync infrastructure |
+
+**`syncMeta` keys:**
+
+| Key | Content |
+|-----|---------|
+| `authSession` | JWT session object |
+| `sessionUserId` | Backend user id for shared-tablet isolation |
+| `lastSessionUsername` | Previous login username (user switch detection) |
+| `lastBootstrapAt` | Timestamp of last successful bootstrap pull |
+| `inboxSnapshot` | Cached assigned / available / teamOpen lists |
+| `lastSeq` | Reserved for future incremental sync engine |
+
+Dexie keeps older schema versions in `db.ts` for upgrades; current store definition is **version 9**.
+
+---
+
+## Legacy DataRecords
+
+The first-generation flow stored standalone **`DataRecord`** rows in IndexedDB (`records` table) with optional NFC-linked assets. The **primary product path today is log sheets**; records remain for backward compatibility and sync.
+
+| Topic | Detail |
+|-------|--------|
+| UI | `RecordsPage.tsx` exists but **`/records` redirects to `/`** — no sidebar entry |
+| Dashboard stats | Still count local `DataRecord` rows (may be empty on new deployments) |
+| Outbound sync | `SyncManager` pushes pending records when JWT includes `POST:/api/records/batch` (typical admin / high-user roles, not plain operators) |
+| API | `POST /api/records/batch` — same client as log sheet batch |
+| Components | `DataEntryForm.tsx`, `useRecords.ts` — usable from code but not linked in main navigation |
+
+New field work should use **log sheets** only unless you explicitly re-enable a records UI route.
 
 ---
 
@@ -787,7 +920,7 @@ Backend: `backend-offline-first`, default port **8081**.
 |--------|------|---------|
 | GET | `/api/health` | Health check |
 | POST | `/api/auth/login` | Login → JWT |
-| GET | `/api/bootstrap` | Operational units + user context (no full master dump) |
+| GET | `/api/bootstrap` | Operational units + user context JSON (client stores units only; see [Synchronization](#synchronization)) |
 | GET | `/api/master-data` | Backward-compat alias → same as bootstrap |
 | GET | `/api/log-sheets/inbox` | Inbox (`assigned` = full bundles) |
 | GET | `/api/log-sheets/{id}/bundle` | Single sheet bundle (entries + scoped context) |
@@ -799,6 +932,18 @@ Backend: `backend-offline-first`, default port **8081**.
 | GET | `/api/asset-entries/nfc/{tagId}` | Global NFC lookup (optional; fill page uses local entries) |
 | POST | `/api/log-sheets/batch` | Push submitted log sheets |
 | POST | `/api/records/batch` | Push approved DataRecords |
+
+### Inbox bundle shape (`LogSheetBundleDto`)
+
+Each assigned item (and claim/bundle responses) contains:
+
+| Part | Contents |
+|------|----------|
+| `sheet` | Server log sheet metadata (`ServerLogSheet`) — status, dueAt, assignee, template, scope, … |
+| `entries` | Rows to fill (`ServerLogSheetEntry`) — assetId, assetName, nfcTagId, classId, formData, … |
+| `context` | Scoped reference slice for **this sheet only** — locations, systems, functions, subFunctions, assetEntries, assetClasses, fieldDefinitions, optional `scopeDisplayLabel` |
+
+Client merge: `mergeLogSheetBundle.ts` applies **server-wins** `bulkPut` for context tables and updates the local `logSheets` row + entries.
 
 ### Log sheet batch — important fields
 
@@ -1040,11 +1185,12 @@ curl -k https://192.168.1.4/api/health
 ### Step 4 — Tablet install
 
 1. Open `https://192.168.1.4` in Chrome (trusted lock after CA install).
-2. Log in.
-3. Wait for inbox sync (assigned work appears).
+2. Log in as **admin** once per device (recommended):
+   - **Settings** → confirm **Server URL** matches the PWA origin (`https://192.168.1.4`).
+   - Enable **Allow manual tag entry** if operators need typed NFC IDs (iOS or damaged tags).
+   - Optional: operator name / location for legacy DataRecords.
+3. Log in as field users; wait for inbox sync (assigned work appears).
 4. Chrome menu → **Install app** (or use the in-app install prompt).
-
----
 
 ### Step 5 — Subsequent deploys
 
@@ -1074,9 +1220,10 @@ Service Worker uses `autoUpdate` — tablets pick up the new build on next app o
 
 ### Empty log sheet / no assets
 
-- Inbox sync not run yet — open app online, wait for assigned bundles
+- Inbox sync not run yet — open app online, wait for assigned bundles (or tap **Refresh inbox**)
 - Work not in **assigned** (still in pickup pool) — claim first while online
 - Offline before first bundle sync for that sheet — open once online
+- Wrong `serverUrl` in Settings / build — must match PWA origin when using nginx or Vite proxy (see [Production Deployment](#production-deployment))
 
 ### Red SSL lock on phone (production)
 
@@ -1127,12 +1274,6 @@ PWA was installed from **5173** (dev server). Uninstall → `build:mobile` + `pr
 - `serverUrl` in Settings matches app origin
 - Phone and server reachable on same network (dev) or DNS (production)
 
-### Empty log sheet / no assets
-
-- Master data not pulled — go online, wait for sync or admin Settings sync
-- Template scope has no assets in local `assetEntries`
-- Inbox sync not run yet — open app online, refresh inbox
-
 ### Terminal: `WARNING: No certs/cert.pem`
 
 ```powershell
@@ -1147,7 +1288,8 @@ Should show **Completed — pending sync** if local `status: submitted`. Refresh
 
 ## Related Documentation
 
-- **`CLAUDE.md`** — detailed architecture notes for AI assistants (Persian)
+- **`AGENTS.md`** — concise guide for AI coding agents (architecture, invariants, commands)
+- **`README.md`** — full setup, deployment, troubleshooting for humans
 - **Backend** — `backend-offline-first` repository for server-side log sheet lifecycle, validation rules, and admin web UI
 
 ---
