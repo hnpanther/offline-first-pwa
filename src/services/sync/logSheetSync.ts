@@ -25,7 +25,8 @@ import {
 import {
   alignLocalWorkflowWithServer,
   shouldPreserveLocalFormData,
-  revivalUpdatesAfterReassign
+  revivalUpdatesAfterReassign,
+  resolveReopenedSheetUpdates
 } from '@/utils/logSheetWorkflow'
 
 export interface EnsureLocalLogSheetOptions {
@@ -240,31 +241,9 @@ export async function mergeInboxIntoLocalSheets(
 
     if (extended) {
       // The sheet reaching this point at all means it's currently in this operator's own
-      // "assigned" inbox bucket — the backend only puts ASSIGNED/IN_PROGRESS sheets there, so
-      // its current status is genuinely open and assigned to this operator right now. Combined
-      // with a future dueAt (checked above), any leftover `syncStatus: 'failed'` from an earlier
-      // rejected sync attempt (EXPIRED, CANCELLED, SUPERSEDED, or anything else) is stale by
-      // definition and safe to clear — deliberately NOT matched by comparing `local.syncError`
-      // against this client's own SYNC_OUTCOME_MESSAGES text: the stored message is instead the
-      // *backend's own* translated string (see ApiResponseSupport.localize / ErrorTranslator on
-      // the server), which uses different wording than this client's constants, so that
-      // comparison silently never matched a real backend-reported failure and left the sheet
-      // stuck showing its old error message even after being reopened.
-      if (local.syncStatus === 'failed') {
-        updates.syncError = undefined
-        if (local.status === 'submitted') {
-          updates.syncStatus = 'pending'
-          // The earlier rejected attempt's clientActionId was already recorded server-side as
-          // an idempotency key — for CANCELLED/SUPERSEDED that happens via voidSubmission's own
-          // actionLogger.record call (see LogSheetService.java). Reusing the same id on retry
-          // makes the server's replay guard (LogSheetActionLogger.isReplay) treat this as an
-          // already-processed duplicate: it returns outcome "DUPLICATE" without ever re-running
-          // the completion, and the client then wrongly marks the sheet as synced even though
-          // the server never actually received the data. A fresh id avoids that false match —
-          // same fix already applied for the REVOKED case in revivalUpdatesAfterReassign.
-          updates.clientActionId = uuidv4()
-        }
-      }
+      // "assigned" inbox bucket with a future dueAt — genuinely reopened. See
+      // resolveReopenedSheetUpdates for exactly which stale flags this clears and why.
+      Object.assign(updates, resolveReopenedSheetUpdates(local, () => uuidv4()))
     } else if (
       local.status === 'submitted' &&
       local.syncStatus === 'failed' &&

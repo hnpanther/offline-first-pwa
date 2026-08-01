@@ -113,3 +113,34 @@ export function revivalUpdatesAfterReassign(
   }
   return updates
 }
+
+/**
+ * Computes local field updates when a sheet reappears in this operator's own "assigned" inbox
+ * bucket with a future dueAt — i.e. a supervisor genuinely reopened/extended it. Whatever stale
+ * failure flag the local record is still carrying is cleared, covering two distinct cases:
+ *
+ * - A plain draft that expired before the operator ever got around to submitting it —
+ *   `expireStaleLocalDrafts` sets `syncError` directly and never touches `syncStatus`, so
+ *   gating this purely on `syncStatus === 'failed'` misses it entirely (there was no rejected
+ *   submission, there was no submission at all).
+ * - An already-submitted completion that got rejected (`syncStatus: 'failed'`) — only this case
+ *   also needs re-queuing for retry, with a *fresh* `clientActionId`: the earlier attempt's id
+ *   may already be recorded server-side as a used idempotency key (CANCELLED/SUPERSEDED both
+ *   route through the server's `voidSubmission`, which records it), so reusing it would make
+ *   the server's replay guard treat the retry as an already-processed duplicate and report
+ *   false success without ever re-running the completion.
+ */
+export function resolveReopenedSheetUpdates(
+  local: Pick<LogSheet, 'status' | 'syncStatus' | 'syncError'>,
+  newClientActionId: () => string
+): Partial<Pick<LogSheet, 'syncError' | 'syncStatus' | 'clientActionId'>> {
+  const updates: Partial<Pick<LogSheet, 'syncError' | 'syncStatus' | 'clientActionId'>> = {}
+  if (local.syncError != null) {
+    updates.syncError = undefined
+  }
+  if (local.status === 'submitted' && local.syncStatus === 'failed') {
+    updates.syncStatus = 'pending'
+    updates.clientActionId = newClientActionId()
+  }
+  return updates
+}

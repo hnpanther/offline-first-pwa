@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   alignLocalWorkflowWithServer,
   shouldPreserveLocalFormData,
-  revivalUpdatesAfterReassign
+  revivalUpdatesAfterReassign,
+  resolveReopenedSheetUpdates
 } from '@/utils/logSheetWorkflow'
 import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
@@ -158,5 +159,56 @@ describe('revivalUpdatesAfterReassign', () => {
       syncStatus: 'pending',
       clientActionId: 'new-action-id'
     })
+  })
+})
+
+describe('resolveReopenedSheetUpdates', () => {
+  // Regression guard: an operator claims/is assigned a task, it expires before they ever
+  // submit it (a plain draft — no failed submission attempt, so syncStatus was never touched),
+  // a supervisor extends the deadline. The draft must become editable again.
+  it('clears syncError on a plain draft that expired before ever being submitted', () => {
+    const local = { status: 'draft' as const, syncStatus: undefined, syncError: SYNC_OUTCOME_MESSAGES.EXPIRED }
+
+    const updates = resolveReopenedSheetUpdates(local, () => 'unused')
+
+    expect(updates).toEqual({ syncError: undefined })
+  })
+
+  it('clears a backend-translated syncError on a draft too, not just this client\'s own constants', () => {
+    const local = {
+      status: 'draft' as const,
+      syncStatus: undefined,
+      syncError: 'این لاگ‌شیت توسط سرپرست لغو شده است.'
+    }
+
+    const updates = resolveReopenedSheetUpdates(local, () => 'unused')
+
+    expect(updates).toEqual({ syncError: undefined })
+  })
+
+  it('re-queues an already-submitted-but-rejected sheet with a fresh clientActionId', () => {
+    const local = { status: 'submitted' as const, syncStatus: 'failed' as const, syncError: SYNC_OUTCOME_MESSAGES.CANCELLED }
+
+    const updates = resolveReopenedSheetUpdates(local, () => 'fresh-action-id')
+
+    expect(updates).toEqual({ syncError: undefined, syncStatus: 'pending', clientActionId: 'fresh-action-id' })
+  })
+
+  it('does not re-queue a still-editable draft even if it happens to carry a syncError', () => {
+    const local = { status: 'draft' as const, syncStatus: 'pending' as const, syncError: SYNC_OUTCOME_MESSAGES.EXPIRED }
+
+    const updates = resolveReopenedSheetUpdates(local, () => 'unused')
+
+    expect(updates).toEqual({ syncError: undefined })
+    expect(updates.syncStatus).toBeUndefined()
+    expect(updates.clientActionId).toBeUndefined()
+  })
+
+  it('is a no-op for an already-healthy sheet with no syncError', () => {
+    const local = { status: 'draft' as const, syncStatus: 'pending' as const, syncError: undefined }
+
+    const updates = resolveReopenedSheetUpdates(local, () => 'unused')
+
+    expect(updates).toEqual({})
   })
 })
