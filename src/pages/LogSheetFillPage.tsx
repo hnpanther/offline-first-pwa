@@ -54,6 +54,8 @@ import {
   canRevertSubmittedLogSheetToDraft,
   isLogSheetExpired,
   isExpiredDraft,
+  isLogSheetCancelled,
+  isCancelledDraft,
   shouldShowLogSheetExpiryAlert,
   isSupersededSyncError,
   isOwnershipReassignError,
@@ -707,18 +709,25 @@ export function LogSheetFillPage() {
   const isSynced = isSubmitted && logSheet.syncStatus === 'synced'
   const isExpired = isLogSheetExpired(logSheet) || isExpiredDraft(logSheet)
   const showExpiryAlert = shouldShowLogSheetExpiryAlert(logSheet)
+  const isCancelled = isLogSheetCancelled(logSheet) || isCancelledDraft(logSheet)
   const statusChip = resolveLocalLogSheetStatusChip(logSheet)
-  const isSuperseded = logSheet.syncStatus === 'failed' && isSupersededSyncError(logSheet.syncError)
+  const isSuperseded = isSupersededSyncError(logSheet)
   const isRevoked = isRevokedAssignment(logSheet)
   const backInMyInbox =
     !!logSheet.serverId && inboxAssignedIds.has(toIdString(logSheet.serverId))
   const canRevertToDraft = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline).ok
+  // Also offered for SUPERSEDED (already completed by someone else / taken over) and CANCELLED:
+  // both are reported as terminal at the time of the failed sync, but a supervisor can still
+  // reassign/reopen the sheet back to this operator afterwards — recheck picks that up the same
+  // way it already does for a revoked assignment (refreshInbox re-applies the fresh bundle if
+  // the sheet reappears in this operator's inbox, and retries the queued submit if it does).
   const canRecheckAssignment =
-    canUseServer && (isOwnershipReassignError(logSheet.syncError) || isRevoked)
+    canUseServer && (isOwnershipReassignError(logSheet.syncError) || isRevoked || isSuperseded || isCancelled)
   const canEdit =
     !isArchivedView &&
     !isSubmitted &&
     !isExpired &&
+    !isCancelled &&
     !isSuperseded &&
     (!isRevoked || backInMyInbox)
   const entries = logSheet.entries ?? []
@@ -796,6 +805,13 @@ export function LogSheetFillPage() {
         </Alert>
       )}
 
+      {!showExpiryAlert && isCancelled && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {SYNC_OUTCOME_MESSAGES.CANCELLED}
+          {!isOnline && ' پس از آنلاین شدن، در صورت بازگشایی مجدد توسط سرپرست، وضعیت به‌روز می‌شود.'}
+        </Alert>
+      )}
+
       {isRevoked && !backInMyInbox && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           {t.logSheet.revokedAssignmentHint}
@@ -825,7 +841,7 @@ export function LogSheetFillPage() {
         </Alert>
       )}
 
-      {logSheet.syncStatus === 'failed' && logSheet.syncError && !isSuperseded && !isExpired && (
+      {logSheet.syncStatus === 'failed' && logSheet.syncError && !isSuperseded && !isExpired && !isCancelled && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {logSheet.syncError}
         </Alert>

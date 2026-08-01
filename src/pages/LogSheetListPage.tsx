@@ -35,7 +35,7 @@ import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
 import { toIdString } from '@/utils/ids'
 import { isSupervisorRole } from '@/types/auth'
-import { SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLocalLogSheetStatusChip, isRevokedAssignment, isSupersededSyncError } from '@/utils/logSheetStatus'
+import { SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLocalLogSheetStatusChip, isRevokedAssignment, isSupersededSyncError, isCancelledDraft } from '@/utils/logSheetStatus'
 import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
@@ -58,6 +58,7 @@ function serverStatusLabel(status?: string | null): string {
     case 'PENDING': return 'در انتظار پیک‌آپ'
     case 'SUBMITTED': return 'ارسال شده'
     case 'EXPIRED': return 'منقضی'
+    case 'CANCELLED': return 'لغو شده'
     default: return status ?? '—'
   }
 }
@@ -183,7 +184,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const handleOpenAssigned = async (sheet: ServerLogSheet) => {
     const serverId = toIdString(sheet.id)
     const existing = await getLogSheetByServerId(serverId)
-    if (existing && isSupersededSyncError(existing.syncError)) {
+    if (existing && isSupersededSyncError(existing)) {
       setActionError(SYNC_OUTCOME_MESSAGES.SUPERSEDED)
       return
     }
@@ -339,6 +340,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
 
   const historyCardBorderColor = (log: LogSheet) => {
     if (isRevokedAssignment(log)) return 'warning.main'
+    if (isCancelledDraft(log)) return 'error.main'
     if (log.status === 'submitted' && log.syncStatus === 'synced') return 'success.main'
     if (log.syncStatus === 'failed') return 'error.main'
     return 'grey.400'

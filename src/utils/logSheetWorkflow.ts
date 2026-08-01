@@ -21,6 +21,13 @@ export function alignLocalWorkflowWithServer(
     return null
   }
 
+  // Same philosophy as EXPIRED above: a supervisor cancel is reopenable later via extend
+  // (mirrors how an expired sheet is un-expired), so the local draft is left in place —
+  // never silently wiped — and only flagged through `serverStatus`/chip logic.
+  if (serverSheet.status === 'CANCELLED') {
+    return null
+  }
+
   const serverStillOpen =
     serverSheet.status === 'ASSIGNED' ||
     serverSheet.status === 'IN_PROGRESS' ||

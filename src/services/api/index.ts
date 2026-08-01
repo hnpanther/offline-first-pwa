@@ -313,7 +313,7 @@ export interface LogSheetSubmitResult {
   localId: string
   serverId?: number | string
   error?: string | null
-  outcome?: 'SUBMITTED' | 'SUPERSEDED' | 'EXPIRED' | 'DUPLICATE' | 'ERROR'
+  outcome?: 'SUBMITTED' | 'SUPERSEDED' | 'EXPIRED' | 'CANCELLED' | 'DUPLICATE' | 'ERROR'
 }
 
 export interface ApiLogSheetEntry {

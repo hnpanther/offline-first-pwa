@@ -99,12 +99,14 @@ function shouldReviveOwnedSubmission(sheet: LogSheet, userId: string): boolean {
   if (sheet.status !== 'submitted' || sheet.syncStatus === 'synced') return false
   const owner = resolveLocalWorkOwner(sheet)
   if (!owner || owner !== userId) return false
-  if (isSupersededSyncError(sheet.syncError)) return false
+  if (isSupersededSyncError(sheet)) return false
 
   if (isRevokedSyncError(sheet.syncError)) return true
 
+  // serverStatus is the reliable signal here — syncError may instead hold the backend's own
+  // translated message (different wording than SYNC_OUTCOME_MESSAGES.EXPIRED on this client).
   if (
-    sheet.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED &&
+    (sheet.serverStatus === 'EXPIRED' || sheet.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) &&
     completedWithinDeadline(sheet)
   ) {
     return true

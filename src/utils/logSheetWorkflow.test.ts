@@ -91,6 +91,30 @@ describe('alignLocalWorkflowWithServer', () => {
 
     expect(alignLocalWorkflowWithServer(local, server)).toBe('reset-draft')
   })
+
+  it('never wipes a local draft when the server sheet was cancelled, same as EXPIRED', () => {
+    const local = baseLocal({
+      status: 'draft',
+      assigneeUserId: '2',
+      localOwnerUserId: '2'
+    })
+    const server = baseServer({ assigneeUserId: 2, status: 'CANCELLED' })
+
+    expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
+  })
+
+  it('does not reset a cancelled sheet even if the assignee also changed', () => {
+    // The CANCELLED early-return must win before any assignee-mismatch reset logic runs —
+    // a cancelled sheet's data must never be silently wiped, matching EXPIRED's guarantee.
+    const local = baseLocal({
+      status: 'draft',
+      assigneeUserId: '1',
+      localOwnerUserId: '1'
+    })
+    const server = baseServer({ assigneeUserId: 2, status: 'CANCELLED' })
+
+    expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
+  })
 })
 
 describe('shouldPreserveLocalFormData', () => {

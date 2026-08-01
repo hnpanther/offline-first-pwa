@@ -3,6 +3,7 @@ import { parseArchivedLogSheetViewId } from '@/services/storage/logSheetArchive'
 
 export const SYNC_OUTCOME_MESSAGES = {
   EXPIRED: 'مهلت تکمیل این کار گذشته است و امکان سینک وجود ندارد.',
+  CANCELLED: 'این کار توسط سرپرست لغو شده است.',
   REVOKED: 'این کار دیگر به شما تعلق ندارد و قابل ادامه نیست.',
   REASSIGNED: 'این کار به اپراتور دیگری واگذار شده است.',
   SUPERSEDED: 'این کار قبلاً توسط شخص دیگری ثبت شده و مورد شما قابل سینک نیست.',
@@ -13,6 +14,11 @@ export const SYNC_OUTCOME_MESSAGES = {
 export function isLogSheetExpired(sheet: Pick<LogSheet, 'dueAt' | 'serverStatus'>, now = Date.now()): boolean {
   if (sheet.serverStatus === 'EXPIRED') return true
   return sheet.dueAt != null && sheet.dueAt <= now
+}
+
+/** Server-authoritative cancellation — unlike expiry, this is never derived from dueAt. */
+export function isLogSheetCancelled(sheet: Pick<LogSheet, 'serverStatus'>): boolean {
+  return sheet.serverStatus === 'CANCELLED'
 }
 
 /** Device completion time vs deadline (for offline submit / late sync). */
@@ -45,7 +51,23 @@ export function isLogSheetExpiredForSync(
   return isLogSheetExpired(sheet, now)
 }
 
-export function isSupersededSyncError(syncError?: string): boolean {
+/**
+ * A submitted-but-not-synced sheet whose server sheet is already SUBMITTED (by someone else —
+ * a genuinely-synced-by-this-device sheet would have `syncStatus: 'synced'`, not 'failed').
+ * This structural check — not a `syncError` text match — is the reliable signal: the stored
+ * `syncError` is the backend's own translated message (see `ApiResponseSupport.localize` /
+ * `ErrorTranslator` on the server), which does not equal this client's own
+ * `SYNC_OUTCOME_MESSAGES` strings (different wording on each side), so comparing against them
+ * silently never matches for a real backend-reported outcome. The text check below is kept only
+ * as a fallback for any legacy/purely-local syncError that might still carry the old constant.
+ */
+export function isSupersededSyncError(
+  sheet: Pick<LogSheet, 'status' | 'syncStatus' | 'serverStatus' | 'syncError'>
+): boolean {
+  if (sheet.status === 'submitted' && sheet.syncStatus === 'failed' && sheet.serverStatus === 'SUBMITTED') {
+    return true
+  }
+  const syncError = sheet.syncError
   if (!syncError) return false
   return syncError.includes('SUPERSEDED') || syncError === SYNC_OUTCOME_MESSAGES.SUPERSEDED
 }
@@ -68,8 +90,10 @@ export function isRevokedAssignment(
 }
 
 /** Only truly terminal states — revoked assignments may return after supervisor reassign. */
-export function isInvalidLocalLogSheet(sheet: Pick<LogSheet, 'syncError'>): boolean {
-  return isSupersededSyncError(sheet.syncError)
+export function isInvalidLocalLogSheet(
+  sheet: Pick<LogSheet, 'status' | 'syncStatus' | 'serverStatus' | 'syncError'>
+): boolean {
+  return isSupersededSyncError(sheet)
 }
 
 /** Local REVOKED or server message that the sheet is no longer assigned to this user. */
@@ -95,7 +119,7 @@ export function normalizeLogSheetSyncError(
   error?: string | null
 ): string {
   const message = syncOutcomeMessage(outcome, error)
-  if (outcome === 'SUPERSEDED' || outcome === 'EXPIRED') {
+  if (outcome === 'SUPERSEDED' || outcome === 'EXPIRED' || outcome === 'CANCELLED') {
     return message
   }
   if (isOwnershipReassignError(message)) {
@@ -111,6 +135,8 @@ export function syncOutcomeMessage(outcome?: string, error?: string | null): str
       return SYNC_OUTCOME_MESSAGES.SUPERSEDED
     case 'EXPIRED':
       return SYNC_OUTCOME_MESSAGES.EXPIRED
+    case 'CANCELLED':
+      return SYNC_OUTCOME_MESSAGES.CANCELLED
     case 'DUPLICATE':
       return SYNC_OUTCOME_MESSAGES.DUPLICATE
     default:
@@ -119,6 +145,9 @@ export function syncOutcomeMessage(outcome?: string, error?: string | null): str
 }
 
 export function canSubmitLogSheet(sheet: LogSheet, now = Date.now()): { ok: boolean; reason?: string } {
+  if (isLogSheetCancelled(sheet)) {
+    return { ok: false, reason: SYNC_OUTCOME_MESSAGES.CANCELLED }
+  }
   if (isLogSheetExpired(sheet, now)) {
     return { ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED }
   }
@@ -163,6 +192,12 @@ export function isExpiredDraft(
   return isLogSheetExpired(sheet, now)
 }
 
+/** A local draft whose server sheet was cancelled by a supervisor before the operator submitted it. */
+export function isCancelledDraft(sheet: Pick<LogSheet, 'status' | 'serverStatus' | 'syncError'>): boolean {
+  if (sheet.status !== 'draft') return false
+  return sheet.serverStatus === 'CANCELLED' || sheet.syncError === SYNC_OUTCOME_MESSAGES.CANCELLED
+}
+
 /** Expiry banner on fill page — hide once the sheet is successfully synced to the server. */
 export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = Date.now()): boolean {
   if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') {
@@ -180,6 +215,7 @@ export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
   if (isInvalidLocalLogSheet(sheet)) return false
   if (isRevokedAssignment(sheet)) return false
   if (isExpiredDraft(sheet, now)) return false
+  if (isCancelledDraft(sheet)) return false
   if (sheet.status === 'draft') return true
   if (sheet.status === 'submitted' && sheet.syncStatus !== 'synced') return true
   return false
@@ -208,7 +244,7 @@ export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
   if (sheet.status === 'submitted') {
     return sheet.syncStatus === 'synced' || sheet.syncStatus === 'failed'
   }
-  return isExpiredDraft(sheet, now)
+  return isExpiredDraft(sheet, now) || isCancelledDraft(sheet)
 }
 
 export function resolveLocalLogSheetStatusChip(
@@ -217,6 +253,11 @@ export function resolveLocalLogSheetStatusChip(
   // Synced completion wins over any stale revoke/reassign flag.
   if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') {
     return { label: 'ارسال شده', color: 'success' }
+  }
+  // Checked regardless of local status (draft or already-submitted-but-not-yet-synced) — a
+  // supervisor cancel can arrive after the operator already tapped "submit" locally.
+  if (isLogSheetCancelled(sheet)) {
+    return { label: 'لغو شده توسط سرپرست', color: 'error' }
   }
   if (isReassignedAwayFromUser(sheet)) {
     return { label: 'واگذار شده به اپراتور دیگر', color: 'warning' }
@@ -229,6 +270,9 @@ export function resolveLocalLogSheetStatusChip(
   }
   if (isExpiredDraft(sheet)) {
     return { label: 'پیش‌نویس منقضی', color: 'error' }
+  }
+  if (isCancelledDraft(sheet)) {
+    return { label: 'لغو شده توسط سرپرست', color: 'error' }
   }
   if (isInvalidLocalLogSheet(sheet)) {
     return { label: 'غیرقابل ادامه', color: 'default' }

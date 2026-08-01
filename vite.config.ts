@@ -45,9 +45,9 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.svg', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'],
         manifest: {
-          name: 'سیستم جمع‌آوری اطلاعات',
-          short_name: 'داده‌برداری',
-          description: 'اپلیکیشن جمع‌آوری اطلاعات با پشتیبانی آفلاین',
+          name: 'Mobile-First Field Data Collection System',
+          short_name: 'MFDCS',
+          description: 'اپلیکیشن ثبت داده‌های میدانی با پشتیبانی آفلاین',
           theme_color: '#1976d2',
           background_color: '#ffffff',
           display: 'standalone',

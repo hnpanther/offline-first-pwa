@@ -203,6 +203,8 @@ class SyncManager {
             serverStatus:
               result.outcome === 'EXPIRED'
                 ? 'EXPIRED'
+                : result.outcome === 'CANCELLED'
+                ? 'CANCELLED'
                 : result.outcome === 'SUPERSEDED'
                 ? 'SUBMITTED'
                 : ls.serverStatus

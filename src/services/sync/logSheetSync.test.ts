@@ -131,4 +131,21 @@ describe('shouldMarkDraftRevokedForMissingInbox', () => {
       )
     ).toBe(false)
   })
+
+  it('does not overwrite a draft the client already knows was cancelled with a REVOKED flag', () => {
+    // Once serverStatus is already CANCELLED (learned via a direct bundle fetch or a
+    // batch-submit outcome), this must never fire and clobber it with the wrong reason.
+    expect(
+      shouldMarkDraftRevokedForMissingInbox(
+        {
+          serverId: '20',
+          status: 'draft',
+          syncStatus: 'failed',
+          serverStatus: 'CANCELLED',
+          syncError: SYNC_OUTCOME_MESSAGES.CANCELLED
+        },
+        assigned
+      )
+    ).toBe(false)
+  })
 })

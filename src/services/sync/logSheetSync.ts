@@ -239,20 +239,43 @@ export async function mergeInboxIntoLocalSheets(
     }
 
     if (extended) {
-      if (local.serverStatus === 'EXPIRED' || local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) {
+      // The sheet reaching this point at all means it's currently in this operator's own
+      // "assigned" inbox bucket — the backend only puts ASSIGNED/IN_PROGRESS sheets there, so
+      // its current status is genuinely open and assigned to this operator right now. Combined
+      // with a future dueAt (checked above), any leftover `syncStatus: 'failed'` from an earlier
+      // rejected sync attempt (EXPIRED, CANCELLED, SUPERSEDED, or anything else) is stale by
+      // definition and safe to clear — deliberately NOT matched by comparing `local.syncError`
+      // against this client's own SYNC_OUTCOME_MESSAGES text: the stored message is instead the
+      // *backend's own* translated string (see ApiResponseSupport.localize / ErrorTranslator on
+      // the server), which uses different wording than this client's constants, so that
+      // comparison silently never matched a real backend-reported failure and left the sheet
+      // stuck showing its old error message even after being reopened.
+      if (local.syncStatus === 'failed') {
         updates.syncError = undefined
-        if (local.status === 'submitted' && local.syncStatus === 'failed') {
+        if (local.status === 'submitted') {
           updates.syncStatus = 'pending'
+          // The earlier rejected attempt's clientActionId was already recorded server-side as
+          // an idempotency key — for CANCELLED/SUPERSEDED that happens via voidSubmission's own
+          // actionLogger.record call (see LogSheetService.java). Reusing the same id on retry
+          // makes the server's replay guard (LogSheetActionLogger.isReplay) treat this as an
+          // already-processed duplicate: it returns outcome "DUPLICATE" without ever re-running
+          // the completion, and the client then wrongly marks the sheet as synced even though
+          // the server never actually received the data. A fresh id avoids that false match —
+          // same fix already applied for the REVOKED case in revivalUpdatesAfterReassign.
+          updates.clientActionId = uuidv4()
         }
       }
     } else if (
       local.status === 'submitted' &&
       local.syncStatus === 'failed' &&
-      local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED &&
+      // serverStatus is the reliable signal — syncError may instead hold the backend's own
+      // translated message rather than this client's SYNC_OUTCOME_MESSAGES.EXPIRED text.
+      (local.serverStatus === 'EXPIRED' || local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) &&
       completedWithinDeadline(local)
     ) {
       updates.syncError = undefined
       updates.syncStatus = 'pending'
+      updates.clientActionId = uuidv4()
     } else if (isLogSheetExpiredForSync({ ...local, dueAt, serverStatus }, now) && local.status === 'submitted') {
       updates.serverStatus = 'EXPIRED'
       updates.syncStatus = 'failed'
@@ -303,6 +326,16 @@ export async function reconcileInboxRevocations(assigned: ServerLogSheet[]): Pro
  * also leave the inbox, and marking them REVOKED races with outbound sync (false
  * "واگذار شده به اپراتور دیگر" until the user opens the sheet and refreshes from bundle).
  * Real ownership loss for submitted work is handled by batch submit outcomes instead.
+ *
+ * Known ambiguity: a sheet can disappear from the inbox because it was released/reassigned
+ * OR because it was cancelled — the inbox response gives no reason, only absence, so this
+ * still (correctly, safely) blocks further edits either way but may show the REVOKED wording
+ * even when the true cause was a cancel. The precise CANCELLED state/message only becomes
+ * known once the client learns it directly: opening the sheet online (see
+ * alignLocalWorkflowWithServer) or via a batch-submit CANCELLED outcome. Once the local
+ * cache already reflects `serverStatus === 'CANCELLED'` this function no longer fires for
+ * it at all (guarded by the status allow-list below), so it never overwrites a sheet the
+ * client already correctly knows is cancelled.
  */
 export function shouldMarkDraftRevokedForMissingInbox(
   local: Pick<LogSheet, 'serverId' | 'status' | 'syncStatus' | 'serverStatus' | 'syncError'>,
