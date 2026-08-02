@@ -409,6 +409,8 @@ Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnter
 
 **Note:** `ADMIN` / `HIGH_USER` also get manual entry via permission `GET:/log-sheets/{id}/fill` if they use the mobile fill UI.
 
+**Note:** Filing an NFC fault report (the "اعلام خرابی NFC" icon, distinct from manual tag entry) requires its own permission, `POST:/api/nfc-fault-reports/batch` — see [NFC fault reports](#nfc-fault-reports-per-asset-unlock). It is not implied by any role above; check role-permission assignments in the web admin panel.
+
 ---
 
 ## Navigation and Permissions
@@ -772,6 +774,21 @@ Who can type a tag ID instead of scanning (see `canEnterTagManually()` in `src/t
 | Permission `GET:/log-sheets/{id}/fill` in JWT | Allowed (e.g. `ADMIN`, `HIGH_USER`, senior/supervisor roles) |
 
 Plain operators on a shared tablet need the admin toggle **or** NFC. iOS has no Web NFC — enable manual entry or use Android for scanning.
+
+### NFC fault reports (per-asset unlock)
+
+Not the same thing as manual tag entry above — different mechanism, different gate.
+
+If an asset's NFC tag is broken, missing, or was never installed — or the device's own NFC hardware doesn't work — an operator can tap **"اعلام خرابی NFC"** on that entry's card to file a fault report. This unlocks a manual-entry fallback for **that one asset, in that one log sheet only** (not the whole sheet, not other sheets). The report is synced to the server (`POST /api/nfc-fault-reports/batch`) and kept as a permanent, immutable record — it's never edited, and only `ADMIN` can delete one (from the web admin panel).
+
+| Who sees the "report fault" icon | Condition |
+|---|---|
+| Shown | User's JWT includes permission `POST:/api/nfc-fault-reports/batch` |
+| Hidden | Permission missing — no icon, no way to create a new report from that device |
+
+This permission is checked client-side in `LogSheetFillPage.tsx` (`canReportNfcFault`) and mirrors a server-side check in the sync layer: even if a report were created locally without this permission, the outbound sync would silently exclude it from every batch, so it would never leave the device. Revoking the permission from a role takes effect the next time that user logs in (or on the next permission refresh) — they simply stop seeing the icon.
+
+**Already-unlocked assets stay unlocked** even if the permission is later revoked — an existing fault report is data, not a live permission check. Revoking the permission only stops that user from filing *new* reports; it does not re-lock assets that already have one.
 
 ---
 
