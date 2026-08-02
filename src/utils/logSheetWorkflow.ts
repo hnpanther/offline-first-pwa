@@ -13,6 +13,17 @@ export function alignLocalWorkflowWithServer(
   existing: LogSheet,
   serverSheet: ServerLogSheet
 ): 'reset-draft' | 'mark-synced' | null {
+  // A still-unsynced completed submission (final submit hit while offline, not yet
+  // acknowledged by the server) must never be resolved here. Whatever the bundle currently
+  // shows — server already SUBMITTED by someone else, or reassigned to someone else while
+  // still open — only the batch-submit outcome may decide its fate: it is the only path
+  // that actually contacts the submit endpoint and can record a server-side void on
+  // conflict. Resolving it via a bundle refresh instead would silently discard the
+  // operator's completed work with no error and no void record.
+  if (existing.status === 'submitted' && existing.syncStatus === 'pending') {
+    return null
+  }
+
   if (serverSheet.status === 'SUBMITTED') {
     return 'mark-synced'
   }
@@ -63,15 +74,6 @@ export function alignLocalWorkflowWithServer(
     assigneeMismatch
   ) {
     return 'reset-draft'
-  }
-
-  if (existing.status === 'submitted' && existing.syncStatus === 'pending') {
-    if (assigneeMismatch) return 'reset-draft'
-    const owner = resolveLocalWorkOwner(existing)
-    if (owner && serverAssignee && owner !== serverAssignee) {
-      return 'reset-draft'
-    }
-    return null
   }
 
   return null

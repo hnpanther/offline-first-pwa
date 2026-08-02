@@ -53,7 +53,7 @@ import { useNFC } from '@/hooks/useNFC'
 import { resolveNfcTagId } from '@/services/nfc'
 import { useSettings } from '@/hooks/useSettings'
 import { useAppStore } from '@/store'
-import { canEnterTagManually } from '@/types/auth'
+import { canEnterTagManually, hasPermission } from '@/types/auth'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import {
@@ -382,6 +382,10 @@ export function LogSheetFillPage() {
     settings.allowManualEntry,
     authSession?.permissions ?? []
   )
+  // Must mirror the sync layer's own gate (services/sync/index.ts `canSyncFaultReports`) —
+  // filing a report the user can't sync would just strand it locally forever, unsynced,
+  // with no visible error.
+  const canReportNfcFault = hasPermission(authSession, 'POST:/api/nfc-fault-reports/batch')
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
@@ -1274,18 +1278,20 @@ export function LogSheetFillPage() {
                         </Button>
                       </Tooltip>
                     ) : (
-                      <Tooltip title={t.logSheet.reportNfcFault}>
-                        <IconButton
-                          size="small"
-                          onClick={e => {
-                            e.stopPropagation()
-                            setFaultReportEntry(entry)
-                          }}
-                          sx={{ flexShrink: 0 }}
-                        >
-                          <ReportProblemOutlinedIcon fontSize="small" color="action" />
-                        </IconButton>
-                      </Tooltip>
+                      canReportNfcFault && (
+                        <Tooltip title={t.logSheet.reportNfcFault}>
+                          <IconButton
+                            size="small"
+                            onClick={e => {
+                              e.stopPropagation()
+                              setFaultReportEntry(entry)
+                            }}
+                            sx={{ flexShrink: 0 }}
+                          >
+                            <ReportProblemOutlinedIcon fontSize="small" color="action" />
+                          </IconButton>
+                        </Tooltip>
+                      )
                     ))}
                 </Box>
               </CardContent>

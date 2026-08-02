@@ -269,4 +269,12 @@ export interface NfcFaultReport {
   syncError?: string
   serverId?: string
   clientActionId: string
+  /**
+   * Session user id that filed this report locally. Local-only — never sent to the
+   * server, which derives the real submitter from the authenticated session at sync
+   * time. Used to keep a pending report from being uploaded under a different user's
+   * session after a login switch on a shared device. Absent on records created before
+   * this field existed; treated as owned by whoever is currently logged in.
+   */
+  createdByUserId?: string
 }

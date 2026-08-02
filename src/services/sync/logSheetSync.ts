@@ -41,6 +41,18 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const serverSheet = bundle.sheet
   const serverId = toIdString(serverSheet.id)
   const existing = await getLogSheetByServerId(serverId)
+
+  // A still-unsynced completed submission must be resolved only by the batch-submit
+  // outcome (server-authoritative: SUBMITTED/DUPLICATE, or SUPERSEDED with a server-side
+  // void record on conflict). A bundle refresh has no way to inform the server this work
+  // ever happened, so it must never overwrite this sheet's assignee, entries, or status —
+  // doing so silently discards the operator's completed work with no error and no void
+  // record, since the batch-submit endpoint never gets a chance to see it. Leave it exactly
+  // as the operator left it; the outbound sync queue resolves it on its own.
+  if (existing && existing.status === 'submitted' && existing.syncStatus === 'pending') {
+    return existing
+  }
+
   const sessionUserId = await getSessionUserId()
   const workflow = existing ? alignLocalWorkflowWithServer(existing, serverSheet) : null
   const preserveLocal =

@@ -106,7 +106,7 @@ class SyncManager {
     const [pendingRecords, pendingLogSheets, pendingFaultReports] = await Promise.all([
       canSyncRecords ? getPendingRecords() : Promise.resolve([]),
       this.getPendingLogSheets(),
-      canSyncFaultReports ? getPendingNfcFaultReports() : Promise.resolve([]),
+      canSyncFaultReports ? this.getPendingFaultReports() : Promise.resolve([]),
     ])
 
     const totalPending = pendingRecords.length + pendingLogSheets.length + pendingFaultReports.length
@@ -297,7 +297,7 @@ class SyncManager {
     const [records, logSheets, faultReports] = await Promise.all([
       canSyncRecords ? getPendingCount() : Promise.resolve(0),
       this.getPendingLogSheets(),
-      canSyncFaultReports ? getPendingNfcFaultReports() : Promise.resolve([]),
+      canSyncFaultReports ? this.getPendingFaultReports() : Promise.resolve([]),
     ])
     return records + logSheets.length + faultReports.length
   }
@@ -311,6 +311,11 @@ class SyncManager {
         ls.serverId &&
         !isLogSheetExpiredForSync(ls)
     )
+  }
+
+  private async getPendingFaultReports(): Promise<NfcFaultReport[]> {
+    const userId = await getSessionUserId()
+    return getPendingNfcFaultReports(userId)
   }
 
   private handleOnline = (): void => {

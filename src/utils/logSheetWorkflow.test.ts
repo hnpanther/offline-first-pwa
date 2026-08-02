@@ -50,7 +50,13 @@ describe('alignLocalWorkflowWithServer', () => {
     expect(alignLocalWorkflowWithServer(local, server)).toBe('reset-draft')
   })
 
-  it('resets submitted pending when assignee mismatch', () => {
+  it('never resolves a still-unsynced pending submission via bundle refresh, even on assignee mismatch', () => {
+    // Regression: operator1 completes offline and hits final submit (status='submitted',
+    // syncStatus='pending'), a supervisor reassigns to operator2 while operator1 is still
+    // offline, then operator1's device fetches a fresh bundle before the outbound sync gets
+    // a chance to run. The old 'reset-draft' behavior here silently wiped operator1's
+    // completed work with no error and no server-side void record, since a bundle GET never
+    // contacts the submit endpoint. Only the batch-submit outcome may resolve this sheet now.
     const local = baseLocal({
       status: 'submitted',
       syncStatus: 'pending',
@@ -59,14 +65,20 @@ describe('alignLocalWorkflowWithServer', () => {
     })
     const server = baseServer({ assigneeUserId: 2, status: 'IN_PROGRESS' })
 
-    expect(alignLocalWorkflowWithServer(local, server)).toBe('reset-draft')
+    expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
   })
 
-  it('marks synced when server is SUBMITTED', () => {
+  it('never resolves a still-unsynced pending submission via bundle refresh, even when server already shows SUBMITTED', () => {
+    // Same regression, other half: by the time operator1 comes online, operator2 may have
+    // already completed and submitted (server status SUBMITTED). The old 'mark-synced'
+    // behavior here blindly assumed the SUBMITTED status was operator1's own — silently
+    // discarding operator1's real data as if it had synced successfully, with no error at
+    // all. Only the batch-submit outcome (which can tell CREATED/DUPLICATE from SUPERSEDED)
+    // may resolve it.
     const local = baseLocal({ status: 'submitted', syncStatus: 'pending' })
     const server = baseServer({ status: 'SUBMITTED' })
 
-    expect(alignLocalWorkflowWithServer(local, server)).toBe('mark-synced')
+    expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
   })
 
   it('keeps local synced sheet when inbox lag still shows open for same assignee', () => {
