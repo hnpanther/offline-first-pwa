@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   alignLocalWorkflowWithServer,
   shouldPreserveLocalFormData,
+  shouldArchiveBeforeServerOverwrite,
   revivalUpdatesAfterReassign,
   resolveReopenedSheetUpdates
 } from '@/utils/logSheetWorkflow'
@@ -127,6 +128,47 @@ describe('alignLocalWorkflowWithServer', () => {
     const server = baseServer({ assigneeUserId: 2, status: 'CANCELLED' })
 
     expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
+  })
+})
+
+describe('shouldArchiveBeforeServerOverwrite', () => {
+  const filled = baseLocal({ status: 'draft', entries: [{ assetId: '1', assetName: 'A', subFunctionCode: '', subFunctionTag: '', classId: '1', formData: { temp: 22 } }] })
+  const empty = baseLocal({ status: 'draft', entries: [{ assetId: '1', assetName: 'A', subFunctionCode: '', subFunctionTag: '', classId: '1', formData: {} }] })
+
+  it('archives a part-filled draft that a stranger already completed on the server', () => {
+    // The reported bug: the operator filled a few assets but never hit final submit, a
+    // supervisor took the sheet over and it got completed by someone else. Without the
+    // archive their readings are replaced by the other person's and then purged in 24h.
+    expect(shouldArchiveBeforeServerOverwrite(filled, false)).toBe(true)
+  })
+
+  it('does not archive when the local work is the user own and still matches the server', () => {
+    expect(shouldArchiveBeforeServerOverwrite(filled, true)).toBe(false)
+  })
+
+  it('does not archive a draft with nothing filled in yet', () => {
+    expect(shouldArchiveBeforeServerOverwrite(empty, false)).toBe(false)
+  })
+
+  it('does not re-archive a row already reconciled with the server', () => {
+    // Guards the second pass (StrictMode double-effect / concurrent inbox refresh /
+    // reopening later): the row now holds the *server* values, so archiving again would
+    // overwrite the good snapshot with the other operator's data.
+    const reconciled = baseLocal({
+      status: 'submitted',
+      syncStatus: 'synced',
+      entries: [{ assetId: '1', assetName: 'A', subFunctionCode: '', subFunctionTag: '', classId: '1', formData: { temp: 99 } }]
+    })
+    expect(shouldArchiveBeforeServerOverwrite(reconciled, false)).toBe(false)
+  })
+
+  it('archives an unsynced completion that is being overwritten', () => {
+    const submittedFailed = baseLocal({
+      status: 'submitted',
+      syncStatus: 'failed',
+      entries: [{ assetId: '1', assetName: 'A', subFunctionCode: '', subFunctionTag: '', classId: '1', formData: { temp: 5 } }]
+    })
+    expect(shouldArchiveBeforeServerOverwrite(submittedFailed, false)).toBe(true)
   })
 })
 

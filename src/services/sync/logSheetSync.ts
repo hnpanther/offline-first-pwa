@@ -25,6 +25,7 @@ import {
 import {
   alignLocalWorkflowWithServer,
   shouldPreserveLocalFormData,
+  shouldArchiveBeforeServerOverwrite,
   revivalUpdatesAfterReassign,
   resolveReopenedSheetUpdates
 } from '@/utils/logSheetWorkflow'
@@ -79,6 +80,16 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         if (updated) return updated
       }
     } else if (workflow === 'mark-synced') {
+      // The server sheet is SUBMITTED. When that completion is *not* this local row's
+      // work (`preserveLocal === false`), the operator's own readings are about to be
+      // replaced by the server's values — keep a read-only copy first, exactly like the
+      // reset-draft branch does. Without this an operator who filled a few assets but
+      // never hit final submit loses everything the moment they reopen the sheet, and
+      // the live row (now `synced`) is purged by cleanupLocalLogSheets a day later.
+      const discardsLocalWork = shouldArchiveBeforeServerOverwrite(existing, preserveLocal)
+      if (discardsLocalWork) {
+        await archiveLocalWorkBeforeClear(existing)
+      }
       await updateLogSheet(existing.localId, {
         ...serverSheetMetadataPatch(serverSheet, existing),
         status: 'submitted',
@@ -87,9 +98,18 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         syncError: undefined,
         syncedAt: existing.syncedAt ?? Date.now(),
         entries,
+        // This row now mirrors someone else's completion, so it is no longer this
+        // user's local work. Releasing the claim (same as the reset-draft branch) also
+        // stops loadLogSheetsForSessionUser from treating the snapshot above as a
+        // stale duplicate of an "owned, synced" row and deleting it.
+        ...(discardsLocalWork ? { localOwnerUserId: undefined } : {}),
         ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
       })
-      if (sessionUserId) {
+      // Only drop a stale archive when this row really is the user's *own* confirmed
+      // submission (`preserveLocal`) — never the snapshot taken above. Gating on
+      // `discardsLocalWork` instead would still delete it on the next pass, once the
+      // row is reconciled and nothing is left to archive.
+      if (sessionUserId && preserveLocal) {
         await removeArchivedLogSheet(serverId, sessionUserId)
       }
       const updated = await getLogSheetByServerId(serverId)

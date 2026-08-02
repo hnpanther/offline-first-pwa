@@ -79,6 +79,27 @@ export function alignLocalWorkflowWithServer(
   return null
 }
 
+/**
+ * A `mark-synced` bundle refresh overwrites the local row with the server's completed
+ * version. Returns true when doing so would silently destroy work this device still
+ * holds — the operator filled some assets but never hit final submit, and the completion
+ * now on the server belongs to somebody else — so a read-only archive copy must be taken
+ * first (otherwise their readings are gone, and the live row is purged 24h later by
+ * `cleanupLocalLogSheets`).
+ */
+export function shouldArchiveBeforeServerOverwrite(
+  existing: Pick<LogSheet, 'status' | 'syncStatus' | 'entries'>,
+  preserveLocal: boolean
+): boolean {
+  // The local work is this user's own and still matches the server assignee — nothing lost.
+  if (preserveLocal) return false
+  // Already reconciled: the row mirrors the server's values, so there is no unsent work
+  // left to preserve. Re-archiving here would overwrite the good snapshot with the other
+  // operator's data on a second pass (StrictMode, concurrent inbox refresh, later reopen).
+  if (existing.status === 'submitted' && existing.syncStatus === 'synced') return false
+  return sheetHasLocalEntryData(existing)
+}
+
 /** Keep local form data only when the current session user owns the local work. */
 export function shouldPreserveLocalFormData(
   existing: LogSheet | undefined,
