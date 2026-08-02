@@ -17,7 +17,12 @@ import { submitRecordsBatch, submitLogSheetsBatch, submitNfcFaultReportsBatch } 
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getAuthSession } from '@/services/auth'
 import { getSessionUserId, isLogSheetOutboundOwnedByUser } from '@/services/auth/sessionContext'
-import { removeArchivedLogSheet } from '@/services/storage/logSheetArchive'
+import {
+  removeArchivedLogSheet,
+  getArchivedSubmissionsPendingServerOutcome,
+  updateArchivedLogSheetSnapshot,
+  parseArchivedLogSheetViewId
+} from '@/services/storage/logSheetArchive'
 import { hasPermission } from '@/types/auth'
 import {
   isLogSheetExpiredForSync,
@@ -158,6 +163,19 @@ class SyncManager {
         for (const result of lsResults) {
           const ls = pendingLogSheets.find((l: LogSheet) => l.localId === result.localId)
           if (!ls) continue
+
+          const archivedRef = parseArchivedLogSheetViewId(ls.localId)
+          if (archivedRef) {
+            const accepted = result.outcome === 'SUBMITTED' || result.outcome === 'DUPLICATE'
+            await this.applyArchivedLogSheetOutcome(
+              archivedRef,
+              result.outcome,
+              accepted ? undefined : normalizeLogSheetSyncError(result.outcome, result.error)
+            )
+            if (accepted) syncedCount++
+            else failedCount++
+            continue
+          }
 
           if (result.outcome === 'SUBMITTED') {
             await updateLogSheet(ls.localId, {
@@ -304,12 +322,60 @@ class SyncManager {
 
   private async getPendingLogSheets(): Promise<LogSheet[]> {
     const userId = await getSessionUserId()
+    const live = await this.getPendingLiveLogSheets(userId)
+    const archived = await this.getPendingArchivedLogSheets(userId, live)
+    return [...live, ...archived]
+  }
+
+  private async getPendingLiveLogSheets(userId: string | null): Promise<LogSheet[]> {
     const all = await getAllLogSheets()
     return all.filter(
       ls =>
         isLogSheetOutboundOwnedByUser(ls, userId) &&
         ls.serverId &&
         !isLogSheetExpiredForSync(ls)
+    )
+  }
+
+  /**
+   * Completions this user made that were archived when someone else took the sheet over
+   * on this device. They are no longer reachable from `logSheets`, but the server still
+   * has to see them — otherwise the work vanishes with no void record. A live row for the
+   * same sheet always wins, so nothing is ever submitted twice.
+   */
+  private async getPendingArchivedLogSheets(
+    userId: string | null,
+    live: LogSheet[]
+  ): Promise<LogSheet[]> {
+    if (!userId) return []
+    const archived = await getArchivedSubmissionsPendingServerOutcome(userId)
+    if (archived.length === 0) return []
+    const liveServerIds = new Set(live.map(ls => toIdString(ls.serverId!)))
+    return archived.filter(a => !liveServerIds.has(toIdString(a.serverId!)))
+  }
+
+  /**
+   * Route a sync result back to the archive row rather than the live `logSheets` row —
+   * after a takeover the live row has the same localId but belongs to another user.
+   * `syncedAt` marks the archive as resolved so a rejected push is not retried forever.
+   */
+  private async applyArchivedLogSheetOutcome(
+    ref: { serverId: string; userId: string },
+    outcome: string | undefined,
+    syncError: string | undefined
+  ): Promise<void> {
+    const accepted = outcome === 'SUBMITTED' || outcome === 'DUPLICATE'
+    await updateArchivedLogSheetSnapshot(
+      ref.serverId,
+      ref.userId,
+      accepted
+        ? {
+            syncStatus: 'synced',
+            syncedAt: Date.now(),
+            serverStatus: 'SUBMITTED',
+            syncError: undefined
+          }
+        : { syncedAt: Date.now(), syncError }
     )
   }
 

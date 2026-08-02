@@ -2,7 +2,11 @@ import { db } from '@/services/storage/db'
 import type { LogSheet, LogSheetUserArchive } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { resolveLocalWorkOwner, sheetHasLocalEntryData } from '@/utils/logSheetLocalData'
-import { SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
+import {
+  SYNC_OUTCOME_MESSAGES,
+  isLogSheetExpiredForSync,
+  isSupersededSyncError
+} from '@/utils/logSheetStatus'
 
 function archiveId(serverId: string, userId: string): string {
   return `${serverId}:${userId}`
@@ -80,4 +84,60 @@ export async function removeArchivedLogSheet(
   userId: string
 ): Promise<void> {
   await db.logSheetUserArchives.delete(archiveId(toIdString(serverId), userId))
+}
+
+/**
+ * Whether an archived snapshot still holds a completion the server has never seen,
+ * so it must still be pushed (normally to be recorded as a void submission).
+ *
+ * Archiving happens when another user takes the device/sheet over, which detaches the
+ * original operator's completed-but-unsynced work from the live `logSheets` row — the
+ * only thing the outbound queue used to look at. Without this, that work silently dies
+ * on the device: the server never learns it happened, so it never records a void.
+ *
+ * `syncedAt` is the resolution marker: it is set as soon as the server responds with any
+ * definitive outcome, so a rejected push is not retried forever.
+ */
+export function isArchivedSubmissionPendingServerOutcome(
+  sheet: Pick<
+    LogSheet,
+    'serverId' | 'status' | 'syncStatus' | 'serverStatus' | 'syncError' | 'syncedAt'
+    | 'dueAt' | 'completedAt' | 'submittedAt'
+  >,
+  now = Date.now()
+): boolean {
+  if (!sheet.serverId) return false
+  if (sheet.status !== 'submitted') return false
+  if (sheet.syncStatus === 'synced') return false
+  if (sheet.syncedAt != null) return false
+  if (isSupersededSyncError(sheet)) return false
+  if (isLogSheetExpiredForSync(sheet, now)) return false
+  return true
+}
+
+/**
+ * This user's archived completions still awaiting a server outcome, shaped for the
+ * outbound batch. `localId` is remapped to the archive view id so sync results can be
+ * routed back to the archive row instead of the live `logSheets` row — after a takeover
+ * both share the same original `localId`, and the live one now belongs to someone else.
+ */
+export async function getArchivedSubmissionsPendingServerOutcome(
+  userId: string,
+  now = Date.now()
+): Promise<LogSheet[]> {
+  const rows = await db.logSheetUserArchives.where('userId').equals(userId).toArray()
+  return rows
+    .filter(r => isArchivedSubmissionPendingServerOutcome(r.sheet, now))
+    .map(r => ({ ...r.sheet, localId: archivedLogSheetViewId(toIdString(r.serverId), userId) }))
+}
+
+export async function updateArchivedLogSheetSnapshot(
+  serverId: string,
+  userId: string,
+  updates: Partial<LogSheet>
+): Promise<void> {
+  const id = archiveId(toIdString(serverId), userId)
+  const row = await db.logSheetUserArchives.get(id)
+  if (!row) return
+  await db.logSheetUserArchives.put({ ...row, sheet: { ...row.sheet, ...updates } })
 }
