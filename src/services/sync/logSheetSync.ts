@@ -363,7 +363,8 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
       classId: Number(e.classId),
       formData: e.formData,
       ...(e.createdAt != null ? { createdAt: e.createdAt } : {}),
-      ...(e.updatedAt != null ? { updatedAt: e.updatedAt } : {})
+      ...(e.updatedAt != null ? { updatedAt: e.updatedAt } : {}),
+      ...(e.filledVia != null ? { manualEntry: e.filledVia === 'manual' } : {})
     })),
     submittedAt: sheet.submittedAt,
     createdAt: sheet.createdAt,

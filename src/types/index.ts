@@ -200,6 +200,8 @@ export interface LogSheetEntryData {
   createdAt?: number
   /** Device time of the latest edit (epoch millis). */
   updatedAt?: number
+  /** How this entry's current form data was captured. Unset means not yet filled. */
+  filledVia?: 'nfc' | 'manual'
 }
 
 export interface LogSheet {
@@ -241,4 +243,30 @@ export interface LogSheetUserArchive {
   userId: string
   sheet: LogSheet
   archivedAt: number
+}
+
+// ---------------------------------------------------------------------------
+// NFC fault reports
+// ---------------------------------------------------------------------------
+
+/**
+ * A reported NFC scan failure for one asset within one log sheet (tag missing,
+ * broken, or the device's NFC hardware itself unusable). Its presence for a
+ * given (logSheetServerId, assetId) pair unlocks the manual-entry fallback for
+ * that asset. Insert-only — never edited or deleted from the PWA.
+ */
+export interface NfcFaultReport {
+  /** Local id, also used as the mobile batch payload's localId. */
+  id: string
+  logSheetServerId: string
+  assetId: string
+  reason?: string
+  reportedByName?: string
+  source: 'MOBILE'
+  createdAt: number
+  syncStatus: SyncStatus
+  syncedAt?: number
+  syncError?: string
+  serverId?: string
+  clientActionId: string
 }

@@ -9,7 +9,11 @@ import {
   getAllLogSheets,
   updateLogSheet,
 } from '@/services/storage'
-import { submitRecordsBatch, submitLogSheetsBatch } from '@/services/api'
+import {
+  getPendingNfcFaultReports,
+  updateNfcFaultReportSyncStatus
+} from '@/services/storage/nfcFaultReports'
+import { submitRecordsBatch, submitLogSheetsBatch, submitNfcFaultReportsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getAuthSession } from '@/services/auth'
 import { getSessionUserId, isLogSheetOutboundOwnedByUser } from '@/services/auth/sessionContext'
@@ -21,7 +25,7 @@ import {
   normalizeLogSheetSyncError,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
-import type { DataRecord, LogSheet } from '@/types'
+import type { DataRecord, LogSheet, NfcFaultReport } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
 
@@ -97,13 +101,15 @@ class SyncManager {
     await this.markExpiredSheets()
 
     const canSyncRecords = hasPermission(session, 'POST:/api/records/batch')
+    const canSyncFaultReports = hasPermission(session, 'POST:/api/nfc-fault-reports/batch')
 
-    const [pendingRecords, pendingLogSheets] = await Promise.all([
+    const [pendingRecords, pendingLogSheets, pendingFaultReports] = await Promise.all([
       canSyncRecords ? getPendingRecords() : Promise.resolve([]),
       this.getPendingLogSheets(),
+      canSyncFaultReports ? getPendingNfcFaultReports() : Promise.resolve([]),
     ])
 
-    const totalPending = pendingRecords.length + pendingLogSheets.length
+    const totalPending = pendingRecords.length + pendingLogSheets.length + pendingFaultReports.length
     if (totalPending === 0) {
       await this.refreshPendingCount()
       return
@@ -213,6 +219,39 @@ class SyncManager {
         }
       }
 
+      if (pendingFaultReports.length > 0) {
+        const payloads = pendingFaultReports.map(r => ({
+          logSheetId: Number(r.logSheetServerId),
+          assetId: Number(r.assetId),
+          reason: r.reason,
+          createdAt: r.createdAt,
+          clientActionId: r.clientActionId,
+          localId: r.id
+        }))
+        const reportResults = await submitNfcFaultReportsBatch(
+          payloads,
+          this.abortController.signal
+        )
+
+        for (const result of reportResults) {
+          const report = pendingFaultReports.find((r: NfcFaultReport) => r.id === result.localId)
+          if (!report) continue
+
+          if (result.outcome === 'CREATED' || result.outcome === 'DUPLICATE') {
+            await updateNfcFaultReportSyncStatus(report.id, 'synced', {
+              serverId: result.serverId != null ? toIdString(result.serverId) : undefined,
+              syncedAt: Date.now()
+            })
+            syncedCount++
+          } else {
+            await updateNfcFaultReportSyncStatus(report.id, 'failed', {
+              syncError: result.error ?? 'خطای ناشناخته'
+            })
+            failedCount++
+          }
+        }
+      }
+
       const remaining = await this.refreshPendingCount()
       await cleanupLocalLogSheets()
       this.emit({ type: 'complete', syncedCount, failedCount, pendingCount: remaining })
@@ -252,11 +291,15 @@ class SyncManager {
     const canSyncRecords = session
       ? hasPermission(session, 'POST:/api/records/batch')
       : false
-    const [records, logSheets] = await Promise.all([
+    const canSyncFaultReports = session
+      ? hasPermission(session, 'POST:/api/nfc-fault-reports/batch')
+      : false
+    const [records, logSheets, faultReports] = await Promise.all([
       canSyncRecords ? getPendingCount() : Promise.resolve(0),
       this.getPendingLogSheets(),
+      canSyncFaultReports ? getPendingNfcFaultReports() : Promise.resolve([]),
     ])
-    return records + logSheets.length
+    return records + logSheets.length + faultReports.length
   }
 
   private async getPendingLogSheets(): Promise<LogSheet[]> {

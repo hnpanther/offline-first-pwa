@@ -22,7 +22,8 @@ export function stripEntryFormData(
     ...e,
     formData: {},
     createdAt: undefined,
-    updatedAt: undefined
+    updatedAt: undefined,
+    filledVia: undefined
   }))
 }
 

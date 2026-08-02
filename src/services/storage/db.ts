@@ -1,6 +1,6 @@
 import Dexie, { type Table } from 'dexie'
 import { v4 as uuidv4 } from 'uuid'
-import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, FormField, OperationalUnit } from '@/types'
+import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, FormField, OperationalUnit, NfcFaultReport } from '@/types'
 import type { FieldDefinition, OutboxEntry, SyncMeta } from '@/types/sync'
 
 class AppDatabase extends Dexie {
@@ -21,6 +21,9 @@ class AppDatabase extends Dexie {
   outbox!: Table<OutboxEntry>
   syncMeta!: Table<SyncMeta>
   logSheetUserArchives!: Table<LogSheetUserArchive>
+
+  // Version 10+
+  nfcFaultReports!: Table<NfcFaultReport>
 
   constructor() {
     super('offline-pwa-db')
@@ -204,6 +207,26 @@ class AppDatabase extends Dexie {
       syncMeta: 'key',
       operationalUnits: 'id, code, parentId',
       logSheetUserArchives: 'id, serverId, userId'
+    })
+
+    // Version 10 — NFC fault reports (see src/types/index.ts NfcFaultReport).
+    this.version(10).stores({
+      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      outbox: 'id, entityType, synced, createdAt',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt'
     })
   }
 }

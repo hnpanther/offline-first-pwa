@@ -15,7 +15,8 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions
+  DialogActions,
+  Tooltip
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import NfcIcon from '@mui/icons-material/Nfc'
@@ -25,6 +26,8 @@ import SendIcon from '@mui/icons-material/Send'
 import SaveIcon from '@mui/icons-material/Save'
 import UndoIcon from '@mui/icons-material/Undo'
 import SyncIcon from '@mui/icons-material/Sync'
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined'
+import EditIcon from '@mui/icons-material/Edit'
 import { useState, useEffect, useCallback, useRef, useMemo, type FormEvent, type MouseEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
@@ -40,6 +43,10 @@ import {
   getArchivedLogSheetByViewId,
   parseArchivedLogSheetViewId
 } from '@/services/storage/logSheetArchive'
+import {
+  createNfcFaultReport,
+  getNfcFaultReportsForSheet
+} from '@/services/storage/nfcFaultReports'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
@@ -77,7 +84,7 @@ import { isEffectivelyOffline, canReachServer } from '@/utils/connectivity'
 import { useInboxSync } from '@/hooks/useInboxSync'
 import { isLogSheetAccessibleToUser } from '@/services/auth/sessionContext'
 import { toIdString } from '@/utils/ids'
-import type { LogSheet, AssetClass, LogSheetEntryData } from '@/types'
+import type { LogSheet, AssetClass, LogSheetEntryData, NfcFaultReport } from '@/types'
 
 const formatDate = formatJalaliDateTime
 
@@ -265,6 +272,79 @@ function AssetFillDialog({
 }
 
 // ---------------------------------------------------------------------------
+// NFC fault report dialog — quick, context-prefilled, no NFC required
+// ---------------------------------------------------------------------------
+
+interface NfcFaultReportDialogProps {
+  entry: LogSheetEntryData | null
+  open: boolean
+  submitting: boolean
+  onClose: () => void
+  onSubmit: (reason: string) => void
+}
+
+function NfcFaultReportDialog({
+  entry,
+  open,
+  submitting,
+  onClose,
+  onSubmit
+}: NfcFaultReportDialogProps) {
+  const [reason, setReason] = useState('')
+
+  useEffect(() => {
+    if (open) setReason('')
+  }, [open])
+
+  return (
+    <Dialog open={open} onClose={submitting ? undefined : onClose} fullWidth maxWidth="xs" dir="rtl">
+      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <ReportProblemOutlinedIcon color="warning" />
+        {t.logSheet.reportNfcFault}
+      </DialogTitle>
+      <DialogContent>
+        {entry && (
+          <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>
+            {entry.assetName}
+          </Typography>
+        )}
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {t.logSheet.reportNfcFaultHint}
+        </Typography>
+        <TextField
+          fullWidth
+          multiline
+          minRows={2}
+          maxRows={5}
+          label={t.logSheet.nfcFaultReasonLabel}
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          disabled={submitting}
+          inputProps={{ maxLength: 2000 }}
+        />
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2.5 }}>
+        <Button type="button" onClick={onClose} disabled={submitting}>
+          انصراف
+        </Button>
+        <Button
+          type="button"
+          variant="contained"
+          color="warning"
+          disabled={submitting}
+          startIcon={
+            submitting ? <CircularProgress size={16} color="inherit" /> : <ReportProblemOutlinedIcon />
+          }
+          onClick={() => onSubmit(reason)}
+        >
+          {t.logSheet.nfcFaultSubmit}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -321,6 +401,12 @@ export function LogSheetFillPage() {
   const [activeEntry, setActiveEntry] = useState<LogSheetEntryData | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogEditable, setDialogEditable] = useState(false)
+  const [activeEntryFilledVia, setActiveEntryFilledVia] = useState<'nfc' | 'manual' | undefined>(undefined)
+
+  // NFC fault reports — filed on this device, unlock manual entry per asset
+  const [nfcFaultReports, setNfcFaultReports] = useState<NfcFaultReport[]>([])
+  const [faultReportEntry, setFaultReportEntry] = useState<LogSheetEntryData | null>(null)
+  const [faultReportSubmitting, setFaultReportSubmitting] = useState(false)
 
   // Save / submit
   const [saving, setSaving] = useState(false)
@@ -404,6 +490,7 @@ export function LogSheetFillPage() {
         await loadFieldDefsForEntries(entries)
         setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
+        setNfcFaultReports(sheet.serverId ? await getNfcFaultReportsForSheet(sheet.serverId) : [])
         if (nfcTagsBackfilled && localId) {
           await updateLogSheet(localId, { entries })
         }
@@ -448,7 +535,7 @@ export function LogSheetFillPage() {
   // -------------------------------------------------------------------------
 
   const handleTagId = useCallback(
-    (tagId: string) => {
+    (tagId: string, source: 'nfc' | 'manual' = 'manual') => {
       if (!logSheet) return
       setNfcError(null)
 
@@ -459,6 +546,7 @@ export function LogSheetFillPage() {
       }
 
       setActiveEntry(entry)
+      setActiveEntryFilledVia(source)
       setDialogEditable(true)
       setDialogOpen(true)
     },
@@ -467,13 +555,24 @@ export function LogSheetFillPage() {
 
   const openEntryForView = (entry: LogSheetEntryData) => {
     setActiveEntry(entry)
+    setActiveEntryFilledVia(undefined)
     setDialogEditable(false)
+    setDialogOpen(true)
+  }
+
+  /** Manual-entry fallback for an asset with an approved NFC fault report — no tag involved. */
+  const handleOpenManualEntry = (entry: LogSheetEntryData) => {
+    setNfcError(null)
+    setActiveEntry(entry)
+    setActiveEntryFilledVia('manual')
+    setDialogEditable(true)
     setDialogOpen(true)
   }
 
   const closeDialog = () => {
     setDialogOpen(false)
     setDialogEditable(false)
+    setActiveEntryFilledVia(undefined)
     lastProcessedTag.current = null
   }
 
@@ -491,7 +590,7 @@ export function LogSheetFillPage() {
     if (!allowManualEntry) return
     const trimmed = manualTagId.trim()
     if (!trimmed) return
-    void handleTagId(trimmed)
+    void handleTagId(trimmed, 'manual')
     setManualTagId('')
   }
 
@@ -512,7 +611,7 @@ export function LogSheetFillPage() {
     setManualTagId(tagId)
     stopScan()
     setLastScannedTag(null)
-    void handleTagId(tagId)
+    void handleTagId(tagId, 'nfc')
   }, [lastTag, isScanning, handleTagId, stopScan, setLastScannedTag])
 
   // -------------------------------------------------------------------------
@@ -535,8 +634,9 @@ export function LogSheetFillPage() {
     if (!logSheet || !localId) return
     setSaveError(null)
     try {
+      const filledVia = activeEntryFilledVia ?? 'nfc'
       const updatedEntries = logSheet.entries.map(e =>
-        e.assetId === assetId ? applyEntrySaveTimestamps(e, formData) : e
+        e.assetId === assetId ? { ...applyEntrySaveTimestamps(e, formData), filledVia } : e
       )
       await updateLogSheet(localId, {
         entries: updatedEntries,
@@ -551,6 +651,36 @@ export function LogSheetFillPage() {
       setSavedMessage('اطلاعات ذخیره شد')
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'خطا در ذخیره')
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // NFC fault reports
+  // -------------------------------------------------------------------------
+
+  const hasFaultReportFor = useCallback(
+    (assetId: string) => nfcFaultReports.some(r => r.assetId === assetId),
+    [nfcFaultReports]
+  )
+
+  const handleCreateFaultReport = async (reason: string) => {
+    if (!faultReportEntry || !logSheet?.serverId) return
+    setFaultReportSubmitting(true)
+    try {
+      const created = await createNfcFaultReport({
+        logSheetServerId: logSheet.serverId,
+        assetId: faultReportEntry.assetId,
+        reason: reason.trim() || undefined,
+        reportedByName: settings.operatorName || undefined
+      })
+      setNfcFaultReports(prev => [...prev, created])
+      setFaultReportEntry(null)
+      setSavedMessage(t.logSheet.nfcFaultSubmitted)
+      if (canUseServer) void syncManager.sync()
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'خطا در ثبت گزارش خرابی NFC')
+    } finally {
+      setFaultReportSubmitting(false)
     }
   }
 
@@ -1124,6 +1254,39 @@ export function LogSheetFillPage() {
                   >
                     {totalFields > 0 ? `${filledFields}/${totalFields}` : '—'}
                   </Typography>
+
+                  {/* NFC fault report / manual-entry unlock */}
+                  {canEdit &&
+                    (hasFaultReportFor(entry.assetId) ? (
+                      <Tooltip title={t.logSheet.manualEntryUnlockedHint}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="warning"
+                          onClick={e => {
+                            e.stopPropagation()
+                            handleOpenManualEntry(entry)
+                          }}
+                          startIcon={<EditIcon fontSize="small" />}
+                          sx={{ flexShrink: 0, minWidth: 0, px: 1, fontSize: '0.7rem', height: 30 }}
+                        >
+                          {t.logSheet.manualEntryUnlocked}
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title={t.logSheet.reportNfcFault}>
+                        <IconButton
+                          size="small"
+                          onClick={e => {
+                            e.stopPropagation()
+                            setFaultReportEntry(entry)
+                          }}
+                          sx={{ flexShrink: 0 }}
+                        >
+                          <ReportProblemOutlinedIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    ))}
                 </Box>
               </CardContent>
             </Card>
@@ -1189,6 +1352,15 @@ export function LogSheetFillPage() {
         readOnly={isSubmitted || !dialogEditable}
         onClose={closeDialog}
         onSave={handleSaveEntry}
+      />
+
+      {/* NFC fault report dialog */}
+      <NfcFaultReportDialog
+        entry={faultReportEntry}
+        open={!!faultReportEntry}
+        submitting={faultReportSubmitting}
+        onClose={() => setFaultReportEntry(null)}
+        onSubmit={reason => void handleCreateFaultReport(reason)}
       />
 
       {/* Success toast */}

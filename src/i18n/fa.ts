@@ -218,7 +218,15 @@ const fa = {
     scopeSummary: 'محدوده',
     producedAt: 'تاریخ تولید',
     serverId: 'شناسه لاگ شیت',
-    nfcTag: 'شناسه NFC'
+    nfcTag: 'شناسه NFC',
+    reportNfcFault: 'اعلام خرابی NFC',
+    reportNfcFaultHint:
+      'اگر تگ NFC این Asset خراب، کنده‌شده یا اصلاً نصب نشده — یا NFC خود دستگاه کار نمی‌کند — این گزارش را ثبت کنید تا بتوانید بدون اسکن، اطلاعات را به‌صورت دستی وارد کنید.',
+    nfcFaultReasonLabel: 'توضیحات (اختیاری)',
+    nfcFaultSubmit: 'ثبت گزارش',
+    nfcFaultSubmitted: 'گزارش خرابی NFC ثبت شد. اکنون می‌توانید این Asset را به‌صورت دستی تکمیل کنید.',
+    manualEntryUnlocked: 'ثبت دستی',
+    manualEntryUnlockedHint: 'برای این Asset گزارش خرابی NFC ثبت شده و ثبت دستی (بدون اسکن) باز است.'
   },
   sync: {
     pending: 'در انتظار ارسال',

@@ -537,7 +537,8 @@ export async function resetLogSheetToOpenDraft(
           ...e,
           formData: {},
           createdAt: undefined,
-          updatedAt: undefined
+          updatedAt: undefined,
+          filledVia: undefined
         }))
       : existing.entries
   }

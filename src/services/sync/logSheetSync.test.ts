@@ -70,6 +70,101 @@ describe('toBatchPayload', () => {
     expect(payload.entries?.[0].createdAt).toBeUndefined()
     expect(payload.entries?.[0].updatedAt).toBeUndefined()
   })
+
+  it('maps filledVia="manual" to manualEntry=true', () => {
+    const sheet: LogSheet = {
+      id: 'local-3',
+      localId: 'local-3',
+      serverId: '101',
+      templateId: '5',
+      templateName: 'Daily',
+      scopeSummary: 'loc:1',
+      status: 'submitted',
+      syncStatus: 'pending',
+      clientActionId: 'action-3',
+      completedAt: 1_700_000_200_000,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_200_000,
+      entries: [
+        {
+          assetId: '42',
+          assetName: 'Pump',
+          subFunctionCode: 'SF',
+          subFunctionTag: 'T',
+          classId: '7',
+          formData: { temp: 22 },
+          filledVia: 'manual'
+        }
+      ]
+    }
+
+    const payload = toBatchPayload(sheet)
+
+    expect(payload.entries?.[0].manualEntry).toBe(true)
+  })
+
+  it('maps filledVia="nfc" to manualEntry=false', () => {
+    const sheet: LogSheet = {
+      id: 'local-4',
+      localId: 'local-4',
+      serverId: '102',
+      templateId: '5',
+      templateName: 'Daily',
+      scopeSummary: 'loc:1',
+      status: 'submitted',
+      syncStatus: 'pending',
+      clientActionId: 'action-4',
+      completedAt: 1_700_000_200_000,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_200_000,
+      entries: [
+        {
+          assetId: '42',
+          assetName: 'Pump',
+          subFunctionCode: 'SF',
+          subFunctionTag: 'T',
+          classId: '7',
+          formData: { temp: 22 },
+          filledVia: 'nfc'
+        }
+      ]
+    }
+
+    const payload = toBatchPayload(sheet)
+
+    expect(payload.entries?.[0].manualEntry).toBe(false)
+  })
+
+  it('omits manualEntry when filledVia was never set (legacy/untouched entries)', () => {
+    const sheet: LogSheet = {
+      id: 'local-5',
+      localId: 'local-5',
+      serverId: '103',
+      templateId: '5',
+      templateName: 'Daily',
+      scopeSummary: 'loc:1',
+      status: 'submitted',
+      syncStatus: 'pending',
+      clientActionId: 'action-5',
+      completedAt: 1_700_000_200_000,
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_200_000,
+      entries: [
+        {
+          assetId: '42',
+          assetName: 'Pump',
+          subFunctionCode: 'SF',
+          subFunctionTag: 'T',
+          classId: '7',
+          formData: { temp: 22 }
+        }
+      ]
+    }
+
+    const payload = toBatchPayload(sheet)
+
+    expect(payload.entries?.[0].manualEntry).toBeUndefined()
+  })
 })
 
 describe('shouldMarkDraftRevokedForMissingInbox', () => {

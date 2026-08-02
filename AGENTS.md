@@ -80,6 +80,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 - Bundle context merge: **server wins** (`mergeLogSheetBundle.ts` / `mergeBundleContextToDb`).
 - Inbox assigned bundles **pre-provision** assets, NFC ids, field defs — operators should fill offline after one online inbox sync.
 - `operatorName` / `assigneeUserId` on local sheets come from **server** inbox/bundle metadata, not stale local guesses.
+- **`mapServerEntryToLocal` (in `mergeLogSheetBundle.ts`) rebuilds each `LogSheetEntryData` from an explicit field list** — it does not spread `...existing`. Any **local-only** field on `LogSheetEntryData` (one the server DTO doesn't carry, e.g. `filledVia`) must be explicitly threaded through here (`preserveLocal ? existing?.field : undefined`, matching the `createdAt`/`updatedAt` pattern) or it is silently dropped on every bundle refresh — not just cross-device sync, but simply **reopening a draft sheet while online** (`LogSheetFillPage`'s `canRefreshBundle` load-effect calls `applyLogSheetBundle` unconditionally for online draft sheets). Found the hard way: an entry manually completed via an NFC fault report lost its `filledVia: 'manual'` marker the next time the operator reopened the sheet before final submit, so the server received no `manualEntry` flag and defaulted `entry_source` to `PWA_NFC` despite no scan ever happening. Regression tests: `mergeLogSheetBundle.test.ts`.
 
 ### NFC fill page
 
@@ -87,6 +88,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 - Lookup is **within current log sheet entries** only (offline-safe).
 - Edit dialog: NFC or allowed manual entry; tap card = **view-only**.
 - Manual entry: `canEnterTagManually()` in `src/types/auth.ts` (settings flag, SUPERVISOR, SENIOR_OPERATOR, or `GET:/log-sheets/{id}/fill` permission).
+- **NFC fault reports** (`services/storage/nfcFaultReports.ts`): a per-entry, always-visible "اعلام خرابی NFC" report (works even when the asset never had a tag, not just after a failed scan) unlocks a manual-entry fallback for that one `(logSheetServerId, assetId)` pair, tracked locally in `LogSheetEntryData.filledVia` (`'nfc' | 'manual'`) and synced up via `POST /api/nfc-fault-reports/batch`. Only same-device self-filed reports unlock the button today — reports arriving from elsewhere (web-filed, other devices) are **not yet consumed** for auto-unlock by design (server already returns them in the bundle's `nfcFaultReports` field as groundwork; the PWA client type/parsing for that field doesn't exist yet — deliberate, not an oversight).
 
 ### Session
 
@@ -119,6 +121,7 @@ src/
     storage/index.ts        records, log sheets, settings, …
     storage/inboxCache.ts   syncMeta inboxSnapshot
     storage/logSheetArchive.ts  logSheetUserArchives
+    storage/nfcFaultReports.ts  NFC fault report create/query/sync-status
     sync/
       pullBootstrap.ts
       pullInbox.ts
@@ -139,12 +142,13 @@ Path alias: `@/*` → `src/*`.
 
 ---
 
-## IndexedDB (Dexie v9)
+## IndexedDB (Dexie v10)
 
 | Table | Role |
 |-------|------|
 | `logSheets` | Local work + entries + sync fields + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots (shared tablet history) |
+| `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields) — v10 |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
 | `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, … |
@@ -165,6 +169,7 @@ Types and functions: **`src/services/api/index.ts`**.
 | `GET /api/log-sheets/{id}/bundle` | Refresh one sheet |
 | `POST /api/log-sheets/{id}/claim` | Pickup → bundle |
 | `POST /api/log-sheets/batch` | Push completed sheets |
+| `POST /api/nfc-fault-reports/batch` | Push locally-filed NFC fault reports |
 | `POST /api/records/batch` | Legacy records (permission-gated) |
 
 **`LogSheetBundleDto`:** `{ sheet, entries, context }` — context holds scoped locations…fieldDefinitions.
@@ -217,6 +222,7 @@ Helpers: `isAdminRole`, `isSupervisorRole`, `hasPermission`, `canEnterTagManuall
 | Dexie schema | Bump version in `db.ts`, migration, README + this file |
 | New API endpoint | `api/index.ts`, backend permission codes, README API table |
 | Inbox/bundle merge | `mergeLogSheetBundle.ts`, `logSheetSync.ts`, integration behavior offline |
+| New field on `LogSheetEntryData` | Check whether it must survive `mapServerEntryToLocal` (see "Log sheet merge" gotcha above) — local-only fields need an explicit `preserveLocal ?` line or they vanish on the next bundle refresh |
 | Auth/session | `sessionContext.ts`, `useAuth.ts`, shared tablet tests |
 | Manual NFC policy | `auth.ts`, `LogSheetFillPage.tsx`, Settings + `fa.ts` |
 | Production deploy | `.env.mobile.example`, README nginx section |

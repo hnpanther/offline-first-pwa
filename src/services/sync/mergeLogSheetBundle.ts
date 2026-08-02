@@ -164,7 +164,13 @@ export function mapServerEntryToLocal(
       : (entry.createdAt ?? undefined),
     updatedAt: preserveLocal
       ? (existing?.updatedAt ?? entry.updatedAt ?? undefined)
-      : (entry.updatedAt ?? undefined)
+      : (entry.updatedAt ?? undefined),
+    // The server never reports how an entry was captured (no such column round-trips
+    // in ServerLogSheetEntry) — this is local-only state. Losing it here would silently
+    // relabel a manually-completed entry as NFC-scanned on the next bundle refresh
+    // (e.g. simply reopening a draft sheet while online, which runs this merge again
+    // before the operator ever hits final submit).
+    filledVia: preserveLocal ? existing?.filledVia : undefined
   }
 }
 

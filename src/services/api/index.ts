@@ -326,6 +326,8 @@ export interface ApiLogSheetEntry {
   formData: Record<string, unknown>
   createdAt?: number
   updatedAt?: number
+  /** True when this entry was filled without an NFC scan (manual / fault-report fallback). */
+  manualEntry?: boolean
 }
 
 /** Payload shape expected by POST /api/log-sheets/batch */
@@ -362,6 +364,43 @@ export async function submitLogSheetsBatch(
   return apiClient.post<LogSheetSubmitResult[]>(
     '/api/log-sheets/batch',
     { logSheets },
+    signal
+  )
+}
+
+// ===========================================================================
+// NFC fault reports — "NFC scan failed" reports push
+// ===========================================================================
+
+export interface NfcFaultReportSubmitResult {
+  localId: string
+  serverId?: number | string
+  error?: string | null
+  outcome?: 'CREATED' | 'DUPLICATE' | 'ERROR'
+}
+
+/** Payload shape expected by POST /api/nfc-fault-reports/batch */
+export interface NfcFaultReportBatchItem {
+  logSheetId: number
+  assetId: number
+  reason?: string
+  createdAt?: number
+  clientActionId?: string
+  localId: string
+}
+
+/**
+ * POST /api/nfc-fault-reports/batch
+ *
+ * Send one or more locally-filed NFC fault reports to the server.
+ */
+export async function submitNfcFaultReportsBatch(
+  reports: NfcFaultReportBatchItem[],
+  signal?: AbortSignal
+): Promise<NfcFaultReportSubmitResult[]> {
+  return apiClient.post<NfcFaultReportSubmitResult[]>(
+    '/api/nfc-fault-reports/batch',
+    { reports },
     signal
   )
 }

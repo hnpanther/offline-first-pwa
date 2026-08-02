@@ -44,6 +44,46 @@ describe('mapServerEntryToLocal', () => {
     expect(local.createdAt).toBe(1_600_000_000_000)
     expect(local.updatedAt).toBe(1_600_000_100_000)
   })
+
+  // Regression: a manually-completed entry (fault-report unlock) was silently relabeled
+  // as NFC-scanned after any bundle refresh — e.g. simply reopening a draft sheet while
+  // online, which runs this merge again before the operator ever hits final submit.
+  // The server never reports filledVia back (no such field on ServerLogSheetEntry), so it
+  // must be inherited from the existing local entry whenever local data is preserved.
+  it('preserves filledVia="manual" across a bundle refresh', () => {
+    const existing: LogSheetEntryData = {
+      assetId: '42',
+      assetName: 'Pump A',
+      subFunctionCode: 'SF-01',
+      subFunctionTag: 'T1',
+      classId: '7',
+      formData: { temp: 25 },
+      createdAt: 1_600_000_000_000,
+      updatedAt: 1_600_000_100_000,
+      filledVia: 'manual'
+    }
+
+    const local = mapServerEntryToLocal(serverEntry, existing)
+
+    expect(local.filledVia).toBe('manual')
+  })
+
+  it('drops filledVia when preserveLocal is false (server form data wins)', () => {
+    const existing: LogSheetEntryData = {
+      assetId: '42',
+      assetName: 'Pump A',
+      subFunctionCode: 'SF-01',
+      subFunctionTag: 'T1',
+      classId: '7',
+      formData: { temp: 25 },
+      filledVia: 'manual'
+    }
+
+    const local = mapServerEntryToLocal(serverEntry, existing, false)
+
+    expect(local.filledVia).toBeUndefined()
+    expect(local.formData).toEqual({ temp: 10 })
+  })
 })
 
 describe('mergeEntriesPreservingFormData', () => {
@@ -90,5 +130,23 @@ describe('mergeEntriesPreservingFormData', () => {
     expect(merged[0].formData).toEqual({ temp: 10 })
     expect(merged[0].createdAt).toBe(1_700_000_000_000)
     expect(merged[0].updatedAt).toBe(1_700_000_050_000)
+  })
+
+  it('preserves filledVia through a full inbox/bundle merge cycle', () => {
+    const existing: LogSheetEntryData[] = [
+      {
+        assetId: '42',
+        assetName: 'Pump A',
+        subFunctionCode: 'SF-01',
+        subFunctionTag: 'T1',
+        classId: '7',
+        formData: { temp: 30 },
+        filledVia: 'manual'
+      }
+    ]
+
+    const merged = mergeEntriesPreservingFormData([serverEntry], existing)
+
+    expect(merged[0].filledVia).toBe('manual')
   })
 })
