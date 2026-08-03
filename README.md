@@ -853,9 +853,12 @@ Opening a draft sheet online also refreshes via `GET /api/log-sheets/{id}/bundle
 ```
 SyncManager.sync()
   → mark expired submitted sheets
-  → getPendingLogSheets()  — only submitted + pending where assigneeUserId = session user
+  → getPendingLogSheets()  — submitted + pending where assigneeUserId = session user,
+                             PLUS this user's archived completions the server never saw
+                             (see "Archived completions still reach the server" below)
   → POST /api/log-sheets/batch  (owner queue only)
   → POST /api/records/batch     (approved records, if permission)
+  → POST /api/nfc-fault-reports/batch  (only reports this user filed, if permission)
   → cleanupLocalLogSheets()
   → on success: refresh inbox (remove submitted work from assigned list)
 ```
@@ -864,20 +867,58 @@ On user switch, `activateUserSession()` marks another user’s submitted (unsync
 
 Log sheet batch payload includes `completedAt` (device completion time) and `clientActionId` for idempotency.
 
-### Local cleanup (after successful sync)
+### Archived completions still reach the server
 
-| State | Retention |
-|-------|-----------|
-| Synced | 1 day, then deleted locally |
-| Failed | 7 days, then deleted |
-| Draft | Never auto-deleted |
-| Submitted, pending sync | Kept until synced or failed |
+Work an operator completed offline can end up **detached** from the live `logSheets` row —
+for example they logged out while still offline, another operator logged in on the same
+tablet and the sheet was reassigned to them. In that case the original operator's
+completion is moved into `logSheetUserArchives`, and the live row is handed to the new
+user.
+
+Those archived completions are **not** a dead end: the outbound queue drains them too, so
+the server always learns the work happened and records it as a void submission
+(`log_sheet_void_submissions` + a `SUPERSEDE` action) instead of the readings silently
+disappearing. Rules that keep this safe:
+
+- Only archives belonging to the **currently logged-in user** are pushed — never another
+  operator's, which would attribute their work to the wrong person.
+- A live row for the same sheet always wins, so nothing is submitted twice.
+- `syncedAt` on the archive marks it resolved as soon as the server answers, so a
+  permanently-rejected push is not retried on every sync forever.
+
+### Local cleanup / history retention (`cleanupLocalLogSheets`)
+
+Runs after every successful sync pass. It only deletes rows from the local `logSheets`
+table — **nothing is ever deleted on the server**, and rows are only removed once they
+are in a terminal state.
+
+| State | Retention | Counted from |
+|-------|-----------|--------------|
+| Synced (sent successfully) | **24 hours**, then deleted locally | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
+| Failed (server rejected: superseded / revoked / cancelled) | **7 days**, then deleted | `submittedAt` → `updatedAt` → `createdAt` |
+| Expired draft (deadline passed, never submitted) | **24 hours**, then deleted | `dueAt` → `updatedAt` → `createdAt` |
+| Active draft (in progress, not expired) | **Never** auto-deleted | — |
+| Submitted, pending sync | **Never** auto-deleted — kept until the server answers | — |
+| **Archived snapshots** (`logSheetUserArchives`) | **Never** auto-deleted | — |
+
+**What this means for operators:** a completed log sheet stays visible under **History**
+on the device for roughly one day after it syncs; a rejected one for a week. After that
+the local copy is purged to keep the tablet small — the record itself still lives on the
+server and remains visible in the web admin panel. Only the **device-local** history is
+time-limited.
+
+**Archived snapshots are the exception and are kept indefinitely.** They are the only
+copy of work that never reached the server (another user took the sheet over on the same
+device, or a supervisor completed it while the operator still had unsent readings), so
+they are deliberately excluded from every retention rule. A stale archive is removed only
+when it becomes redundant — when the same user's own work for that sheet is confirmed
+synced (`removeArchivedLogSheet`).
 
 ---
 
 ## IndexedDB Schema
 
-Dexie version **9** — main tables:
+Dexie version **10** — main tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -888,7 +929,8 @@ Dexie version **9** — main tables:
 | `locations`, `plantSystems`, `mainFunctions`, `subFunctions` | Hierarchy slice per active work |
 | `logSheetTemplates` | Log sheet templates (legacy / admin) |
 | `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
-| `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only) |
+| `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only; never auto-purged) |
+| `nfcFaultReports` | Locally-filed NFC fault reports (unlock manual entry per asset; `createdByUserId` scopes outbound sync) |
 | `operationalUnits` | From bootstrap |
 | `settings` | App settings (server URL, operator name, …) |
 | `syncMeta` | Key/value store (see below) |
