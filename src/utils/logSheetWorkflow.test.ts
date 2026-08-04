@@ -266,3 +266,55 @@ describe('resolveReopenedSheetUpdates', () => {
     expect(updates).toEqual({})
   })
 })
+
+/**
+ * The backend dropped `log_sheets.local_id` and `log_sheets.sync_error` — both were dead
+ * columns it never wrote. Several endpoints serialize the LogSheet entity directly, so those
+ * two keys are now simply ABSENT from the JSON instead of present-and-null.
+ *
+ * These cases pin that the PWA does not care. If someone later starts reading either field
+ * off a server sheet, one of these fails instead of the behaviour silently drifting.
+ */
+describe('server sheets without the removed local_id / sync_error fields', () => {
+  it('alignLocalWorkflowWithServer behaves identically whether the fields are null or absent', () => {
+    const local = baseLocal({
+      assigneeUserId: '1',
+      status: 'draft',
+      syncStatus: 'pending',
+      entries: [{ assetId: '1', assetName: 'A', classId: '1', formData: { v: 1 } }]
+    })
+
+    const withNulls = baseServer({ assigneeUserId: 2, localId: null, syncError: null })
+    const withoutKeys = baseServer({ assigneeUserId: 2 })
+    expect('localId' in withoutKeys).toBe(false)
+    expect('syncError' in withoutKeys).toBe(false)
+
+    expect(alignLocalWorkflowWithServer(local, withoutKeys))
+      .toEqual(alignLocalWorkflowWithServer(local, withNulls))
+  })
+
+  it('revivalUpdatesAfterReassign behaves identically whether the fields are null or absent', () => {
+    const local = baseLocal({
+      assigneeUserId: '2',
+      localOwnerUserId: '2',
+      status: 'draft',
+      syncStatus: 'failed',
+      syncError: SYNC_OUTCOME_MESSAGES.OWNERSHIP_REASSIGNED
+    })
+
+    const withNulls = baseServer({ assigneeUserId: 2, localId: null, syncError: null })
+    const withoutKeys = baseServer({ assigneeUserId: 2 })
+
+    expect(revivalUpdatesAfterReassign(local, withoutKeys, () => 'fixed-id'))
+      .toEqual(revivalUpdatesAfterReassign(local, withNulls, () => 'fixed-id'))
+  })
+
+  it('a local sheet still owns its own localId and syncError regardless of the server', () => {
+    // These stayed client-side concerns: localId is the Dexie key, syncError is written from
+    // sync outcomes. Nothing about them was ever sourced from the server payload.
+    const local = baseLocal({ localId: 'local-key-1', syncError: SYNC_OUTCOME_MESSAGES.EXPIRED })
+
+    expect(local.localId).toBe('local-key-1')
+    expect(local.syncError).toBe(SYNC_OUTCOME_MESSAGES.EXPIRED)
+  })
+})
