@@ -228,6 +228,36 @@ class AppDatabase extends Dexie {
       logSheetUserArchives: 'id, serverId, userId',
       nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt'
     })
+
+    /**
+     * Version 11 — index AssetEntry.nfcSerial (physical NFC chip UID).
+     *
+     * Purely additive: one new index on an existing table, no new tables, no data
+     * reshaping, so no .upgrade() callback is needed — Dexie builds the index from the
+     * rows already stored. Existing assets simply have no value for it until the next
+     * bundle refresh brings the field down from the server.
+     *
+     * The index exists so a future "scan a chip, find its asset offline" lookup can do
+     * db.assetEntries.where('nfcSerial').equals(uid) without another schema bump.
+     */
+    this.version(11).stores({
+      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      outbox: 'id, entityType, synced, createdAt',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt'
+    })
   }
 }
 

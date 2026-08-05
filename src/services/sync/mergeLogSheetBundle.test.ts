@@ -17,6 +17,52 @@ const serverEntry: ServerLogSheetEntry = {
   updatedAt: 1_700_000_050_000
 }
 
+describe('nfcSerial (physical chip UID)', () => {
+  it('carries the serial down from the server so an offline scan can match it', () => {
+    const local = mapServerEntryToLocal({ ...serverEntry, nfcSerial: '00:aa:34:9f:12:cd' })
+
+    expect(local.nfcSerial).toBe('00:aa:34:9f:12:cd')
+  })
+
+  it('leaves the serial undefined when the asset has none', () => {
+    expect(mapServerEntryToLocal(serverEntry).nfcSerial).toBeUndefined()
+    expect(mapServerEntryToLocal({ ...serverEntry, nfcSerial: null }).nfcSerial).toBeUndefined()
+  })
+
+  it('is server-authoritative: a refresh overwrites the local copy, unlike formData', () => {
+    const existing: LogSheetEntryData = {
+      assetId: '42',
+      assetName: 'Pump A',
+      subFunctionCode: 'SF-01',
+      subFunctionTag: 'T1',
+      nfcSerial: '00:stale:value',
+      classId: '7',
+      formData: { temp: 25 }
+    }
+
+    const local = mapServerEntryToLocal({ ...serverEntry, nfcSerial: '00:fresh:value' }, existing)
+
+    expect(local.nfcSerial).toBe('00:fresh:value')
+    // …while the operator's own readings are still preserved, which is the whole point
+    // of preserveLocal — the two must not be conflated.
+    expect(local.formData).toEqual({ temp: 25 })
+  })
+
+  it('clears a stale local serial when the server no longer reports one', () => {
+    const existing: LogSheetEntryData = {
+      assetId: '42',
+      assetName: 'Pump A',
+      subFunctionCode: 'SF-01',
+      subFunctionTag: 'T1',
+      nfcSerial: '00:removed:chip',
+      classId: '7',
+      formData: {}
+    }
+
+    expect(mapServerEntryToLocal(serverEntry, existing).nfcSerial).toBeUndefined()
+  })
+})
+
 describe('mapServerEntryToLocal', () => {
   it('maps server timestamps when no local entry exists', () => {
     const local = mapServerEntryToLocal(serverEntry)

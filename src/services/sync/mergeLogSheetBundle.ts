@@ -157,6 +157,9 @@ export function mapServerEntryToLocal(
     subFunctionCode: entry.subFunctionCode ?? '',
     subFunctionTag: entry.subFunctionTag ?? '',
     nfcTagId: entry.nfcTagId ?? undefined,
+    // Server-authoritative like nfcTagId: always take the server's value, never preserve a
+    // local one. The operator cannot edit it, so there is nothing local worth keeping.
+    nfcSerial: entry.nfcSerial ?? undefined,
     classId: toIdString(entry.classId),
     formData,
     createdAt: preserveLocal

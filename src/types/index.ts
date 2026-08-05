@@ -50,6 +50,13 @@ export interface AssetClass {
 export interface AssetEntry {
   id: string
   nfcTagId: string
+  /**
+   * Physical NFC chip serial / UID, e.g. "00:aa:34:9f:12:cd". Optional — many assets have none.
+   * Distinct from nfcTagId: the tag id is the logical lookup key (inherited from the sub-function
+   * when the asset has none of its own), while this identifies the chip hardware itself.
+   * Indexed since Dexie v11 so a future scan-by-UID lookup needs no schema change.
+   */
+  nfcSerial?: string
   classId: string        // was assetTypeId
   assetName: string
   subFunctionId: string  // REQUIRED — link to SubFunction
@@ -194,6 +201,8 @@ export interface LogSheetEntryData {
   subFunctionCode: string
   subFunctionTag: string
   nfcTagId?: string
+  /** Physical NFC chip serial (UID) snapshot from the server; display/scan-matching only. */
+  nfcSerial?: string
   classId: string          // was assetTypeId
   formData: Record<string, unknown>  // filled by operator
   /** Device time when form data was first saved (epoch millis). */

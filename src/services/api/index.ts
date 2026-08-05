@@ -101,6 +101,8 @@ export interface ServerLogSheetEntry {
   subFunctionCode?: string | null
   subFunctionTag?: string | null
   nfcTagId?: string | null
+  /** Physical NFC chip serial (UID) snapshot, e.g. "00:aa:34:9f:12:cd". Optional. */
+  nfcSerial?: string | null
   classId?: number | null
   formData?: Record<string, unknown> | null
   createdAt?: number | null
@@ -322,6 +324,8 @@ export interface ApiLogSheetEntry {
   subFunctionCode: string
   subFunctionTag: string
   nfcTagId?: string
+  /** Echoed back unchanged; server-authoritative and ignored on submit. */
+  nfcSerial?: string
   classId: number
   formData: Record<string, unknown>
   createdAt?: number

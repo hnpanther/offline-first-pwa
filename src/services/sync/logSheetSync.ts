@@ -392,6 +392,7 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
       subFunctionCode: e.subFunctionCode,
       subFunctionTag: e.subFunctionTag,
       nfcTagId: e.nfcTagId,
+      nfcSerial: e.nfcSerial,
       classId: Number(e.classId),
       formData: e.formData,
       ...(e.createdAt != null ? { createdAt: e.createdAt } : {}),
