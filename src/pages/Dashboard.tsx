@@ -16,7 +16,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import PendingIcon from '@mui/icons-material/Pending'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
-import { useRecords } from '@/hooks/useRecords'
+import { useLogSheets } from '@/hooks/useLogSheets'
 import { useManualSync } from '@/hooks/useSync'
 import { t } from '@/i18n'
 
@@ -79,15 +79,20 @@ export function Dashboard() {
   const pendingCount = useAppStore(s => s.pendingCount)
   const failedCount = useAppStore(s => s.failedCount)
   const lastSyncAt = useAppStore(s => s.lastSyncAt)
-  const { records } = useRecords()
+  const { logs: logSheets } = useLogSheets()
   const manualSync = useManualSync()
 
-  // Count today's records
+  // Stats are log-sheet based: the legacy DataRecord flow is no longer reachable from
+  // this app (its entry form and page were removed), so counting records here would
+  // have shown a permanent zero on any fresh install.
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
-  const todayCount = records.filter(r => r.createdAt >= todayStart.getTime()).length
 
-  const syncedCount = records.filter(r => r.syncStatus === 'synced').length
+  const openCount = logSheets.filter(s => s.status === 'draft').length
+  const todayCount = logSheets.filter(
+    s => (s.submittedAt ?? 0) >= todayStart.getTime()
+  ).length
+  const syncedCount = logSheets.filter(s => s.syncStatus === 'synced').length
 
   const formatTime = (ts: number | null) => {
     if (!ts) return '—'
@@ -122,8 +127,8 @@ export function Dashboard() {
       <Grid container spacing={2}>
         <Grid item xs={6} sm={3}>
           <StatCard
-            title={t.dashboard.totalRecords}
-            value={records.length}
+            title={t.dashboard.openLogSheets}
+            value={openCount}
             icon={<FactCheckIcon />}
             color="primary"
             onClick={() => navigate('/logsheets/active')}
@@ -131,7 +136,7 @@ export function Dashboard() {
         </Grid>
         <Grid item xs={6} sm={3}>
           <StatCard
-            title={t.dashboard.todayRecords}
+            title={t.dashboard.todaySubmitted}
             value={todayCount}
             icon={<CheckCircleIcon />}
             color="success"

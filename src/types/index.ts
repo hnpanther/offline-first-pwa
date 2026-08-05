@@ -61,6 +61,16 @@ export interface AssetEntry {
   assetName: string
   subFunctionId: string  // REQUIRED — link to SubFunction
   location?: string
+  /**
+   * The next four are sent by the server on every asset row (log-sheet bundle context and
+   * the NFC lookup response both serialize the whole entity) and were simply missing from
+   * this interface. Declared optional because nothing in the app requires them — they are
+   * display-only, currently read by the admin NFC inspector.
+   */
+  assetCode?: string
+  assetNameFa?: string
+  active?: boolean
+  description?: string
   createdAt: number
   updatedAt: number
 }

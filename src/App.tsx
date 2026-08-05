@@ -10,10 +10,9 @@ import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
 import { AdminRoute } from '@/components/auth/AdminRoute'
 import { Dashboard } from '@/pages/Dashboard'
 import { SettingsPage } from '@/pages/SettingsPage'
-import { AdminPage } from '@/pages/AdminPage'
 import { LogSheetListPage } from '@/pages/LogSheetListPage'
 import { LogSheetFillPage } from '@/pages/LogSheetFillPage'
-import { LogSheetTemplatePage } from '@/pages/LogSheetTemplatePage'
+import { NfcInspectPage } from '@/pages/NfcInspectPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { useAuthInit } from '@/hooks/useAuth'
 
@@ -50,15 +49,19 @@ export function App() {
                   <Route path="history" element={<LogSheetListPage mode="history" />} />
                   <Route path=":localId" element={<LogSheetFillPage />} />
                 </Route>
-                <Route path="logsheet-templates" element={<LogSheetTemplatePage />} />
-                <Route path="master-data">
-                  <Route index element={<Navigate to="locations" replace />} />
-                  <Route path="templates" element={<Navigate to="/logsheet-templates" replace />} />
-                  <Route path=":section" element={<AdminPage />} />
-                </Route>
-                <Route path="admin" element={<Navigate to="/master-data/locations" replace />} />
-                <Route path="records" element={<Navigate to="/" replace />} />
+                <Route path="nfc-inspect" element={<AdminRoute><NfcInspectPage /></AdminRoute>} />
                 <Route path="settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
+                {/*
+                  Master data, asset registry and log-sheet templates are managed in the web
+                  admin panel, not here — the PWA only ever consumes them through log-sheet
+                  bundles. The old routes redirect so existing bookmarks/PWA shortcuts land
+                  somewhere sensible instead of a blank screen.
+                */}
+                <Route path="master-data/*" element={<Navigate to="/" replace />} />
+                <Route path="logsheet-templates" element={<Navigate to="/" replace />} />
+                <Route path="admin" element={<Navigate to="/" replace />} />
+                <Route path="records" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </AuthBootstrap>

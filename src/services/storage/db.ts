@@ -1,6 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import { v4 as uuidv4 } from 'uuid'
-import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, FormField, OperationalUnit, NfcFaultReport } from '@/types'
+import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport } from '@/types'
 import type { FieldDefinition, OutboxEntry, SyncMeta } from '@/types/sync'
 
 class AppDatabase extends Dexie {
@@ -28,217 +27,24 @@ class AppDatabase extends Dexie {
   constructor() {
     super('offline-pwa-db')
 
-    this.version(1).stores({
-      records: '++id, localId, nfcTagId, syncStatus, createdAt, formType',
-      assets: 'id, nfcTagId',
-      settings: 'key'
-    })
-
-    this.version(2).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-      assets: null, // removed
-      assetTypes: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, assetTypeId',
-      settings: 'key'
-    })
-
-    this.version(3).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-      assetTypes: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, assetTypeId, subFunctionId',
-      locations: 'id, code, parentId',
-      plantSystems: 'id, code, locationId',
-      mainFunctions: 'id, code, systemId, locationId',
-      subFunctions: 'id, tagNumber, mainFunctionId, systemId, locationId',
-      settings: 'key'
-    })
-
-    this.version(4).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-      assetTypes: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, assetTypeId, subFunctionId',
-      locations: 'id, code, parentId',
-      plantSystems: 'id, code, locationId',
-      mainFunctions: 'id, code, systemId, locationId',
-      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-      logSheetTemplates: 'id, scopeType, scopeId',
-      logSheets: 'id, localId, templateId, status, createdAt',
-      settings: 'key'
-    })
-
-    this.version(5)
-      .stores({
-        records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-        assetClasses: 'id, createdAt',
-        assetTypes: null,
-        assetEntries: 'id, nfcTagId, classId, subFunctionId',
-        locations: 'id, code, parentId',
-        plantSystems: 'id, code, locationId',
-        mainFunctions: 'id, code, systemId, locationId',
-        subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-        logSheetTemplates: 'id, scopeType, scopeId',
-        logSheets: 'id, localId, serverId, templateId, status, createdAt',
-        settings: 'key'
-      })
-      .upgrade(async (trans) => {
-        try {
-          const oldTypes = await trans.table('assetTypes').toArray()
-          if (oldTypes.length > 0) await trans.table('assetClasses').bulkAdd(oldTypes)
-        } catch { /* table may not exist */ }
-
-        try {
-          const entries = await trans.table('assetEntries').toArray()
-          for (const entry of entries) {
-            const raw = entry as Record<string, unknown>
-            if (raw.assetTypeId && !raw.classId) {
-              await trans.table('assetEntries').update(entry.id as string, { classId: raw.assetTypeId })
-            }
-          }
-        } catch { /* no-op */ }
-      })
-
     /**
-     * Version 6 — Sync-readiness + dynamic field definitions.
+     * Single consolidated schema.
      *
-     * New tables:
-     *   fieldDefinitions — normalized fields extracted from AssetClass.fields[]
-     *   outbox           — durable change queue for the future push engine
-     *   syncMeta         — stores lastSeq and other sync engine state
+     * Versions 1-10 were folded into this one block while the app is still
+     * pre-production: they only ever *built up* to this shape, and their two
+     * data migrations (assetTypes -> assetClasses in v5, AssetClass.fields ->
+     * fieldDefinitions in v6) are meaningless on a fresh install and already
+     * long since applied on any device that has been running the app.
      *
-     * Migration: AssetClass.fields[] → fieldDefinitions rows.
-     * The original fields[] array is kept in assetClasses for backward compat
-     * until all UI components switch to reading from fieldDefinitions.
+     * The version NUMBER is deliberately kept at 11 rather than reset to 1.
+     * IndexedDB refuses to open a database whose on-disk version is higher
+     * than the one requested, so renumbering downwards would hard-fail with a
+     * VersionError on every device that already has the old database — the
+     * user would have to clear site data by hand. Keeping 11 means existing
+     * installs open unchanged and fresh installs create this shape directly.
      *
-     * // SYNC ENGINE HOOK — outbox and syncMeta are the primary integration
-     * //   points for src/services/sync/{push,pull}.ts
-     */
-    this.version(6)
-      .stores({
-        records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-        assetClasses: 'id, createdAt',
-        assetEntries: 'id, nfcTagId, classId, subFunctionId',
-        locations: 'id, code, parentId',
-        plantSystems: 'id, code, locationId',
-        mainFunctions: 'id, code, systemId, locationId',
-        subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-        logSheetTemplates: 'id, scopeType, scopeId',
-        logSheets: 'id, localId, serverId, templateId, status, createdAt',
-        settings: 'key',
-        // New in v6:
-        fieldDefinitions: 'id, classId, order',
-        outbox: 'id, entityType, synced, createdAt',
-        syncMeta: 'key'
-      })
-      .upgrade(async (trans) => {
-        // Seed syncMeta with lastSeq=null (first pull will start from 0)
-        // SYNC ENGINE HOOK: pull engine reads 'lastSeq' to do incremental pulls
-        await trans.table('syncMeta').put({ key: 'lastSeq', value: null })
-
-        // Migrate AssetClass.fields[] → fieldDefinitions
-        try {
-          const classes = await trans.table('assetClasses').toArray()
-          const defs: FieldDefinition[] = []
-          const now = Date.now()
-
-          for (const cls of classes) {
-            const fields = ((cls as Record<string, unknown>).fields ?? []) as FormField[]
-            fields.forEach((f, index) => {
-              defs.push({
-                id: uuidv4(),
-                classId: cls.id as string,
-                key: f.name,
-                label: f.label,
-                dataType: f.type as FieldDefinition['dataType'],
-                unit: f.unit,
-                required: f.required ?? false,
-                validation: {
-                  min: f.min,
-                  max: f.max,
-                  options: f.options,
-                },
-                order: index,
-                createdAt: now,
-                updatedAt: now,
-                version: 1,
-                deleted: false,
-                synced: false,
-              })
-            })
-          }
-
-          if (defs.length > 0) {
-            await trans.table('fieldDefinitions').bulkAdd(defs)
-          }
-        } catch {
-          // Migration is best-effort; existing UI still reads from AssetClass.fields
-        }
-      })
-
-    this.version(8).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-      assetClasses: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, classId, subFunctionId',
-      locations: 'id, code, parentId',
-      plantSystems: 'id, code, locationId',
-      mainFunctions: 'id, code, systemId, locationId',
-      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-      logSheetTemplates: 'id, scopeType, scopeId',
-      logSheets: 'id, localId, serverId, templateId, status, createdAt',
-      settings: 'key',
-      fieldDefinitions: 'id, classId, order',
-      outbox: 'id, entityType, synced, createdAt',
-      syncMeta: 'key',
-      operationalUnits: 'id, code, parentId'
-    })
-
-    this.version(9).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-      assetClasses: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, classId, subFunctionId',
-      locations: 'id, code, parentId',
-      plantSystems: 'id, code, locationId',
-      mainFunctions: 'id, code, systemId, locationId',
-      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-      logSheetTemplates: 'id, scopeType, scopeId',
-      logSheets: 'id, localId, serverId, templateId, status, createdAt',
-      settings: 'key',
-      fieldDefinitions: 'id, classId, order',
-      outbox: 'id, entityType, synced, createdAt',
-      syncMeta: 'key',
-      operationalUnits: 'id, code, parentId',
-      logSheetUserArchives: 'id, serverId, userId'
-    })
-
-    // Version 10 — NFC fault reports (see src/types/index.ts NfcFaultReport).
-    this.version(10).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
-      assetClasses: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, classId, subFunctionId',
-      locations: 'id, code, parentId',
-      plantSystems: 'id, code, locationId',
-      mainFunctions: 'id, code, systemId, locationId',
-      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-      logSheetTemplates: 'id, scopeType, scopeId',
-      logSheets: 'id, localId, serverId, templateId, status, createdAt',
-      settings: 'key',
-      fieldDefinitions: 'id, classId, order',
-      outbox: 'id, entityType, synced, createdAt',
-      syncMeta: 'key',
-      operationalUnits: 'id, code, parentId',
-      logSheetUserArchives: 'id, serverId, userId',
-      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt'
-    })
-
-    /**
-     * Version 11 — index AssetEntry.nfcSerial (physical NFC chip UID).
-     *
-     * Purely additive: one new index on an existing table, no new tables, no data
-     * reshaping, so no .upgrade() callback is needed — Dexie builds the index from the
-     * rows already stored. Existing assets simply have no value for it until the next
-     * bundle refresh brings the field down from the server.
-     *
-     * The index exists so a future "scan a chip, find its asset offline" lookup can do
-     * db.assetEntries.where('nfcSerial').equals(uid) without another schema bump.
+     * When the schema next changes, add a NEW `this.version(12).stores({...})`
+     * below with the full store list; do not edit this block in place.
      */
     this.version(11).stores({
       records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',

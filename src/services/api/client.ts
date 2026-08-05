@@ -89,11 +89,19 @@ async function request<T>(
   }
 
   if (!response.ok) {
-    let errorBody: unknown
-    try {
-      errorBody = await response.json()
-    } catch {
-      errorBody = await response.text()
+    // Read the body ONCE. Calling response.json() and then response.text() as a
+    // fallback is a trap: json() consumes the stream even when parsing fails, so
+    // the text() call throws "body stream already read" and that TypeError escapes
+    // instead of the ApiError callers catch. Any error response with an empty or
+    // non-JSON body hit this — e.g. Spring's ResponseEntity.notFound().build().
+    const rawBody = await response.text().catch(() => '')
+    let errorBody: unknown = rawBody
+    if (rawBody) {
+      try {
+        errorBody = JSON.parse(rawBody)
+      } catch {
+        /* not JSON — keep the raw text */
+      }
     }
     const message = extractErrorMessage(
       errorBody,

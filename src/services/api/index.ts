@@ -13,7 +13,7 @@
  *   - Sync engine (outbox push / incremental pull)
  */
 
-import { apiClient } from './client'
+import { apiClient, ApiError } from './client'
 import type {
   AssetClass,
   AssetEntry,
@@ -274,8 +274,12 @@ export async function fetchAssetByNfcTag(
       `/api/asset-entries/nfc/${encodeURIComponent(nfcTagId)}`,
       signal
     )
-  } catch {
-    return null
+  } catch (err) {
+    // "Not registered" is a legitimate answer and returns null. Anything else —
+    // offline, 401/403, a server fault — is a real failure the caller has to be
+    // able to tell apart, so it propagates instead of masquerading as "no asset".
+    if (err instanceof ApiError && err.status === 404) return null
+    throw err
   }
 }
 

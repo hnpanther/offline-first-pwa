@@ -13,19 +13,12 @@ import {
 } from '@mui/material'
 import DashboardIcon from '@mui/icons-material/Dashboard'
 import SettingsIcon from '@mui/icons-material/Settings'
-import StorageIcon from '@mui/icons-material/Storage'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import LocationOnIcon from '@mui/icons-material/LocationOn'
-import TuneIcon from '@mui/icons-material/Tune'
-import AccountTreeIcon from '@mui/icons-material/AccountTree'
-import LabelIcon from '@mui/icons-material/Label'
-import CategoryIcon from '@mui/icons-material/Category'
-import InventoryIcon from '@mui/icons-material/Inventory'
 import FactCheckIcon from '@mui/icons-material/FactCheck'
 import AssignmentIcon from '@mui/icons-material/Assignment'
 import HistoryIcon from '@mui/icons-material/History'
-import ArticleIcon from '@mui/icons-material/Article'
+import NfcIcon from '@mui/icons-material/Nfc'
 import LogoutIcon from '@mui/icons-material/Logout'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
@@ -38,15 +31,6 @@ const DRAWER_WIDTH = 240
 const logSheetSubItems = [
   { path: '/logsheets/active', label: t.nav.logSheetActive, icon: <AssignmentIcon fontSize="small" /> },
   { path: '/logsheets/history', label: t.nav.logSheetHistory, icon: <HistoryIcon fontSize="small" /> },
-]
-
-const masterDataItems = [
-  { path: '/master-data/locations', label: t.hierarchy.locations, icon: <LocationOnIcon fontSize="small" /> },
-  { path: '/master-data/systems', label: t.hierarchy.systems, icon: <TuneIcon fontSize="small" /> },
-  { path: '/master-data/functions', label: t.hierarchy.mainFunctions, icon: <AccountTreeIcon fontSize="small" /> },
-  { path: '/master-data/subfunctions', label: t.hierarchy.subFunctions, icon: <LabelIcon fontSize="small" /> },
-  { path: '/master-data/classes', label: t.admin.assetTypes, icon: <CategoryIcon fontSize="small" /> },
-  { path: '/master-data/assets', label: t.admin.assetRegistry, icon: <InventoryIcon fontSize="small" /> },
 ]
 
 interface SidebarProps {
@@ -63,18 +47,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const showAdmin = authSession ? isAdminRole(authSession.roles) : false
 
   const isLogSheetRoute = location.pathname.startsWith('/logsheets')
-  const isMasterDataRoute = location.pathname.startsWith('/master-data')
 
   const [logSheetOpen, setLogSheetOpen] = useState(isLogSheetRoute)
-  const [masterDataOpen, setMasterDataOpen] = useState(isMasterDataRoute)
 
   useEffect(() => {
     if (isLogSheetRoute) setLogSheetOpen(true)
   }, [isLogSheetRoute])
-
-  useEffect(() => {
-    if (isMasterDataRoute) setMasterDataOpen(true)
-  }, [isMasterDataRoute])
 
   const handleNav = (path: string) => {
     navigate(path)
@@ -184,66 +162,23 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
         {showAdmin && (
           <>
+            <Divider sx={{ my: 1 }} />
+
+            {/* بازرسی تگ NFC — فقط ادمین و فقط آنلاین */}
             <ListItemButton
-              selected={isSelected('/logsheet-templates')}
-              onClick={() => handleNav('/logsheet-templates')}
-              sx={groupItemSx(isSelected('/logsheet-templates'))}
+              selected={isSelected('/nfc-inspect')}
+              onClick={() => handleNav('/nfc-inspect')}
+              sx={groupItemSx(isSelected('/nfc-inspect'))}
             >
               <ListItemIcon sx={{ minWidth: 40 }}>
-                <ArticleIcon color={isSelected('/logsheet-templates') ? 'inherit' : 'action'} />
+                <NfcIcon color={isSelected('/nfc-inspect') ? 'inherit' : 'action'} />
               </ListItemIcon>
               <ListItemText
-                primary={t.nav.logSheetTemplates}
-                primaryTypographyProps={{ fontSize: '0.9rem', fontWeight: isSelected('/logsheet-templates') ? 600 : 400 }}
+                primary={t.nav.nfcInspect}
+                primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isSelected('/nfc-inspect') ? 600 : 400 }}
               />
             </ListItemButton>
 
-            <Divider sx={{ my: 1 }} />
-
-            <ListItemButton
-              onClick={() => setMasterDataOpen(v => !v)}
-              selected={isMasterDataRoute}
-              sx={groupItemSx(isMasterDataRoute)}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>
-                <StorageIcon color={isMasterDataRoute ? 'inherit' : 'action'} />
-              </ListItemIcon>
-              <ListItemText
-                primary={t.nav.masterData}
-                primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isMasterDataRoute ? 600 : 400 }}
-              />
-              {masterDataOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-            </ListItemButton>
-
-            <Collapse in={masterDataOpen} timeout="auto" unmountOnExit>
-              <List disablePadding sx={{ pr: 1 }}>
-                {masterDataItems.map(item => (
-                  <ListItemButton
-                    key={item.path}
-                    selected={isSelected(item.path)}
-                    onClick={() => handleNav(item.path)}
-                    sx={subItemSx(isSelected(item.path))}
-                  >
-                    <ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon>
-                    <ListItemText
-                      primary={item.label}
-                      primaryTypographyProps={{
-                        fontSize: '0.82rem',
-                        fontWeight: isSelected(item.path) ? 600 : 400,
-                        noWrap: true
-                      }}
-                    />
-                  </ListItemButton>
-                ))}
-              </List>
-            </Collapse>
-
-            <Divider sx={{ my: 1 }} />
-          </>
-        )}
-
-        {showAdmin && (
-          <>
             <Divider sx={{ my: 1 }} />
 
             {/* تنظیمات — فقط ادمین */}
