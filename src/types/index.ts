@@ -89,8 +89,6 @@ export interface SyncState {
 export interface AppSettings {
   serverUrl: string
   syncIntervalMs: number
-  operatorName: string
-  locationName: string
   allowManualEntry: boolean
   /**
    * When on, an NFC scan on the log-sheet fill page must match BOTH the Record 1

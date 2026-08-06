@@ -166,7 +166,7 @@ Path alias: `@/*` → `src/*`.
 | `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields, `createdByUserId` for shared-tablet outbound scoping) |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
-| `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch`, … |
+| `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch` |
 | `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, … |
 | `outbox` | Generic pending-write queue |
 
@@ -249,6 +249,9 @@ Helpers: `isAdminRole`, `isSupervisorRole`, `hasPermission`, `canEnterTagManuall
 | Installing PWA from :5173 | Offline white screen (no full precache) |
 | NFC lookup via global API on fill page | Design is local entry match; offline requirement |
 | Assuming `useMasterDataSync` pulls assets | It only triggers bootstrap staleness pull |
+| Counting `useLogSheets()` directly for per-user stats | The device's table holds **every** signed-in user's work — scope it with `utils/dashboardStats.ts` |
+| Putting a sign-out reason in router location state | `ProtectedRoute`'s own `<Navigate>` overwrites it; use the `sessionEnded` store flag |
+| Declaring one PNG `purpose: "any maskable"` | Android crops it to its own mask — ship a separate maskable file, see README **App Icon** |
 
 ---
 
@@ -274,3 +277,39 @@ Helpers: `isAdminRole`, `isSupervisorRole`, `hasPermission`, `canEnterTagManuall
 | **`backend-offline-first`** | Server validation, RBAC, bundle generation, batch ownership |
 
 If README and code disagree, **trust the code** and fix README in the same task.
+
+---
+
+## Behaviour notes worth knowing
+
+**Dashboard counters are per-viewer.** `utils/dashboardStats.ts` is the single rule:
+your own work only — *including for supervisors*, whose team's work belongs in the
+inbox's team tab — with ADMIN / HIGH_USER alone seeing the device-wide totals. A
+non-admin with no resolved `sessionUserId` sees zeros rather than the device's
+numbers, which is the honest answer since local sheets arrive already attributed.
+`SyncManager.getPendingCount()` was already user-scoped and is reused as-is. The
+stat row uses a plain CSS grid, not `<Grid container>`: MUI's negative margins
+pushed the last card past the content box on a wide tablet with no way to scroll
+it back.
+
+**Involuntary sign-out is signalled through the store, not the router.** Two
+navigations race to `/login` — the unauthorized handler's imperative
+`navigate(..., { state: { sessionEnded: true } })` and `ProtectedRoute`'s
+`<Navigate to="/login" state={{ from }} />`, which fires the moment the session is
+cleared and clobbers the reason. The `sessionEnded` flag in the auth store survives
+either ordering. Two things feed it: a 401 from the server, and
+`client.ts`'s `sessionSilentlyExpired()` — `getAuthSession()` deletes an expired
+session as a side effect of *reading* it, leaving a UI that still believes it is
+signed in, so the client checks for that and reports it without a pointless round
+trip. **Backend counterpart:** the API security chain must keep
+`.cors(Customizer.withDefaults())`; CORS used to be configured through
+`WebMvcConfigurer.addCorsMappings`, which Spring MVC applies and therefore never
+runs for a 401 written by the security filter — the browser blocked the response
+and an expired session surfaced as "could not reach the server".
+
+**There is no operator-name setting any more.** `operatorName` / `locationName`
+were removed: `locationName` was referenced nowhere, and `operatorName` fed two
+fallbacks that are now taken from the authenticated session instead — the fault
+report's `reportedByName` and `logSheetSync`'s `operatorName` fallback. On a shared
+tablet the old behaviour attributed every operator's work to whatever name an admin
+typed once.

@@ -87,8 +87,6 @@ export async function openDatabase(): Promise<void> {
 export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',
   syncIntervalMs: 30_000,
-  operatorName: '',
-  locationName: '',
   allowManualEntry: false,
   nfcStrictSerialMatch: false
 }

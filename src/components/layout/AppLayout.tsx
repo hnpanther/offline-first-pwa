@@ -34,7 +34,10 @@ export function AppLayout() {
           ml: { md: `${DRAWER_WIDTH}px` },
           minHeight: '100vh',
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
+          // Without this a flex item refuses to shrink below its content, so any
+          // page with a wide row pushes the whole main column past the viewport.
+          minWidth: 0
         }}
       >
         {/* Spacer so content starts below AppBar */}

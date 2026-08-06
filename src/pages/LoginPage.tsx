@@ -13,6 +13,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useForm, Controller } from 'react-hook-form'
 import { useAuth } from '@/hooks/useAuth'
+import { useAppStore } from '@/store'
 import { useSettings } from '@/hooks/useSettings'
 import { t } from '@/i18n'
 import { postLoginPath } from '@/utils/loginRedirect'
@@ -28,6 +29,8 @@ interface LoginLocationState {
 
 export function LoginPage() {
   const { signIn, isAuthenticated, authLoaded } = useAuth()
+  const sessionEnded = useAppStore(s => s.sessionEnded)
+  const setSessionEnded = useAppStore(s => s.setSessionEnded)
   const { settings } = useSettings()
   const navigate = useNavigate()
   const location = useLocation()
@@ -42,12 +45,16 @@ export function LoginPage() {
   }, [authLoaded, isAuthenticated, navigate])
 
   useEffect(() => {
-    const state = location.state as LoginLocationState | null
-    if (!state?.sessionEnded) return
+    // Either source counts: the store flag (set by the unauthorized handler and
+    // immune to the redirect race) or the router state, kept for the direct
+    // navigate path. Both are cleared once shown so a refresh or a back
+    // navigation does not replay the notice.
+    const fromRouter = (location.state as LoginLocationState | null)?.sessionEnded
+    if (!sessionEnded && !fromRouter) return
     setSessionNotice(t.auth.sessionEnded)
-    // Drop the flag so a refresh / back navigation does not keep replaying the notice.
-    navigate(location.pathname, { replace: true, state: null })
-  }, [location.pathname, location.state, navigate])
+    if (sessionEnded) setSessionEnded(false)
+    if (fromRouter) navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate, sessionEnded, setSessionEnded])
 
   const { control, handleSubmit } = useForm<LoginForm>({
     defaultValues: { username: '', password: '' }
@@ -68,6 +75,7 @@ export function LoginPage() {
   const onSubmit = async (data: LoginForm) => {
     setError(null)
     setSessionNotice(null)
+    setSessionEnded(false)
     setSubmitting(true)
     try {
       const err = await signIn(data.username.trim(), data.password)
@@ -95,6 +103,14 @@ export function LoginPage() {
       <Card sx={{ width: '100%', maxWidth: 420 }}>
         <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, p: 3 }}>
           <Box sx={{ textAlign: 'center' }}>
+            <Typography
+              variant="subtitle2"
+              color="primary"
+              fontWeight={600}
+              sx={{ letterSpacing: 0.3 }}
+            >
+              {t.app.name}
+            </Typography>
             <Typography variant="h5" fontWeight={700} gutterBottom>
               {t.auth.loginTitle}
             </Typography>

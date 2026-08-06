@@ -686,7 +686,7 @@ export function LogSheetFillPage() {
         logSheetServerId: logSheet.serverId,
         assetId: faultReportEntry.assetId,
         reason: reason.trim() || undefined,
-        reportedByName: settings.operatorName || undefined
+        reportedByName: authSession?.fullName || authSession?.username || undefined
       })
       setNfcFaultReports(prev => [...prev, created])
       setFaultReportEntry(null)

@@ -95,41 +95,6 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Operator info */}
-      <Card>
-        <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-          <Typography variant="subtitle1" fontWeight={600} color="text.secondary">
-            {t.settings.operatorSection}
-          </Typography>
-
-          <Controller
-            name="operatorName"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label={t.settings.operatorName}
-                fullWidth
-                placeholder="نام و نام خانوادگی"
-              />
-            )}
-          />
-
-          <Controller
-            name="locationName"
-            control={control}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label={t.settings.locationName}
-                fullWidth
-                placeholder="نام محل / سایت"
-              />
-            )}
-          />
-        </CardContent>
-      </Card>
-
       {/* NFC settings */}
       <Card>
         <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>

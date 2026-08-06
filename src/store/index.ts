@@ -64,9 +64,22 @@ interface AuthSlice {
   authSession: AuthSession | null
   authLoaded: boolean
   sessionUserId: string | null
+  /**
+   * The user was signed out by the app rather than by choice — expired token,
+   * revoked from the admin panel, or superseded by a login elsewhere.
+   *
+   * This lives in the store instead of the router's location state because the
+   * two navigations that can land on /login race each other: the unauthorized
+   * handler's imperative `navigate('/login', { state: { sessionEnded: true } })`
+   * and `ProtectedRoute`'s own `<Navigate to="/login" state={{ from }} />`, which
+   * fires as soon as the session is cleared and overwrites the reason. Store
+   * state is immune to that — whichever navigation wins, the flag survives.
+   */
+  sessionEnded: boolean
   setAuthSession: (session: AuthSession | null) => void
   setAuthLoaded: (v: boolean) => void
   setSessionUserId: (id: string | null) => void
+  setSessionEnded: (v: boolean) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -153,9 +166,11 @@ export const useAppStore = create<AppStore>()(
     authSession: null,
     authLoaded: false,
     sessionUserId: null,
+    sessionEnded: false,
     setAuthSession: (session) => set({ authSession: session }),
     setAuthLoaded: (v) => set({ authLoaded: v }),
     setSessionUserId: (id) => set({ sessionUserId: id }),
+    setSessionEnded: (v) => set({ sessionEnded: v }),
 
     // Inbox
     inboxAssigned: [],

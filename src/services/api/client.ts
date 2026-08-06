@@ -60,6 +60,22 @@ async function buildHeaders(): Promise<Record<string, string>> {
   return headers
 }
 
+/**
+ * True when the token has already been dropped underneath a UI that still thinks
+ * it is signed in.
+ *
+ * `getAuthSession()` deletes an expired session as a side effect of reading it,
+ * and it does so silently: the Zustand store keeps the old session, the app keeps
+ * rendering as if logged in, and the user only finds out when some later request
+ * comes back 401 — or, on a flaky link, sees a misleading "could not reach the
+ * server" instead. Detecting it here sends them to the login screen with the real
+ * reason straight away.
+ */
+async function sessionSilentlyExpired(): Promise<boolean> {
+  if (!useAppStore.getState().authSession) return false
+  return (await getAccessToken()) == null
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -67,6 +83,11 @@ async function request<T>(
   signal?: AbortSignal,
   authRequired = true
 ): Promise<T> {
+  if (authRequired && (await sessionSilentlyExpired())) {
+    onUnauthorized?.()
+    throw new ApiError(401, 'نشست شما به پایان رسیده است. دوباره وارد شوید.')
+  }
+
   const baseUrl = await getBaseUrl()
   const url = `${baseUrl}${path}`
 

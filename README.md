@@ -29,17 +29,18 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 11. [Authentication and Roles](#authentication-and-roles)
 12. [Navigation and Permissions](#navigation-and-permissions)
 13. [Device Configuration (Settings)](#device-configuration-settings)
-14. [Dashboard](#dashboard)
-15. [Log Sheet Workflow](#log-sheet-workflow)
-16. [Offline Behavior](#offline-behavior)
-17. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
-18. [NFC](#nfc)
-19. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
-20. [Synchronization](#synchronization)
-21. [IndexedDB Schema](#indexeddb-schema)
-22. [API Contract](#api-contract)
-23. [Production Deployment](#production-deployment)
-24. [Troubleshooting](#troubleshooting)
+14. [App Icon](#app-icon)
+15. [Dashboard](#dashboard)
+16. [Log Sheet Workflow](#log-sheet-workflow)
+17. [Offline Behavior](#offline-behavior)
+18. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
+19. [NFC](#nfc)
+20. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
+21. [Synchronization](#synchronization)
+22. [IndexedDB Schema](#indexeddb-schema)
+23. [API Contract](#api-contract)
+24. [Production Deployment](#production-deployment)
+25. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -184,6 +185,7 @@ scripts/
 | `npm run preview` | 4173 | No | Preview production build locally | Partial |
 | `npm run preview:mobile` | **4173** | Yes (mkcert) | **Real PWA test and install** | **Yes** |
 | `npm run setup:mkcert` | — | — | Create trusted dev certificates | — |
+| `npm run icons` | — | — | Regenerate every icon PNG from the SVG sources (see [App Icon](#app-icon)) | — |
 | `npm run lint` | — | — | ESLint | — |
 | `npm test` | — | — | Vitest unit tests (`src/**/*.test.ts`; TypeScript via `tsconfig.vitest.json`) | — |
 
@@ -422,7 +424,7 @@ Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnter
 | `/logsheets/history` | All — completed / failed / archived snapshots (see below) |
 | `/logsheets/:localId` | All — fill page |
 | `/nfc-inspect` | Admin only (`AdminRoute` + sidebar) — online-only NFC tag inspector |
-| `/settings` | Admin only (`AdminRoute` + sidebar) — server URL, sync interval, operator/location labels, **Allow manual tag entry** and **chip-serial scan check** (both apply to all users on that device) |
+| `/settings` | Admin only (`AdminRoute` + sidebar) — server URL, sync interval, **Allow manual tag entry** and **chip-serial scan check** (both apply to all users on that device) |
 
 Operators see Dashboard and Log Sheets only.
 
@@ -440,7 +442,8 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 |-------|---------|
 | **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). |
 | **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
-| **Operator name / location** | Optional display metadata for this device (log sheets use the server's `operatorName` from the inbox). |
+
+> There is no operator-name or location field any more. The signed-in user's own name is used wherever a name is needed (log-sheet operator label, NFC fault-report reporter) — on a shared tablet a device-wide typed name attributed everyone's work to whoever the admin entered once.
 | **Allow manual tag entry** | When on, all roles may type NFC IDs on the fill page. When off, only supervisor / senior operator / users with web fill permission. |
 | **Chip-serial scan check** (`nfcStrictSerialMatch`, admin-only switch) | Off by default — an NFC scan on the fill page matches on the Record 1 payload alone. On — the chip's hardware serial must **also** equal the asset's stored `nfcSerial`, and an asset with no serial recorded is rejected. Applies to real scans only; manual tag entry and the NFC-fault fallback are unaffected. |
 
@@ -460,6 +463,60 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 
 ---
 
+## App Icon
+
+One artwork, two SVG sources, and a script that rasterises both. **Everything is
+committed** — the build never runs the script, so a plain `npm run build` cannot
+fail because of it.
+
+| File | Role |
+|------|------|
+| `public/icons/icon.svg` | The artwork. Full-bleed with rounded corners; used wherever the icon is shown **unmasked** (browser tab, iOS home screen, backend favicon). |
+| `public/icons/icon-maskable.svg` | The same artwork scaled into Android's safe zone, brand colour bleeding to all four edges. Used for `purpose: "maskable"`. |
+| `public/icons/*.png` | Generated. Do not hand-edit — they are overwritten. |
+| `scripts/generate-icons.mjs` | The rasteriser (uses `sharp`). |
+
+### To change the icon
+
+1. Replace **`public/icons/icon.svg`** with your artwork on a 512×512 `viewBox`.
+2. Update **`public/icons/icon-maskable.svg`** to match. Keep the pattern already
+   in that file: a full-bleed background rectangle, then the artwork wrapped in a
+   `transform` that centres it and scales it down.
+3. Run the generator, **before** building:
+
+   ```bash
+   npm run icons
+   ```
+
+4. Commit the regenerated PNGs together with the SVGs, then build as usual
+   (`npm run build:mobile` for tablets).
+
+The script writes `icon-192.png`, `icon-512.png`, `apple-touch-icon.png` and
+`icon-maskable-512.png` into `public/icons/`, and also copies a 180×180
+`favicon.png` into the backend repo's `src/main/resources/static/` so both apps
+carry the same mark. If the backend lives somewhere other than
+`../../JavaProject/backend-offline-first`, point the script at it:
+
+```bash
+BACKEND_STATIC_DIR=/path/to/backend/src/main/resources/static npm run icons
+```
+
+### Why the maskable variant is a separate file
+
+Android does not draw the icon as given: the launcher applies its own mask —
+circle, squircle, teardrop, depending on the device — and **crops everything
+outside it**. Only the central circle of 80% diameter is guaranteed to survive.
+An icon whose artwork reaches the edges therefore comes out with its corners and
+edges shaved off after install. That is why `icon-512.png` (`purpose: "any"`) and
+`icon-maskable-512.png` (`purpose: "maskable"`) are two different images rather
+than one file declared `"any maskable"` — a single file cannot satisfy both, and
+declaring it for both is what produced the clipped icon.
+
+After changing the icon, reinstall the PWA on a test device: Android caches the
+launcher icon from install time and will not pick up a new one on refresh alone.
+
+---
+
 ## Dashboard
 
 Route: `/` (all authenticated users).
@@ -468,6 +525,7 @@ Route: `/` (all authenticated users).
 |----------|----------|
 | Welcome | `username` and `fullName` from JWT session |
 | Stat cards | **Open log sheets** and **submitted today**, counted from local log sheets (cards link to **Active log sheets**) |
+| Whose numbers | **Only the signed-in user's own work** — supervisors included; their team's work lives in the inbox's team tab. `ADMIN` / `HIGH_USER` see the device-wide totals instead. The rule is in `src/utils/dashboardStats.ts`. |
 | Pending sync | From `SyncManager.getPendingCount()` — submitted log sheets owned by the current user **plus** pending NFC fault reports if the role has `POST:/api/nfc-fault-reports/batch` |
 | Quick actions | Jump to `/logsheets/active` and `/logsheets/history` |
 | Sync card | Last sync time, pending/failed counts, manual sync button when online |
@@ -1241,7 +1299,6 @@ curl -k https://192.168.1.4/api/health
 2. Log in as **admin** once per device (recommended):
    - **Settings** → confirm **Server URL** matches the PWA origin (`https://192.168.1.4`).
    - Enable **Allow manual tag entry** if operators need typed NFC IDs (iOS or damaged tags).
-   - Optional: operator name / location labels for this device.
    - Optional: enable the **chip-serial scan check** if every asset has its NFC serial recorded.
 3. Log in as field users; wait for inbox sync (assigned work appears).
 4. Chrome menu → **Install app** (or use the in-app install prompt).

@@ -155,12 +155,9 @@ const fa = {
   settings: {
     title: 'تنظیمات',
     connection: 'اتصال به سرور',
-    operatorSection: 'اطلاعات اپراتور',
     nfcSection: 'تنظیمات NFC',
     serverUrl: 'آدرس سرور',
     syncInterval: 'فاصله همگام‌سازی (ثانیه)',
-    operatorName: 'نام اپراتور',
-    locationName: 'نام محل',
     allowManualEntry: 'اجازه ورود دستی شناسه تگ',
     allowManualEntryHint:
       'اگر فعال باشد، همه کاربران می‌توانند شناسه را بدون اسکن NFC وارد کنند. سرپرست و اپراتور ارشد همیشه این امکان را دارند.',
@@ -179,6 +176,8 @@ const fa = {
     openLogSheets: 'لاگ‌شیت‌های باز',
     pendingSync: 'در انتظار ارسال',
     todaySubmitted: 'ارسال‌شده امروز',
+    syncedCount: 'همگام‌سازی‌شده',
+    ownStatsHint: 'این آمار فقط مربوط به کارهای خود شماست.',
     quickCollect: 'جمع‌آوری داده',
     drafts: 'پیش‌نویس'
   },

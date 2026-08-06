@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    Maskable variant of icon.svg.
+
+    Android does not draw a PWA icon as-is: it applies its own mask (circle,
+    squircle, teardrop, …) and crops everything outside it. Only the central
+    circle of 80% diameter — the "safe zone" — is guaranteed to survive, so the
+    artwork here is scaled down and re-centred to sit well inside it, while the
+    brand colour bleeds to all four edges to fill whatever shape the launcher
+    picks. icon.svg keeps the full-size artwork and rounded corners for every
+    surface that shows the icon unmasked.
+
+    The artwork below is identical to icon.svg's, wrapped in one transform that
+    moves its bounding-box centre (291, 266) to the canvas centre and scales it
+    to 0.78 — leaving the whole drawing inside a circle of radius ~166, well
+    within the 204.8 safe radius.
+  -->
+  <rect width="512" height="512" fill="#1565C0"/>
+  <g transform="translate(256 256) scale(0.78) translate(-291 -266)">
+    <rect x="156" y="150" width="200" height="260" rx="20" fill="none" stroke="white" stroke-width="22" stroke-linejoin="round"/>
+    <rect x="216" y="128" width="80" height="44" rx="14" fill="#1565C0" stroke="white" stroke-width="18"/>
+    <line x1="192" y1="220" x2="320" y2="220" stroke="white" stroke-width="16" stroke-linecap="round"/>
+    <line x1="192" y1="258" x2="296" y2="258" stroke="white" stroke-width="16" stroke-linecap="round"/>
+    <path d="M192 298 L214 320 L260 278" fill="none" stroke="white" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="none" stroke="white" stroke-width="14" stroke-linecap="round">
+      <path d="M372 150 A26 26 0 0 1 398 176"/>
+      <path d="M372 118 A58 58 0 0 1 430 176"/>
+    </g>
+  </g>
+</svg>

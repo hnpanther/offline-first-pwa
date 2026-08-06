@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
 import {
-  getSettings,
   saveLogSheet,
   updateLogSheet,
   getLogSheetByServerId,
@@ -8,6 +7,7 @@ import {
   resetLogSheetToOpenDraft
 } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
+import { peekAuthSession } from '@/services/auth'
 import { archiveLocalWorkBeforeClear, removeArchivedLogSheet } from '@/services/storage/logSheetArchive'
 import {
   fetchLogSheetBundle,
@@ -36,6 +36,19 @@ export interface EnsureLocalLogSheetOptions {
 }
 
 /** Apply a server bundle: refresh context in IndexedDB (server wins) and upsert local sheet. */
+/**
+ * Display name for a sheet the server did not label.
+ *
+ * Only reached when `serverSheet.operatorName` is absent; the sheet is being
+ * materialised for whoever is signed in on this device, so their own name is the
+ * right label. This used to read a device-wide name typed into Settings, which on
+ * a shared tablet attributed every operator's work to whatever the admin typed once.
+ */
+async function currentUserDisplayName(): Promise<string | undefined> {
+  const session = await peekAuthSession()
+  return session?.fullName || session?.username || undefined
+}
+
 export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<LogSheet> {
   await mergeBundleContextToDb(bundle.context)
 
@@ -127,7 +140,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     return existing
   }
 
-  const settings = await getSettings()
+  const fallbackOperatorName = await currentUserDisplayName()
   const now = Date.now()
   const localId = serverSheet.localId ?? uuidv4()
 
@@ -139,7 +152,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     scopeSummary: serverSheet.scopeSummary ?? '',
     scopeDisplayLabel,
     operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
-    operatorName: serverSheet.operatorName ?? (settings.operatorName || undefined),
+    operatorName: serverSheet.operatorName ?? fallbackOperatorName,
     assigneeUserId:
       serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : undefined,
     status: 'draft',
@@ -203,7 +216,7 @@ export async function ensureLocalLogSheet(
   }
 
   if (options?.refreshBundleOnline === false) {
-    const settings = await getSettings()
+    const fallbackOperatorName = await currentUserDisplayName()
     const now = Date.now()
     const localId = serverSheet.localId ?? uuidv4()
     return saveLogSheet({
@@ -213,7 +226,7 @@ export async function ensureLocalLogSheet(
       templateName: serverSheet.templateName ?? '',
       scopeSummary: serverSheet.scopeSummary ?? '',
       operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
-      operatorName: serverSheet.operatorName ?? (settings.operatorName || undefined),
+      operatorName: serverSheet.operatorName ?? fallbackOperatorName,
       assigneeUserId:
         serverSheet.assigneeUserId != null ? toIdString(serverSheet.assigneeUserId) : undefined,
       status: 'draft',

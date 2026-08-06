@@ -4,7 +4,6 @@ import {
   CardContent,
   CardActionArea,
   Typography,
-  Grid,
   Button,
   Chip
 } from '@mui/material'
@@ -18,6 +17,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store'
 import { useLogSheets } from '@/hooks/useLogSheets'
 import { useManualSync } from '@/hooks/useSync'
+import { computeDashboardStats } from '@/utils/dashboardStats'
+import { isAdminRole } from '@/types/auth'
 import { t } from '@/i18n'
 
 function StatCard({
@@ -35,8 +36,8 @@ function StatCard({
 }) {
   const content = (
     <CardContent>
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-        <Box>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+        <Box sx={{ minWidth: 0 }}>
           <Typography variant="h4" fontWeight={700} color={`${color}.main`}>
             {value}
           </Typography>
@@ -61,9 +62,11 @@ function StatCard({
   )
 
   return (
-    <Card>
+    <Card sx={{ height: '100%', minWidth: 0 }}>
       {onClick ? (
-        <CardActionArea onClick={onClick}>{content}</CardActionArea>
+        <CardActionArea onClick={onClick} sx={{ height: '100%' }}>
+          {content}
+        </CardActionArea>
       ) : (
         content
       )}
@@ -76,21 +79,19 @@ export function Dashboard() {
   const authSession = useAppStore(s => s.authSession)
   const isOnline = useAppStore(s => s.isOnline)
   const isSyncing = useAppStore(s => s.isSyncing)
+  const sessionUserId = useAppStore(s => s.sessionUserId)
   const pendingCount = useAppStore(s => s.pendingCount)
   const failedCount = useAppStore(s => s.failedCount)
   const lastSyncAt = useAppStore(s => s.lastSyncAt)
   const { logs: logSheets } = useLogSheets()
   const manualSync = useManualSync()
 
-  // Log sheets are the only work unit this app tracks.
-  const todayStart = new Date()
-  todayStart.setHours(0, 0, 0, 0)
-
-  const openCount = logSheets.filter(s => s.status === 'draft').length
-  const todayCount = logSheets.filter(
-    s => (s.submittedAt ?? 0) >= todayStart.getTime()
-  ).length
-  const syncedCount = logSheets.filter(s => s.syncStatus === 'synced').length
+  // Log sheets are the only work unit this app tracks. The device's table is
+  // shared between everyone who signs in, so the counters are scoped to the
+  // viewer — see utils/dashboardStats.ts for the exact rule.
+  const isAdmin = isAdminRole(authSession?.roles ?? [])
+  const { open: openCount, submittedToday: todayCount, synced: syncedCount } =
+    computeDashboardStats(logSheets, { sessionUserId, isAdmin })
 
   const formatTime = (ts: number | null) => {
     if (!ts) return '—'
@@ -121,42 +122,54 @@ export function Dashboard() {
         />
       </Box>
 
-      {/* Stat cards */}
-      <Grid container spacing={2}>
-        <Grid item xs={6} sm={3}>
-          <StatCard
-            title={t.dashboard.openLogSheets}
-            value={openCount}
-            icon={<FactCheckIcon />}
-            color="primary"
-            onClick={() => navigate('/logsheets/active')}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3}>
-          <StatCard
-            title={t.dashboard.todaySubmitted}
-            value={todayCount}
-            icon={<CheckCircleIcon />}
-            color="success"
-          />
-        </Grid>
-        <Grid item xs={6} sm={3}>
-          <StatCard
-            title={t.dashboard.pendingSync}
-            value={pendingCount}
-            icon={<PendingIcon />}
-            color={pendingCount > 0 ? 'warning' : 'success'}
-          />
-        </Grid>
-        <Grid item xs={6} sm={3}>
-          <StatCard
-            title="همگام‌سازی‌شده"
-            value={syncedCount}
-            icon={<SyncIcon />}
-            color={failedCount > 0 ? 'error' : 'success'}
-          />
-        </Grid>
-      </Grid>
+      {/*
+        Stat cards. Plain CSS grid rather than MUI's <Grid container>: that one
+        lays out with negative margins, which on a wide tablet pushed the last
+        card past the right edge of the content box with nothing to scroll it
+        back into view. `gap` needs no negative margins, and `minmax(0, 1fr)`
+        lets a track shrink below its content instead of forcing the row wider.
+      */}
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2,
+          gridTemplateColumns: {
+            xs: 'repeat(2, minmax(0, 1fr))',
+            sm: 'repeat(4, minmax(0, 1fr))'
+          }
+        }}
+      >
+        <StatCard
+          title={t.dashboard.openLogSheets}
+          value={openCount}
+          icon={<FactCheckIcon />}
+          color="primary"
+          onClick={() => navigate('/logsheets/active')}
+        />
+        <StatCard
+          title={t.dashboard.todaySubmitted}
+          value={todayCount}
+          icon={<CheckCircleIcon />}
+          color="success"
+        />
+        <StatCard
+          title={t.dashboard.pendingSync}
+          value={pendingCount}
+          icon={<PendingIcon />}
+          color={pendingCount > 0 ? 'warning' : 'success'}
+        />
+        <StatCard
+          title={t.dashboard.syncedCount}
+          value={syncedCount}
+          icon={<SyncIcon />}
+          color={failedCount > 0 ? 'error' : 'success'}
+        />
+      </Box>
+      {!isAdmin && (
+        <Typography variant="caption" color="text.secondary" sx={{ mt: -2 }}>
+          {t.dashboard.ownStatsHint}
+        </Typography>
+      )}
 
       {/* Quick actions */}
       <Card>

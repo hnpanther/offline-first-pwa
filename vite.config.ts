@@ -43,7 +43,7 @@ export default defineConfig(({ mode }) => {
       react(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.svg', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'],
+        includeAssets: ['favicon.svg', 'icons/icon.svg', 'icons/icon-maskable.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'],
         manifest: {
           name: 'Mobile-First Field Data Collection System',
           short_name: 'MFDCS',
@@ -57,22 +57,30 @@ export default defineConfig(({ mode }) => {
           start_url: '/',
           scope: '/',
           id: '/',
+          // `any` and `maskable` are deliberately DIFFERENT files. Android applies its
+          // own mask (circle / squircle / teardrop) and crops everything outside the
+          // central 80% safe zone, so an icon whose artwork reaches the edges gets its
+          // corners eaten. icon-maskable-512.png carries the same artwork scaled into
+          // that safe zone with the brand colour bleeding to all four edges.
+          // Regenerate both with `npm run icons` after editing public/icons/*.svg.
           icons: [
             {
               src: 'icons/icon-192.png',
               sizes: '192x192',
-              type: 'image/png'
-            },
-            {
-              src: 'icons/icon-512.png',
-              sizes: '512x512',
-              type: 'image/png'
+              type: 'image/png',
+              purpose: 'any'
             },
             {
               src: 'icons/icon-512.png',
               sizes: '512x512',
               type: 'image/png',
-              purpose: 'any maskable'
+              purpose: 'any'
+            },
+            {
+              src: 'icons/icon-maskable-512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable'
             }
           ]
         },

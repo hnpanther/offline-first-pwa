@@ -74,6 +74,7 @@ export function useAuthInit(): void {
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      useAppStore.getState().setSessionEnded(true)
       setAuthSession(null)
       setSessionUserId(null)
       clearInbox()
