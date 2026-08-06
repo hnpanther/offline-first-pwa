@@ -82,9 +82,7 @@ export function Dashboard() {
   const { logs: logSheets } = useLogSheets()
   const manualSync = useManualSync()
 
-  // Stats are log-sheet based: the legacy DataRecord flow is no longer reachable from
-  // this app (its entry form and page were removed), so counting records here would
-  // have shown a permanent zero on any fresh install.
+  // Log sheets are the only work unit this app tracks.
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
 

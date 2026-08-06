@@ -1,16 +1,4 @@
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed'
-export type RecordStatus = 'draft' | 'approved'
-
-export interface BaseRecord {
-  id?: number
-  localId: string
-  createdAt: number
-  updatedAt: number
-  syncStatus: SyncStatus
-  syncedAt?: number
-  syncError?: string
-  serverId?: string
-}
 
 export interface NFCTagData {
   serialNumber: string
@@ -25,23 +13,10 @@ export interface NFCRecord {
   data?: string
 }
 
-export interface DataRecord extends BaseRecord {
-  nfcTagId: string
-  assetEntryId?: string
-  assetName?: string
-  assetTypeId?: string   // legacy field — keep as-is
-  recordStatus: RecordStatus
-  formData: Record<string, unknown>
-  notes?: string
-  operatorName?: string
-  location?: string
-}
-
 // Configured by admin — defines what fields to collect for a category of assets
 export interface AssetClass {
   id: string
   name: string
-  fields: FormField[]
   createdAt: number
   updatedAt: number
 }
@@ -54,7 +29,7 @@ export interface AssetEntry {
    * Physical NFC chip serial / UID, e.g. "00:aa:34:9f:12:cd". Optional — many assets have none.
    * Distinct from nfcTagId: the tag id is the logical lookup key (inherited from the sub-function
    * when the asset has none of its own), while this identifies the chip hardware itself.
-   * Indexed since Dexie v11 so a future scan-by-UID lookup needs no schema change.
+   * Indexed in Dexie so a future scan-by-UID lookup needs no schema change.
    */
   nfcSerial?: string
   classId: string        // was assetTypeId

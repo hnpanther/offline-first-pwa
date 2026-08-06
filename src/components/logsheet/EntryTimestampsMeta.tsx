@@ -23,7 +23,7 @@ export function EntryTimestampsMeta({
     >
       {createdAt != null && (
         <span>
-          {t.records.createdAt}: {formatJalaliDateTime(createdAt)}
+          {t.logSheet.entryCreatedAt}: {formatJalaliDateTime(createdAt)}
         </span>
       )}
       {createdAt != null && updatedAt != null && (
@@ -33,7 +33,7 @@ export function EntryTimestampsMeta({
       )}
       {updatedAt != null && (
         <span>
-          {t.records.updatedAt}: {formatJalaliDateTime(updatedAt)}
+          {t.logSheet.entryUpdatedAt}: {formatJalaliDateTime(updatedAt)}
         </span>
       )}
     </Typography>

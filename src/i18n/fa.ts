@@ -130,7 +130,9 @@ const fa = {
     nfcFaultSubmit: 'ثبت گزارش',
     nfcFaultSubmitted: 'گزارش خرابی NFC ثبت شد. اکنون می‌توانید این Asset را به‌صورت دستی تکمیل کنید.',
     manualEntryUnlocked: 'ثبت دستی',
-    manualEntryUnlockedHint: 'برای این Asset گزارش خرابی NFC ثبت شده و ثبت دستی (بدون اسکن) باز است.'
+    manualEntryUnlockedHint: 'برای این Asset گزارش خرابی NFC ثبت شده و ثبت دستی (بدون اسکن) باز است.',
+    entryCreatedAt: 'تاریخ ثبت',
+    entryUpdatedAt: 'آخرین ویرایش'
   },
   sync: {
     pending: 'در انتظار ارسال',
@@ -145,19 +147,6 @@ const fa = {
     serverUnreachable: 'سرور در دسترس نیست',
     expired: 'مهلت تکمیل گذشته — سینک ممکن نیست',
     superseded: 'ثبت‌شده توسط دیگری — سینک ممکن نیست'
-  },
-  records: {
-    title: 'سوابق',
-    empty: 'هیچ رکوردی ثبت نشده است',
-    emptyDrafts: 'هیچ پیش‌نویسی وجود ندارد',
-    emptyApproved: 'هیچ رکورد تأیید شده‌ای وجود ندارد',
-    createdAt: 'تاریخ ثبت',
-    updatedAt: 'آخرین ویرایش',
-    status: 'وضعیت',
-    delete: 'حذف',
-    deleteConfirm: 'آیا از حذف این رکورد مطمئن هستید؟',
-    yes: 'بله',
-    no: 'خیر'
   },
   settings: {
     title: 'تنظیمات',

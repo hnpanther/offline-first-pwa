@@ -8,7 +8,6 @@
 import { db } from './db'
 import { Repository } from './repository'
 import type { FieldDefinition } from '@/types/sync'
-import type { FormField, FormFieldType } from '@/types'
 import { toIdString } from '@/utils/ids'
 
 const repo = new Repository<FieldDefinition>(db.fieldDefinitions, 'field_definition')
@@ -16,50 +15,7 @@ const repo = new Repository<FieldDefinition>(db.fieldDefinitions, 'field_definit
 /**
  * Server embeds fields as FieldDefinition-shaped maps ({ key, dataType }).
  * Local admin UI uses FormField ({ name, type }). Accept both.
- */
-export function toFormFields(fields: unknown[] | undefined | null): FormField[] {
-  if (!fields?.length) return []
-  return fields
-    .map(raw => {
-      const f = raw as Record<string, unknown>
-      const name = String(f.name ?? f.key ?? '').trim()
-      if (!name) return null
-      const type = String(f.type ?? f.dataType ?? 'text').toLowerCase() as FormFieldType
-      const validation =
-        f.validation && typeof f.validation === 'object'
-          ? (f.validation as Record<string, unknown>)
-          : undefined
-      const field: FormField = {
-        name,
-        label: String(f.label ?? name),
-        type,
-        required: Boolean(f.required),
-        unit: f.unit != null ? String(f.unit) : undefined,
-        min:
-          typeof f.min === 'number'
-            ? f.min
-            : typeof validation?.min === 'number'
-              ? validation.min
-              : undefined,
-        max:
-          typeof f.max === 'number'
-            ? f.max
-            : typeof validation?.max === 'number'
-              ? validation.max
-              : undefined,
-        options: Array.isArray(f.options)
-          ? (f.options as FormField['options'])
-          : Array.isArray(validation?.options)
-            ? (validation.options as FormField['options'])
-            : undefined,
-        helperText: f.helperText != null ? String(f.helperText) : undefined
-      }
-      return field
-    })
-    .filter((f): f is FormField => f != null)
-}
-
-/** Prefer server/numeric ids and newer rows when the same key appears twice. */
+ *//** Prefer server/numeric ids and newer rows when the same key appears twice. */
 function dedupeByKey(fields: FieldDefinition[]): FieldDefinition[] {
   const byKey = new Map<string, FieldDefinition>()
   for (const field of fields) {
@@ -87,25 +43,10 @@ export async function getFieldsForClass(classId: string | undefined): Promise<Fi
   const normalizedClassId = toIdString(classId)
   if (!normalizedClassId) return []
 
-  let fields = dedupeByKey(
+  // fieldDefinitions rows from the log-sheet bundle are the only source of truth.
+  const fields = dedupeByKey(
     (await repo.findAll()).filter(f => toIdString(f.classId) === normalizedClassId)
   )
-
-  // Authoritative rows from the server bundle — never re-import AssetClass.fields on top.
-  if (fields.length > 0) {
-    return fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-  }
-
-  // Legacy fallback: only when fieldDefinitions is empty.
-  const assetClass = await db.assetClasses.get(normalizedClassId)
-  const embedded = toFormFields(assetClass?.fields)
-  if (embedded.length > 0) {
-    await syncClassFieldsFromFormFields(normalizedClassId, embedded)
-    fields = dedupeByKey(
-      (await repo.findAll()).filter(f => toIdString(f.classId) === normalizedClassId)
-    )
-  }
-
   return fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
 }
 
@@ -141,62 +82,7 @@ export async function reorderFieldDefinitions(
   await Promise.all(
     orderedIds.map((id, index) => repo.update(id, { classId, order: index }))
   )
-}
-
-function formFieldToDefinitionData(
-  field: FormField,
-  classId: string,
-  order: number
-): Omit<FieldDefinition, 'id' | 'createdAt' | 'updatedAt' | 'version' | 'deleted' | 'synced'> {
-  return {
-    classId,
-    key: field.name,
-    label: field.label,
-    dataType: field.type as FieldDefinition['dataType'],
-    unit: field.unit,
-    required: field.required ?? false,
-    validation: {
-      min: field.min,
-      max: field.max,
-      options: field.options,
-    },
-    order,
-  }
-}
-
-/**
- * Keep fieldDefinitions in sync with AssetClass.fields[].
- * Admin UI still edits the embedded fields array; LogSheet reads fieldDefinitions.
- */
-export async function syncClassFieldsFromFormFields(
-  classId: string,
-  fields: FormField[]
-): Promise<void> {
-  const formFields = toFormFields(fields)
-  const existing = await repo.findWhere('classId', classId)
-  const existingByKey = new Map(existing.map(f => [f.key, f]))
-  const newKeys = new Set(formFields.map(f => f.name))
-
-  await Promise.all(
-    formFields.map(async (field, index) => {
-      const data = formFieldToDefinitionData(field, classId, index)
-      const match = existingByKey.get(field.name)
-      if (match) {
-        await repo.update(match.id, data)
-      } else {
-        await repo.create(data)
-      }
-    })
-  )
-
-  await Promise.all(
-    existing
-      .filter(f => !newKeys.has(f.key))
-      .map(f => repo.softDelete(f.id))
-  )
-}
-
-/** Soft-delete all field definitions belonging to a class. */
+}/** Soft-delete all field definitions belonging to a class. */
 export async function deleteFieldsForClass(classId: string): Promise<void> {
   const existing = await repo.findWhere('classId', classId)
   await Promise.all(existing.map(f => repo.softDelete(f.id)))

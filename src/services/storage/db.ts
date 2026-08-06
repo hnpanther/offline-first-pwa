@@ -1,9 +1,10 @@
 import Dexie, { type Table } from 'dexie'
-import type { DataRecord, AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport } from '@/types'
+import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport } from '@/types'
 import type { FieldDefinition, OutboxEntry, SyncMeta } from '@/types/sync'
 
+const DB_NAME = 'offline-pwa-db'
+
 class AppDatabase extends Dexie {
-  records!: Table<DataRecord>
   assetClasses!: Table<AssetClass>
   assetEntries!: Table<AssetEntry>
   settings!: Table<AppSettings & { key: string }>
@@ -14,40 +15,34 @@ class AppDatabase extends Dexie {
   logSheetTemplates!: Table<LogSheetTemplate>
   logSheets!: Table<LogSheet>
   operationalUnits!: Table<OperationalUnit>
-
-  // Version 6+
   fieldDefinitions!: Table<FieldDefinition>
   outbox!: Table<OutboxEntry>
   syncMeta!: Table<SyncMeta>
   logSheetUserArchives!: Table<LogSheetUserArchive>
-
-  // Version 10+
   nfcFaultReports!: Table<NfcFaultReport>
 
   constructor() {
-    super('offline-pwa-db')
+    super(DB_NAME)
 
     /**
-     * Single consolidated schema.
+     * The one and only schema version.
      *
-     * Versions 1-10 were folded into this one block while the app is still
-     * pre-production: they only ever *built up* to this shape, and their two
-     * data migrations (assetTypes -> assetClasses in v5, AssetClass.fields ->
-     * fieldDefinitions in v6) are meaningless on a fresh install and already
-     * long since applied on any device that has been running the app.
+     * The app has never shipped, so the eleven historical versions that only ever
+     * built up to this shape were collapsed into a single `version(1)` — the same
+     * reasoning as folding the backend's Flyway migrations into V1. There is no
+     * upgrade path to preserve because there is no production data to upgrade.
      *
-     * The version NUMBER is deliberately kept at 11 rather than reset to 1.
-     * IndexedDB refuses to open a database whose on-disk version is higher
-     * than the one requested, so renumbering downwards would hard-fail with a
-     * VersionError on every device that already has the old database — the
-     * user would have to clear site data by hand. Keeping 11 means existing
-     * installs open unchanged and fresh installs create this shape directly.
+     * A device that still holds the pre-collapse database is on IndexedDB version
+     * 110 and cannot be opened by a version(1) declaration — IndexedDB refuses to
+     * "downgrade". `openDatabase()` below catches exactly that and recreates the
+     * database from scratch, which is safe here: every table is either server-owned
+     * reference data that the next sync refetches, or local work that a pre-production
+     * dev device can afford to lose.
      *
-     * When the schema next changes, add a NEW `this.version(12).stores({...})`
-     * below with the full store list; do not edit this block in place.
+     * When the schema next changes, add `this.version(2).stores({...})` below with the
+     * full store list rather than editing this block.
      */
-    this.version(11).stores({
-      records: '++id, localId, nfcTagId, syncStatus, recordStatus, createdAt',
+    this.version(1).stores({
       assetClasses: 'id, createdAt',
       assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
       locations: 'id, code, parentId',
@@ -68,6 +63,26 @@ class AppDatabase extends Dexie {
 }
 
 export const db = new AppDatabase()
+
+/**
+ * Opens the database, recreating it if the on-disk version is newer than this build.
+ *
+ * Only reachable on a dev device that ran the app before the version numbers were
+ * collapsed to 1. Dexie surfaces that as `VersionError`; the only way forward is to
+ * delete and recreate, since IndexedDB cannot open a database at a lower version than
+ * it was created with. Any other failure is rethrown untouched — silently wiping a
+ * user's database on an unrelated error would be far worse than failing loudly.
+ */
+export async function openDatabase(): Promise<void> {
+  try {
+    await db.open()
+  } catch (err) {
+    if ((err as Error)?.name !== 'VersionError') throw err
+    db.close()
+    await Dexie.delete(DB_NAME)
+    await db.open()
+  }
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',

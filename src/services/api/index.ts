@@ -8,7 +8,6 @@
  *   - Bootstrap (light user + operational units)
  *   - Log sheet bundles (per-sheet reference data)
  *   - Asset lookup (NFC scan → asset info)
- *   - Records  (push DataRecords)
  *   - Log sheets (push submitted log sheets)
  *   - Sync engine (outbox push / incremental pull)
  */
@@ -23,7 +22,6 @@ import type {
   SubFunction,
   LogSheetServerStatus,
   LogSheetAssignmentType,
-  DataRecord,
   OperationalUnit
 } from '@/types'
 import type { FieldDefinition, OutboxEntry } from '@/types/sync'
@@ -281,34 +279,6 @@ export async function fetchAssetByNfcTag(
     if (err instanceof ApiError && err.status === 404) return null
     throw err
   }
-}
-
-// ===========================================================================
-// Records — DataRecord push
-// ===========================================================================
-
-export interface RecordSubmitResult {
-  localId: string
-  serverId?: string
-  error?: string
-}
-
-/**
- * POST /api/records/batch
- *
- * Send one or more approved DataRecords to the server.
- * Only records with recordStatus==='approved' are ever submitted.
- * The server responds per-record with its assigned serverId or an error.
- */
-export async function submitRecordsBatch(
-  records: DataRecord[],
-  signal?: AbortSignal
-): Promise<RecordSubmitResult[]> {
-  return apiClient.post<RecordSubmitResult[]>(
-    '/api/records/batch',
-    { records },
-    signal
-  )
 }
 
 // ===========================================================================

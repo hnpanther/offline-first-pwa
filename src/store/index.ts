@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
-import type { AssetEntry, DataRecord, NFCTagData, AppSettings } from '@/types'
+import type { AssetEntry, NFCTagData, AppSettings } from '@/types'
 import type { AuthSession } from '@/types/auth'
 import type { ServerLogSheet } from '@/services/api'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
@@ -55,10 +55,6 @@ interface SyncSlice {
 // Records slice
 // ---------------------------------------------------------------------------
 interface RecordsSlice {
-  records: DataRecord[]
-  recordsLoading: boolean
-  setRecords: (records: DataRecord[]) => void
-  setRecordsLoading: (v: boolean) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -146,10 +142,6 @@ export const useAppStore = create<AppStore>()(
     setSyncError: (err) => set({ syncError: err }),
 
     // Records
-    records: [],
-    recordsLoading: false,
-    setRecords: (records) => set({ records }),
-    setRecordsLoading: (v) => set({ recordsLoading: v }),
 
     // Settings
     settings: { ...DEFAULT_SETTINGS },

@@ -1,51 +1,14 @@
 import { db, DEFAULT_SETTINGS } from './db'
 import type {
-  DataRecord,
   AssetClass,
   AssetEntry,
   AppSettings,
-  SyncStatus,
   Location,
   PlantSystem,
   MainFunction,
   LogSheetTemplate,
   LogSheet
 } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Records
-// ---------------------------------------------------------------------------
-
-export async function getPendingRecords(): Promise<DataRecord[]> {
-  const candidates = await db.records
-    .where('syncStatus')
-    .anyOf(['pending', 'failed'])
-    .toArray()
-  // Only sync approved records (or legacy records without recordStatus)
-  return candidates.filter(r => !r.recordStatus || r.recordStatus === 'approved')
-}
-
-export async function updateRecordSyncStatus(
-  localId: string,
-  status: SyncStatus,
-  extra?: { serverId?: string; syncError?: string; syncedAt?: number }
-): Promise<void> {
-  const existing = await db.records.where('localId').equals(localId).first()
-  if (!existing?.id) return
-  await db.records.update(existing.id, {
-    syncStatus: status,
-    updatedAt: Date.now(),
-    ...(extra ?? {})
-  })
-}
-
-export async function getPendingCount(): Promise<number> {
-  const candidates = await db.records
-    .where('syncStatus')
-    .anyOf(['pending', 'failed'])
-    .toArray()
-  return candidates.filter(r => !r.recordStatus || r.recordStatus === 'approved').length
-}
 
 // ---------------------------------------------------------------------------
 // Asset Classes (was Asset Types)
