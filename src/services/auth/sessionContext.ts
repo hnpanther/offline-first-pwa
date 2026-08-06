@@ -21,6 +21,8 @@ import {
 } from '@/utils/logSheetStatus'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import { toIdString } from '@/utils/ids'
+import { fetchBootstrap } from '@/services/api'
+import { useAppStore } from '@/store'
 import type { LogSheet } from '@/types'
 
 const SESSION_USER_ID_KEY = 'sessionUserId'
@@ -39,6 +41,60 @@ export async function setSessionUserId(userId: number | string): Promise<void> {
 export async function getLastSessionUsername(): Promise<string | null> {
   const row = await db.syncMeta.get(LAST_USERNAME_KEY)
   return typeof row?.value === 'string' ? row.value : null
+}
+
+/**
+ * Guarantees the session has a resolved user id, re-binding it if login could not.
+ *
+ * <p>Almost everything user-scoped keys off this id: outbound sync refuses to push a sheet it
+ * cannot attribute (`isLogSheetOutboundOwnedByUser` returns false for a null id) and inbox
+ * merge refuses to protect local form data it cannot attribute
+ * (`shouldPreserveLocalFormData` likewise). Login binds it from `GET /api/bootstrap`, but that
+ * call can fail on its own — a server restart in the window right after the token was issued,
+ * a blip, or the session being superseded from another device — and before this existed the
+ * app simply carried on with a null id: sync silently pushed nothing, and the first inbox
+ * merge could overwrite the operator's typed values.
+ *
+ * <p>Idempotent and cheap: once bound it is a single IndexedDB read, so callers may invoke it
+ * on every sync tick and every inbox refresh, which is exactly how the binding eventually
+ * heals without the operator having to log out and back in.
+ *
+ * @returns the resolved id, or null when the server is still unreachable.
+ */
+export async function ensureSessionUserId(): Promise<string | null> {
+  const existing = await getSessionUserId();
+  if (existing) {
+    useAppStore.getState().setSessionUserId(existing);
+    useAppStore.getState().setSessionBindingPending(false);
+    return existing;
+  }
+
+  try {
+    const bootstrap = await fetchBootstrap();
+    const userId = toIdString(bootstrap.userId);
+    if (!userId) {
+      useAppStore.getState().setSessionBindingPending(true);
+      return null;
+    }
+
+    await setSessionUserId(userId);
+    useAppStore.getState().setSessionUserId(userId);
+    useAppStore.getState().setSessionBindingPending(false);
+
+    // Deferred from login: both steps need an identity, and neither could run without one.
+    // isolateSheetsNotOwnedBy is only correct now that we know who this actually is.
+    const lastUsername = await getLastSessionUsername();
+    const currentUsername = useAppStore.getState().authSession?.username ?? null;
+    if (lastUsername && currentUsername && lastUsername === currentUsername) {
+      await isolateSheetsNotOwnedBy(userId);
+      await reviveOwnedSubmittedQueueOnLogin(userId);
+    }
+    return userId;
+  } catch {
+    // Offline or server down — stay unbound and let the next attempt try again.
+    useAppStore.getState().setSessionBindingPending(true);
+    return null;
+  }
 }
 
 async function isolateSheetsNotOwnedBy(userId: string | null): Promise<void> {
@@ -130,7 +186,14 @@ export async function activateUserSession(
 
   if (prevUsername && prevUsername !== username) {
     await clearInboxSnapshot()
-    await isolateSheetsNotOwnedBy(userIdStr)
+    // Only isolate when we actually know who just signed in. With a null id every owned
+    // sheet matches `owner !== userId`, so isolating here would archive the whole device's
+    // work and fail its drafts on the strength of a bootstrap hiccup. The inbox cache is
+    // still cleared — that is display-only and safe — and isolation runs later from
+    // ensureSessionUserId() once the identity is actually known.
+    if (userIdStr) {
+      await isolateSheetsNotOwnedBy(userIdStr)
+    }
   }
 
   if (userIdStr) {

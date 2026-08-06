@@ -13,7 +13,11 @@ import {
 import { submitLogSheetsBatch, submitNfcFaultReportsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getAuthSession } from '@/services/auth'
-import { getSessionUserId, isLogSheetOutboundOwnedByUser } from '@/services/auth/sessionContext'
+import {
+  ensureSessionUserId,
+  getSessionUserId,
+  isLogSheetOutboundOwnedByUser
+} from '@/services/auth/sessionContext'
 import {
   removeArchivedLogSheet,
   getArchivedSubmissionsPendingServerOutcome,
@@ -99,6 +103,13 @@ class SyncManager {
 
     const session = await getAuthSession()
     if (!session) return
+
+    // Retry the binding first — this is the main place it heals, because sync ticks on a
+    // timer and on every reconnect. Without an id nothing below can be attributed: the
+    // outbound queue would come back empty anyway, so returning here is the same outcome
+    // stated honestly, and it keeps a zero pending badge from reading as "all sent".
+    const sessionUserId = await ensureSessionUserId()
+    if (!sessionUserId) return
 
     await this.markExpiredSheets()
 

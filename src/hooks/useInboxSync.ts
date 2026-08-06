@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from 'react'
 import { pullInbox } from '@/services/sync/pullInbox'
+import { ensureSessionUserId } from '@/services/auth/sessionContext'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
 import { syncManager } from '@/services/sync'
 import { pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
@@ -20,11 +21,23 @@ async function applyInboxSnapshot(setInbox: SetInbox): Promise<boolean> {
   return true
 }
 
-/** Pull inbox from server, merge into local sheets, and update store snapshot. */
+/**
+ * Pull inbox from server, merge into local sheets, and update store snapshot.
+ *
+ * The merge is skipped entirely when the session has no resolved user id.
+ * `shouldPreserveLocalFormData` returns false for a null id, so merging in that state would
+ * treat every local sheet as somebody else's and overwrite the operator's typed values with
+ * the server's empty ones. Displaying the lists is still safe — they are read-only — so the
+ * app stays usable while the binding heals.
+ */
 export async function pullAndMergeInbox(setInbox: SetInbox): Promise<void> {
   const { assigned, assignedSheets, available, teamOpen, serverTime } = await pullInbox()
   await pullBootstrapIfStale(BOOTSTRAP_STALE_MS)
-  await mergeInboxIntoLocalSheets(assigned)
+
+  const sessionUserId = await ensureSessionUserId()
+  if (sessionUserId) {
+    await mergeInboxIntoLocalSheets(assigned)
+  }
   const syncAt = Date.now()
   await saveInboxSnapshot({
     assigned: assignedSheets,

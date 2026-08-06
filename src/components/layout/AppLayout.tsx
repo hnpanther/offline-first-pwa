@@ -8,6 +8,7 @@ import { useSyncManager } from '@/hooks/useSync'
 import { useMasterDataSync } from '@/hooks/useMasterDataSync'
 import { useInboxSync } from '@/hooks/useInboxSync'
 import { InstallPwaPrompt } from '@/components/common/InstallPwaPrompt'
+import { SessionBindingNotice } from '@/components/common/SessionBindingNotice'
 
 const DRAWER_WIDTH = 240
 
@@ -45,6 +46,7 @@ export function AppLayout() {
 
         <Box sx={{ flexGrow: 1, p: { xs: 1.5, sm: 2, md: 3 } }}>
           <InstallPwaPrompt />
+          <SessionBindingNotice />
           <Outlet />
         </Box>
       </Box>

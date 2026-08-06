@@ -76,10 +76,22 @@ interface AuthSlice {
    * state is immune to that — whichever navigation wins, the flag survives.
    */
   sessionEnded: boolean
+  /**
+   * The session has no resolved `sessionUserId` yet — login succeeded but the bootstrap call
+   * that identifies the user did not.
+   *
+   * <p>While this is true the app is deliberately half-open: local work is fully usable, but
+   * outbound sync and inbox merge are held back, because neither can attribute work to a user
+   * it cannot name. Sync would push nothing anyway; inbox merge would actively overwrite the
+   * operator's typed values. `ensureSessionUserId()` retries on every sync tick and inbox
+   * refresh, so this clears itself as soon as the server is reachable again.
+   */
+  sessionBindingPending: boolean
   setAuthSession: (session: AuthSession | null) => void
   setAuthLoaded: (v: boolean) => void
   setSessionUserId: (id: string | null) => void
   setSessionEnded: (v: boolean) => void
+  setSessionBindingPending: (v: boolean) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -167,10 +179,12 @@ export const useAppStore = create<AppStore>()(
     authLoaded: false,
     sessionUserId: null,
     sessionEnded: false,
+    sessionBindingPending: false,
     setAuthSession: (session) => set({ authSession: session }),
     setAuthLoaded: (v) => set({ authLoaded: v }),
     setSessionUserId: (id) => set({ sessionUserId: id }),
     setSessionEnded: (v) => set({ sessionEnded: v }),
+    setSessionBindingPending: (v) => set({ sessionBindingPending: v }),
 
     // Inbox
     inboxAssigned: [],

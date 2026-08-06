@@ -282,6 +282,35 @@ If README and code disagree, **trust the code** and fix README in the same task.
 
 ## Behaviour notes worth knowing
 
+**`sessionUserId` may be unresolved, and everything user-scoped must cope.** Login binds it from
+`GET /api/bootstrap`, but that call can fail on its own — a server restart in the window right
+after the token was issued, a network blip, or the session being superseded from another device.
+Login still succeeds (this is an offline-first app; refusing entry because one call failed would
+lock an operator out of work already on the device), so the session can be **authenticated but
+unbound**, and `ensureSessionUserId()` in `services/auth/sessionContext.ts` is what heals it.
+
+Why it matters: `isLogSheetOutboundOwnedByUser` and `shouldPreserveLocalFormData` both return
+false for a null id — correctly, since an unnamed session owns nothing. The first is harmless
+(sync pushes nothing) but *silent*; the second is destructive (inbox merge treats the operator's
+own typed values as somebody else's and lets the server overwrite them). So while unbound:
+
+- `SyncManager.executeSync` calls `ensureSessionUserId()` and **returns early** if still null.
+- `pullAndMergeInbox` calls it and **skips `mergeInboxIntoLocalSheets`** — the lists still render,
+  because they are read-only.
+- `sessionBindingPending` in the store drives a banner, so a device that is sending nothing never
+  looks healthy again.
+
+`ensureSessionUserId()` is idempotent and one IndexedDB read once bound, which is why it is safe
+to call on every sync tick and inbox refresh — that repetition *is* the recovery mechanism.
+**Never run `isolateSheetsNotOwnedBy` with a null id**: every owned sheet matches
+`owner !== userId`, so it would archive the whole device's work and fail its drafts on the
+strength of a bootstrap hiccup. `activateUserSession` now guards that, and the isolation is
+deferred into `ensureSessionUserId()` where the identity is actually known. Tests:
+`services/auth/ensureSessionUserId.test.ts` and `utils/unboundSessionGuards.test.ts` (the latter
+is the tripwire — if either predicate ever returns true for a null id, the gating above becomes
+wrong).
+
+
 **Dashboard counters are per-viewer.** `utils/dashboardStats.ts` is the single rule:
 your own work only — *including for supervisors*, whose team's work belongs in the
 inbox's team tab — with ADMIN / HIGH_USER alone seeing the device-wide totals. A

@@ -20,6 +20,16 @@ import { isSessionValid } from '@/types/auth'
 import { postLoginPath } from '@/utils/loginRedirect'
 import { toIdString } from '@/utils/ids'
 
+/**
+  * Binds the signed-in user to a stable `sessionUserId`.
+  *
+  * Login deliberately still succeeds when this cannot be resolved — the app is offline-first
+  * and refusing entry because one call failed would lock an operator out of work they already
+  * have on the device. Instead the session is marked *unbound*: `ensureSessionUserId()` retries
+  * on every sync tick and inbox refresh, and until it succeeds outbound sync and inbox merge
+  * hold back rather than act on an unattributable session (see the store's
+  * `sessionBindingPending`).
+  */
 async function bindSessionUserContext(username: string): Promise<void> {
   const setSessionUserId = useAppStore.getState().setSessionUserId
   let userId: string | null = null
@@ -27,13 +37,20 @@ async function bindSessionUserContext(username: string): Promise<void> {
     const bootstrap = await fetchBootstrap()
     userId = toIdString(bootstrap.userId)
   } catch {
+    // Same user returning to this device: their id is already on disk and still correct.
     const lastUsername = await getLastSessionUsername()
     if (lastUsername === username) {
       userId = await getSessionUserId()
     }
   }
   await activateUserSession(username, userId)
-  if (userId) setSessionUserId(userId)
+  if (userId) {
+    setSessionUserId(userId)
+    useAppStore.getState().setSessionBindingPending(false)
+  } else {
+    setSessionUserId(null)
+    useAppStore.getState().setSessionBindingPending(true)
+  }
 }
 
 export function useAuthInit(): void {
@@ -61,6 +78,11 @@ export function useAuthInit(): void {
         }
       } else {
         setSessionUserId(null)
+      }
+      // A restored session that never got bound stays unbound across restarts, so raise the
+      // flag here too rather than waiting for the first sync tick to notice.
+      if (session && !useAppStore.getState().sessionUserId) {
+        useAppStore.getState().setSessionBindingPending(true)
       }
       setAuthLoaded(true)
       if (session && location.pathname === '/login') {
@@ -110,6 +132,7 @@ export function useAuth() {
   )
 
   const signOut = useCallback(async () => {
+    useAppStore.getState().setSessionBindingPending(false)
     await clearUserSessionContext()
     await clearAuthSession()
     setAuthSession(null)
