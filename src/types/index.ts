@@ -92,6 +92,12 @@ export interface AppSettings {
   operatorName: string
   locationName: string
   allowManualEntry: boolean
+  /**
+   * When on, an NFC scan on the log-sheet fill page must match BOTH the Record 1
+   * payload and the asset's stored chip serial. Off by default — the app's
+   * original Record-1-only behaviour.
+   */
+  nfcStrictSerialMatch: boolean
 }
 
 export interface NFCScanResult {

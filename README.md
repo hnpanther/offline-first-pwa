@@ -37,10 +37,9 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 19. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
 20. [Synchronization](#synchronization)
 21. [IndexedDB Schema](#indexeddb-schema)
-22. [Legacy DataRecords](#legacy-datarecords)
-23. [API Contract](#api-contract)
-24. [Production Deployment](#production-deployment)
-25. [Troubleshooting](#troubleshooting)
+22. [API Contract](#api-contract)
+23. [Production Deployment](#production-deployment)
+24. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -52,11 +51,11 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 - **Log sheet inbox (kartabl)** — assigned work, pickup pool, supervisor team view
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
-- **Background sync** — submitted log sheets (and legacy DataRecords when permitted) push when online
+- **Background sync** — submitted log sheets, plus locally-filed NFC fault reports when the role permits, push when online
 - **History & archives** — completed work plus per-user snapshots on shared tablets
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
-- **Role-based UI** — admin master data and settings; supervisor assign/release/reassign
+- **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
 
 ---
 
@@ -85,7 +84,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 | UI | React 18 + TypeScript |
 | Build | Vite 5 + `vite-plugin-pwa` (Workbox `generateSW`) |
 | Components | MUI v5, full RTL via `@emotion/cache` + `stylis-plugin-rtl` |
-| Local storage | Dexie 4 (IndexedDB), schema version **9** |
+| Local storage | Dexie 4 (IndexedDB), schema version **1** (single version) |
 | Global state | Zustand |
 | Forms | React Hook Form |
 | Routing | React Router v6 |
@@ -132,10 +131,9 @@ src/
 ├── components/
 │   ├── auth/           ProtectedRoute, AdminRoute
 │   ├── common/         SyncStatusBar, InstallPwaPrompt, LogSheetIdentityMeta, ScopeLabel
-│   ├── forms/          DynamicClassForm, DynamicFormField, DataEntryForm
+│   ├── forms/          DynamicClassForm, DynamicFormField
 │   ├── layout/         AppLayout, Header, Sidebar
-│   ├── logsheet/       AssignOperatorDialog
-│   └── nfc/            NFCReader (standalone component; fill page uses inline NFC UI)
+│   └── logsheet/       AssignOperatorDialog, EntryTimestampsMeta
 ├── hooks/
 │   ├── useAuth.ts              Session restore, login/logout
 │   ├── useInboxSync.ts         Inbox pull + offline snapshot + pre-provision
@@ -143,21 +141,23 @@ src/
 │   ├── useSync.ts              SyncManager lifecycle
 │   ├── useLogSheets.ts         Local log sheet list
 │   ├── useFieldDefinitions.ts  Field definitions per asset class
+│   ├── useNFC.ts               Web NFC reader lifecycle
+│   ├── useSettings.ts          Device settings read/write
 │   └── useOnlineStatus.ts      navigator.onLine → store
 ├── pages/
 │   ├── LoginPage.tsx
 │   ├── Dashboard.tsx
 │   ├── LogSheetListPage.tsx    Inbox (active) + history
 │   ├── LogSheetFillPage.tsx    Fill log sheet + NFC
-│   ├── LogSheetTemplatePage.tsx
-│   ├── AdminPage.tsx           Master data CRUD (admin tablet UI; operators use bundles only)
-│   ├── RecordsPage.tsx         Legacy DataRecords UI (not routed — see Legacy DataRecords)
-│   └── SettingsPage.tsx          Admin only
+│   ├── NfcInspectPage.tsx      Admin + online only — raw tag JSON, asset lookup,
+│   │                           bind the scanned chip UID to the asset
+│   └── SettingsPage.tsx        Admin only
 ├── services/
 │   ├── api/            client.ts + all endpoints (index.ts)
 │   ├── auth/           Session in IndexedDB + sessionContext (shared tablet isolation)
 │   ├── nfc/            Web NFC abstraction
-│   ├── storage/        Dexie db, repository, fieldDefinitions, inboxCache
+│   ├── storage/        Dexie db (single version 1), repository, fieldDefinitions,
+│   │                   inboxCache, logSheetArchive, nfcFaultReports
 │   └── sync/           SyncManager, pullBootstrap, pullInbox, mergeLogSheetBundle, logSheetSync, cleanup
 ├── store/              Zustand
 ├── types/              Domain types + auth + sync
@@ -400,7 +400,7 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 
 | Role | Code | Typical access |
 |------|------|----------------|
-| Admin | `ADMIN`, `HIGH_USER` | Master data, log sheet templates, **Settings** |
+| Admin | `ADMIN`, `HIGH_USER` | **Settings** and the **NFC tag inspector**. Master data, the asset registry and log sheet templates are managed in the web admin panel, not in the PWA. |
 | Supervisor | `SUPERVISOR` (+ admin roles) | Team inbox, release, assign/reassign; manual NFC; pickup pool visibility per backend rules |
 | Senior operator | `SENIOR_OPERATOR` | Manual NFC tag entry (always); web fill permission |
 | Operator | `OPERATOR` | Dashboard, log sheets, NFC scan only (manual tag only if admin enabled **Allow manual tag entry** on the tablet) |
@@ -421,13 +421,12 @@ Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnter
 | `/logsheets/active` | All — inbox + my work |
 | `/logsheets/history` | All — completed / failed / archived snapshots (see below) |
 | `/logsheets/:localId` | All — fill page |
-| `/logsheet-templates` | Admin only (sidebar) |
-| `/master-data/*` | Admin only (sidebar) — edits IndexedDB via API; **does not** replace per-sheet bundle sync for operators |
-| `/settings` | Admin only (`AdminRoute` + sidebar) — server URL, sync interval, operator/location labels, **Allow manual tag entry** (applies to all users on that device) |
+| `/nfc-inspect` | Admin only (`AdminRoute` + sidebar) — online-only NFC tag inspector |
+| `/settings` | Admin only (`AdminRoute` + sidebar) — server URL, sync interval, operator/location labels, **Allow manual tag entry** and **chip-serial scan check** (both apply to all users on that device) |
 
 Operators see Dashboard and Log Sheets only.
 
-Legacy route `/records` redirects to `/` (see [Legacy DataRecords](#legacy-datarecords)).
+The removed admin routes `/master-data/*`, `/logsheet-templates`, `/admin` and `/records` all redirect to `/`, so old bookmarks and PWA shortcuts land somewhere sensible instead of a blank screen. Those surfaces live in the web admin panel; the PWA only ever consumes reference data through log-sheet bundles.
 
 ---
 
@@ -441,8 +440,9 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 |-------|---------|
 | **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). |
 | **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
-| **Operator name / location** | Optional labels for legacy DataRecords and display metadata (log sheets use server `operatorName` from inbox). |
+| **Operator name / location** | Optional display metadata for this device (log sheets use the server's `operatorName` from the inbox). |
 | **Allow manual tag entry** | When on, all roles may type NFC IDs on the fill page. When off, only supervisor / senior operator / users with web fill permission. |
+| **Chip-serial scan check** (`nfcStrictSerialMatch`, admin-only switch) | Off by default — an NFC scan on the fill page matches on the Record 1 payload alone. On — the chip's hardware serial must **also** equal the asset's stored `nfcSerial`, and an asset with no serial recorded is rejected. Applies to real scans only; manual tag entry and the NFC-fault fallback are unaffected. |
 
 ### Server URL rules (`src/services/api/client.ts`)
 
@@ -467,12 +467,12 @@ Route: `/` (all authenticated users).
 | UI block | Behavior |
 |----------|----------|
 | Welcome | `username` and `fullName` from JWT session |
-| Stat cards | **Total records** / **Today** count legacy `DataRecord` rows in IndexedDB (card links to **Active log sheets**, not a records page) |
-| Pending sync | From `SyncManager.getPendingCount()` — submitted log sheets owned by current user **plus** pending DataRecords if role has `POST:/api/records/batch` |
+| Stat cards | **Open log sheets** and **submitted today**, counted from local log sheets (cards link to **Active log sheets**) |
+| Pending sync | From `SyncManager.getPendingCount()` — submitted log sheets owned by the current user **plus** pending NFC fault reports if the role has `POST:/api/nfc-fault-reports/batch` |
 | Quick actions | Jump to `/logsheets/active` and `/logsheets/history` |
 | Sync card | Last sync time, pending/failed counts, manual sync button when online |
 
-Primary operator workflow is **Log sheets → Active**, not the dashboard record stats.
+Primary operator workflow is **Log sheets → Active**, not the dashboard stats.
 
 ---
 
@@ -857,7 +857,6 @@ SyncManager.sync()
                              PLUS this user's archived completions the server never saw
                              (see "Archived completions still reach the server" below)
   → POST /api/log-sheets/batch  (owner queue only)
-  → POST /api/records/batch     (approved records, if permission)
   → POST /api/nfc-fault-reports/batch  (only reports this user filed, if permission)
   → cleanupLocalLogSheets()
   → on success: refresh inbox (remove submitted work from assigned list)
@@ -918,21 +917,20 @@ synced (`removeArchivedLogSheet`).
 
 ## IndexedDB Schema
 
-Dexie version **10** — main tables:
+Dexie version **1** — main tables:
 
 | Table | Purpose |
 |-------|---------|
-| `records` | Legacy field DataRecords |
 | `assetClasses` | Asset class templates (per-sheet bundles only) |
 | `assetEntries` | NFC tag → asset mapping (per-sheet bundles only) |
 | `fieldDefinitions` | Normalized form fields per class |
 | `locations`, `plantSystems`, `mainFunctions`, `subFunctions` | Hierarchy slice per active work |
-| `logSheetTemplates` | Log sheet templates (legacy / admin) |
+| `logSheetTemplates` | Log sheet template slices carried by bundles |
 | `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only; never auto-purged) |
 | `nfcFaultReports` | Locally-filed NFC fault reports (unlock manual entry per asset; `createdByUserId` scopes outbound sync) |
 | `operationalUnits` | From bootstrap |
-| `settings` | App settings (server URL, operator name, …) |
+| `settings` | App settings (server URL, operator name, manual-entry and chip-serial policies, …) |
 | `syncMeta` | Key/value store (see below) |
 | `outbox` | Future bidirectional sync infrastructure |
 
@@ -947,23 +945,19 @@ Dexie version **10** — main tables:
 | `inboxSnapshot` | Cached assigned / available / teamOpen lists |
 | `lastSeq` | Reserved for future incremental sync engine |
 
-Dexie keeps older schema versions in `db.ts` for upgrades; current store definition is **version 9**.
+`db.ts` declares a **single** `this.version(1)` block. The app has never shipped, so the
+historical versions that only ever built up to this shape were collapsed into it — there is
+no upgrade path to keep because there is no production data to upgrade.
 
----
+A development device that ran the app **before** the collapse holds an IndexedDB at version
+110, and IndexedDB refuses to open a database at a lower version than it was created with.
+`openDatabase()` catches exactly that `VersionError`, deletes the database and recreates it;
+this is safe here because every table is either server-owned reference data that the next
+sync refetches, or local work a pre-production device can afford to lose. Any other failure
+is rethrown untouched.
 
-## Legacy DataRecords
-
-The first-generation flow stored standalone **`DataRecord`** rows in IndexedDB (`records` table) with optional NFC-linked assets. The **primary product path today is log sheets**; records remain for backward compatibility and sync.
-
-| Topic | Detail |
-|-------|--------|
-| UI | `RecordsPage.tsx` exists but **`/records` redirects to `/`** — no sidebar entry |
-| Dashboard stats | Still count local `DataRecord` rows (may be empty on new deployments) |
-| Outbound sync | `SyncManager` pushes pending records when JWT includes `POST:/api/records/batch` (typical admin / high-user roles, not plain operators) |
-| API | `POST /api/records/batch` — same client as log sheet batch |
-| Components | `DataEntryForm.tsx`, `useRecords.ts` — usable from code but not linked in main navigation |
-
-New field work should use **log sheets** only unless you explicitly re-enable a records UI route.
+When the schema next changes, **add** `this.version(2).stores({...})` with the full store
+list rather than editing the `version(1)` block.
 
 ---
 
@@ -980,7 +974,6 @@ Backend: `backend-offline-first`, default port **8081**.
 | GET | `/api/health` | Health check |
 | POST | `/api/auth/login` | Login → JWT |
 | GET | `/api/bootstrap` | Operational units + user context JSON (client stores units only; see [Synchronization](#synchronization)) |
-| GET | `/api/master-data` | Backward-compat alias → same as bootstrap |
 | GET | `/api/log-sheets/inbox` | Inbox (`assigned` = full bundles) |
 | GET | `/api/log-sheets/{id}/bundle` | Single sheet bundle (entries + scoped context) |
 | POST | `/api/log-sheets/{id}/claim` | Pick up work → returns bundle |
@@ -988,9 +981,10 @@ Backend: `backend-offline-first`, default port **8081**.
 | POST | `/api/log-sheets/{id}/assign` | Assign to operator |
 | POST | `/api/log-sheets/{id}/reassign` | Reassign |
 | GET | `/api/operational-units/{id}/operators` | Operator list for assign dialog |
-| GET | `/api/asset-entries/nfc/{tagId}` | Global NFC lookup (optional; fill page uses local entries) |
+| GET | `/api/asset-entries/nfc/{tagId}` | Global NFC lookup — used by the admin NFC inspector; the fill page matches against local entries |
+| POST | `/api/asset-entries/{id}/nfc-serial` | Bind a scanned chip UID to an asset (admin NFC inspector) |
 | POST | `/api/log-sheets/batch` | Push submitted log sheets |
-| POST | `/api/records/batch` | Push approved DataRecords |
+| POST | `/api/nfc-fault-reports/batch` | Push locally-filed NFC fault reports |
 
 ### Inbox bundle shape (`LogSheetBundleDto`)
 
@@ -1247,7 +1241,8 @@ curl -k https://192.168.1.4/api/health
 2. Log in as **admin** once per device (recommended):
    - **Settings** → confirm **Server URL** matches the PWA origin (`https://192.168.1.4`).
    - Enable **Allow manual tag entry** if operators need typed NFC IDs (iOS or damaged tags).
-   - Optional: operator name / location for legacy DataRecords.
+   - Optional: operator name / location labels for this device.
+   - Optional: enable the **chip-serial scan check** if every asset has its NFC serial recorded.
 3. Log in as field users; wait for inbox sync (assigned work appears).
 4. Chrome menu → **Install app** (or use the in-app install prompt).
 

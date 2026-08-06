@@ -15,11 +15,13 @@ import NfcIcon from '@mui/icons-material/Nfc'
 import StopIcon from '@mui/icons-material/Stop'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import RestartAltIcon from '@mui/icons-material/RestartAlt'
+import LinkIcon from '@mui/icons-material/Link'
 import { useCallback, useEffect, useState } from 'react'
 import { useNFC } from '@/hooks/useNFC'
 import { useAppStore } from '@/store'
 import { resolveNfcTagId } from '@/services/nfc'
-import { fetchAssetByNfcTag, type AssetLookupResponse } from '@/services/api'
+import { fetchAssetByNfcTag, saveAssetNfcSerial, type AssetLookupResponse } from '@/services/api'
+import { ApiError } from '@/services/api/client'
 import { t } from '@/i18n'
 import type { NFCTagData } from '@/types'
 
@@ -41,6 +43,12 @@ type AssetState =
   | { kind: 'loading' }
   | { kind: 'found'; data: AssetLookupResponse }
   | { kind: 'notFound' }
+  | { kind: 'error'; message: string }
+
+type SaveState =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'saved' }
   | { kind: 'error'; message: string }
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -65,6 +73,7 @@ export function NfcInspectPage() {
 
   const [tag, setTag] = useState<NFCTagData | null>(null)
   const [asset, setAsset] = useState<AssetState>({ kind: 'idle' })
+  const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
   const [copied, setCopied] = useState(false)
 
   // `lastScannedTag` is global Zustand state shared with the log-sheet fill page.
@@ -94,6 +103,7 @@ export function NfcInspectPage() {
   useEffect(() => {
     if (!lastTag) return
     setTag(lastTag)
+    setSaveState({ kind: 'idle' })
     setLastScannedTag(null)
     stopScan()
 
@@ -123,6 +133,40 @@ export function NfcInspectPage() {
     setAsset({ kind: 'idle' })
     setLastScannedTag(null)
     setNFCError(null)
+    setSaveState({ kind: 'idle' })
+  }
+
+  // The hardware UID off the chip (ISO 14443-3A), not the NDEF payload — this is what gets
+  // written to the asset's nfcSerial so a later scan can prove it is the same physical tag.
+  const scannedSerial = tag?.serialNumber?.trim() ?? ''
+  const boundAsset = asset.kind === 'found' ? asset.data.entry : null
+  const storedSerial = boundAsset?.nfcSerial?.trim() ?? ''
+  const alreadyBound = !!scannedSerial && storedSerial === scannedSerial
+
+  const handleSaveSerial = async () => {
+    if (!boundAsset || !scannedSerial) return
+    setSaveState({ kind: 'saving' })
+    try {
+      const updated = await saveAssetNfcSerial(boundAsset.id, scannedSerial)
+      // Reflect the server's own copy so the "already bound" state below is never a guess.
+      setAsset(prev =>
+        prev.kind === 'found'
+          ? { kind: 'found', data: { ...prev.data, entry: { ...prev.data.entry, ...updated } } }
+          : prev
+      )
+      setSaveState({ kind: 'saved' })
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : 0
+      setSaveState({
+        kind: 'error',
+        message:
+          status === 403
+            ? t.nfcInspect.saveForbidden
+            : err instanceof ApiError && err.message
+              ? err.message
+              : t.nfcInspect.saveError
+      })
+    }
   }
 
   return (
@@ -285,6 +329,71 @@ export function NfcInspectPage() {
                   label={t.nfcInspect.description}
                   value={asset.data.entry.description ?? '—'}
                 />
+
+                <Divider sx={{ my: 2 }} />
+
+                {/* Bind this physical chip to the asset. */}
+                <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                  {t.nfcInspect.bindTitle}
+                </Typography>
+
+                {!scannedSerial ? (
+                  <Alert severity="info">{t.nfcInspect.bindNoSerial}</Alert>
+                ) : (
+                  <Box>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      alignItems="center"
+                      flexWrap="wrap"
+                      useFlexGap
+                      sx={{ mb: 1 }}
+                    >
+                      <Typography variant="body2" color="text.secondary">
+                        {t.nfcInspect.bindScanned}
+                      </Typography>
+                      <Chip label={scannedSerial} dir="ltr" size="small" color="primary" variant="outlined" />
+                    </Stack>
+
+                    {alreadyBound ? (
+                      <Alert severity="success">{t.nfcInspect.bindAlready}</Alert>
+                    ) : (
+                      <>
+                        {storedSerial && (
+                          <Alert severity="warning" sx={{ mb: 1 }}>
+                            {t.nfcInspect.bindReplaceWarning}{' '}
+                            <Box component="span" dir="ltr" sx={{ fontWeight: 700 }}>
+                              {storedSerial}
+                            </Box>
+                          </Alert>
+                        )}
+                        <Button
+                          variant="contained"
+                          startIcon={<LinkIcon />}
+                          disabled={saveState.kind === 'saving'}
+                          onClick={() => void handleSaveSerial()}
+                        >
+                          {saveState.kind === 'saving'
+                            ? t.nfcInspect.bindSaving
+                            : storedSerial
+                              ? t.nfcInspect.bindReplace
+                              : t.nfcInspect.bindSave}
+                        </Button>
+                      </>
+                    )}
+
+                    {saveState.kind === 'saved' && (
+                      <Alert severity="success" sx={{ mt: 1 }}>
+                        {t.nfcInspect.bindSaved}
+                      </Alert>
+                    )}
+                    {saveState.kind === 'error' && (
+                      <Alert severity="error" sx={{ mt: 1 }}>
+                        {saveState.message}
+                      </Alert>
+                    )}
+                  </Box>
+                )}
               </Box>
             )}
           </CardContent>

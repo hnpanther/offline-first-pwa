@@ -8,7 +8,7 @@ This file orients coding agents on **this repository only**: the **offline-first
 | UI language | Persian (RTL); agent docs in English |
 | Backend (separate repo) | `backend-offline-first` — Spring Boot, default **8081** |
 | Typical backend path (local) | `D:\LocalStorage\Project\JavaProject\backend-offline-first` |
-| Primary user journey | Log sheets (inbox → fill → local submit → batch sync), **not** legacy DataRecords |
+| Primary user journey | Log sheets (inbox → fill → local submit → batch sync) — the only journey; the legacy DataRecord stack was deleted |
 
 ---
 
@@ -54,7 +54,7 @@ Service Worker (Workbox) precaches dist/ — offline shell only after build + in
 1. **`GET /api/bootstrap`** — lightweight; client **persists only** `operationalUnits` + `syncMeta.lastBootstrapAt`. Scope enforcement is server-side (JWT).
 2. **`GET /api/log-sheets/inbox`** — `assigned[]` are full **`LogSheetBundleDto`**; merge with **server-wins** into IndexedDB.
 3. **`GET /api/log-sheets/{id}/bundle`** / **`POST .../claim`** — same bundle shape for one sheet.
-4. **Push** — `SyncManager`: `POST /api/log-sheets/batch` for submitted sheets owned by current user; optional `POST /api/records/batch` if permission.
+4. **Push** — `SyncManager`: `POST /api/log-sheets/batch` for submitted sheets owned by current user, plus `POST /api/nfc-fault-reports/batch` for locally-filed fault reports when the session holds that permission.
 
 There is **no** `pullMasterData` / full plant dump in the current design. Do not reintroduce without explicit product approval.
 
@@ -91,7 +91,8 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 ### NFC fill page
 
 - Tag id = **NDEF text payload** (`resolveNfcTagId`), not hardware UID.
-- Lookup is **within current log sheet entries** only (offline-safe).
+- Lookup is **within current log sheet entries** only (offline-safe), through the single matcher `services/nfc/matchLogSheetEntry.ts`.
+- **Strict serial mode** (`nfcStrictSerialMatch` setting, **default off**, admin-only toggle in Settings → NFC): off = Record 1 only, identical to the behaviour that predates the setting. On = Record 1 **and** the chip UID (`serialNumber`) must both match the entry's stored `nfcSerial` (AND, not OR); an asset with no stored serial is **rejected**, never waved through. Applies to real NFC scans only — manual tag entry and the fault-report fallback pass no serial and are deliberately unaffected. Serial comparison is case-insensitive with `:`/`-`/space stripped. `enrichEntriesWithNfc` backfills `nfcSerial` from the local asset table alongside `nfcTagId`.
 - Edit dialog: NFC or allowed manual entry; tap card = **view-only**.
 - **Manual tag entry** (type the tag instead of scanning): `canEnterTagManually()` in `src/types/auth.ts`. Unlocked by any of: the `allowManualEntry` app setting (applies to all roles), role `SUPERVISOR`/`SENIOR_OPERATOR` (**hardcoded**, not a revocable permission row), or the `GET:/log-sheets/{id}/fill` permission. Distinct from the fault-report unlock below: this still requires the typed value to match a real tag on the sheet; a fault report unlocks the form with no tag at all. Revoking `POST:/api/nfc-fault-reports/batch` from SENIOR_OPERATOR does **not** affect this — it comes from the role check, not that permission.
 - **NFC fault reports** (`services/storage/nfcFaultReports.ts`): a per-entry, always-visible "اعلام خرابی NFC" report (works even when the asset never had a tag, not just after a failed scan) unlocks a manual-entry fallback for that one `(logSheetServerId, assetId)` pair, tracked locally in `LogSheetEntryData.filledVia` (`'nfc' | 'manual'`) and synced up via `POST /api/nfc-fault-reports/batch`. Only same-device self-filed reports unlock the button today — reports arriving from elsewhere (web-filed, other devices) are **not yet consumed** for auto-unlock by design (server already returns them in the bundle's `nfcFaultReports` field as groundwork; the PWA client type/parsing for that field doesn't exist yet — deliberate, not an oversight).
@@ -113,19 +114,24 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 
 ```
 src/
-  App.tsx                 Routes; AdminRoute for /settings
+  App.tsx                 Routes; AdminRoute for /settings and /nfc-inspect.
+                          /master-data/*, /logsheet-templates, /admin and /records
+                          redirect to / (managed in the web panel, not here)
   pages/
     LogSheetListPage.tsx    active | history inbox
     LogSheetFillPage.tsx    NFC, fill, submit, revert/recheck
-    Dashboard.tsx           stats (legacy DataRecord counts); links to logsheets
-    AdminPage.tsx           master-data CRUD (admin only; operators use bundles)
-    SettingsPage.tsx        admin only — serverUrl, sync interval, allowManualEntry
-    RecordsPage.tsx         legacy — NOT routed (/records → /)
+    Dashboard.tsx           open sheets / submitted today / pending sync;
+                            links to logsheets
+    LoginPage.tsx           username + password → JWT session
+    SettingsPage.tsx        admin only — serverUrl, sync interval, allowManualEntry,
+                            nfcStrictSerialMatch (admin-only switch)
+    NfcInspectPage.tsx      admin + online only — raw tag JSON, asset lookup,
+                            bind scanned chip UID to the asset's nfcSerial
   services/
     api/index.ts            all REST types + endpoints
     api/client.ts           serverUrl vs window.origin → relative /api
-    storage/db.ts           Dexie v9 schema
-    storage/index.ts        records, log sheets, settings, …
+    storage/db.ts           Dexie v1 schema (single version) + openDatabase()
+    storage/index.ts        log sheets, settings, reference-data slices, …
     storage/inboxCache.ts   syncMeta inboxSnapshot
     storage/logSheetArchive.ts  logSheetUserArchives
     storage/nfcFaultReports.ts  NFC fault report create/query/sync-status
@@ -149,18 +155,20 @@ Path alias: `@/*` → `src/*`.
 
 ---
 
-## IndexedDB (Dexie v10)
+## IndexedDB (Dexie v1)
+
+`services/storage/db.ts` declares **one** `this.version(1)` block. The app has never shipped, so the historical versions were collapsed into it — there is no upgrade path because there is no production data. A dev device still holding the pre-collapse database (IndexedDB version 110) cannot open a `version(1)` declaration; `openDatabase()` catches that `VersionError` and recreates the database. When the schema next changes, **add** `this.version(2).stores({...})` with the full store list rather than editing the version(1) block.
 
 | Table | Role |
 |-------|------|
 | `logSheets` | Local work + entries + sync fields + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots (shared tablet history) |
-| `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields, `createdByUserId` for shared-tablet outbound scoping) — v10 |
+| `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields, `createdByUserId` for shared-tablet outbound scoping) |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
-| `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, … |
+| `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch`, … |
 | `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, … |
-| `records` | Legacy DataRecords (dashboard stats; optional batch sync) |
+| `outbox` | Generic pending-write queue |
 
 ### Local retention (`services/sync/cleanupLogSheets.ts`)
 
@@ -198,7 +206,8 @@ Types and functions: **`src/services/api/index.ts`**.
 | `POST /api/log-sheets/{id}/claim` | Pickup → bundle |
 | `POST /api/log-sheets/batch` | Push completed sheets |
 | `POST /api/nfc-fault-reports/batch` | Push locally-filed NFC fault reports |
-| `POST /api/records/batch` | Legacy records (permission-gated) |
+| `GET /api/asset-entries/nfc/{nfcTagId}` | Admin NFC inspect page — online asset lookup |
+| `POST /api/asset-entries/{id}/nfc-serial` | Admin NFC inspect page — bind scanned chip UID to an asset |
 
 **`LogSheetBundleDto`:** `{ sheet, entries, context }` — context holds scoped locations…fieldDefinitions.
 
@@ -213,7 +222,7 @@ Types and functions: **`src/services/api/index.ts`**.
 | `OPERATOR` | Log sheets, NFC; manual tag only if Settings allow |
 | `SENIOR_OPERATOR` | + manual tag always; web fill permission |
 | `SUPERVISOR` | + team inbox, assign/release/reassign |
-| `ADMIN`, `HIGH_USER` | + master-data, templates, Settings |
+| `ADMIN`, `HIGH_USER` | + Settings and the NFC inspect page. Master data, the asset registry and log-sheet templates are **not** managed in the PWA — those live in the web admin panel. |
 
 Helpers: `isAdminRole`, `isSupervisorRole`, `hasPermission`, `canEnterTagManually` in `src/types/auth.ts`.
 

@@ -281,6 +281,25 @@ export async function fetchAssetByNfcTag(
   }
 }
 
+/**
+ * POST /api/asset-entries/:id/nfc-serial
+ *
+ * Binds a scanned physical chip (the hardware UID) to an asset. Admin-only on the server —
+ * the read permission above deliberately does not unlock this. An empty string clears the
+ * binding. Errors propagate so the caller can show why (e.g. the chip is on another asset).
+ */
+export async function saveAssetNfcSerial(
+  assetId: string | number,
+  nfcSerial: string,
+  signal?: AbortSignal
+): Promise<AssetEntry> {
+  return apiClient.post<AssetEntry>(
+    `/api/asset-entries/${assetId}/nfc-serial`,
+    { nfcSerial },
+    signal
+  )
+}
+
 // ===========================================================================
 // Log sheets — submitted log sheet push
 // ===========================================================================

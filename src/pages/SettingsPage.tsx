@@ -15,11 +15,15 @@ import SaveIcon from '@mui/icons-material/Save'
 import { useForm, Controller } from 'react-hook-form'
 import { useState } from 'react'
 import { useSettings } from '@/hooks/useSettings'
+import { useAuth } from '@/hooks/useAuth'
+import { isAdminRole } from '@/types/auth'
 import { t } from '@/i18n'
 import type { AppSettings } from '@/types'
 
 export function SettingsPage() {
   const { settings, updateSettings } = useSettings()
+  const { authSession } = useAuth()
+  const isAdmin = !!authSession && isAdminRole(authSession.roles)
   const [saved, setSaved] = useState(false)
 
   const { control, handleSubmit } = useForm<AppSettings>({
@@ -150,6 +154,39 @@ export function SettingsPage() {
                     <Typography variant="caption" color="text.secondary">
                       {t.settings.allowManualEntryHint}
                     </Typography>
+                  </Box>
+                }
+                sx={{ alignItems: 'flex-start', mt: 0.5 }}
+              />
+            )}
+          />
+
+          <Divider sx={{ my: 0.5 }} />
+
+          {/* Admin-only: tightening the scan rule is a site-wide policy decision. */}
+          <Controller
+            name="nfcStrictSerialMatch"
+            control={control}
+            render={({ field }) => (
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={!!field.value}
+                    disabled={!isAdmin}
+                    onChange={e => field.onChange(e.target.checked)}
+                  />
+                }
+                label={
+                  <Box>
+                    <Typography variant="body2">{t.settings.strictSerialMatch}</Typography>
+                    <Typography variant="caption" color="text.secondary" component="div">
+                      {t.settings.strictSerialMatchHint}
+                    </Typography>
+                    {!isAdmin && (
+                      <Typography variant="caption" color="text.disabled" component="div">
+                        {t.settings.strictSerialMatchAdminOnly}
+                      </Typography>
+                    )}
                   </Box>
                 }
                 sx={{ alignItems: 'flex-start', mt: 0.5 }}

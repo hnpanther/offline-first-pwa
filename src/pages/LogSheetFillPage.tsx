@@ -51,6 +51,7 @@ import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
 import { resolveNfcTagId } from '@/services/nfc'
+import { matchLogSheetEntryByTag } from '@/services/nfc/matchLogSheetEntry'
 import { useSettings } from '@/hooks/useSettings'
 import { useAppStore } from '@/store'
 import { canEnterTagManually, hasPermission } from '@/types/auth'
@@ -98,33 +99,28 @@ async function loadAssetClassesForEntries(
 
 async function enrichEntriesWithNfc(
   entries: LogSheetEntryData[]
-): Promise<{ entries: LogSheetEntryData[]; nfcTagsBackfilled: boolean }> {
+): Promise<{ entries: LogSheetEntryData[]; nfcBackfilled: boolean }> {
   const assets = await getAllAssetEntries()
   const byId = new Map(assets.map(a => [a.id, a]))
-  let nfcTagsBackfilled = false
+  let nfcBackfilled = false
 
   const enriched = entries.map(e => {
     const asset = byId.get(e.assetId)
     const nfcTagId = (e.nfcTagId || asset?.nfcTagId)?.trim() || undefined
-    if (!e.nfcTagId?.trim() && nfcTagId) nfcTagsBackfilled = true
+    if (!e.nfcTagId?.trim() && nfcTagId) nfcBackfilled = true
+    // Same backfill for the chip serial: a bundle taken before the serial was
+    // recorded would otherwise leave strict scan mode with nothing to verify.
+    const nfcSerial = (e.nfcSerial || asset?.nfcSerial)?.trim() || undefined
+    if (!e.nfcSerial?.trim() && nfcSerial) nfcBackfilled = true
     return {
       ...e,
       classId: asset ? toIdString(asset.classId) : toIdString(e.classId),
-      nfcTagId
+      nfcTagId,
+      nfcSerial
     }
   })
 
-  return { entries: enriched, nfcTagsBackfilled }
-}
-
-/** Match scanned tag against assets in the current log sheet only. */
-function findLogSheetEntryByNfcTag(
-  entries: LogSheetEntryData[],
-  tagId: string
-): LogSheetEntryData | undefined {
-  const needle = tagId.trim()
-  if (!needle) return undefined
-  return entries.find(e => e.nfcTagId?.trim() === needle)
+  return { entries: enriched, nfcBackfilled }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,13 +485,13 @@ export function LogSheetFillPage() {
 
         if (redirectIfNotAccessible(sheet)) return
 
-        const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
+        const { entries, nfcBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
         const classes = await loadAssetClassesForEntries(entries)
         await loadFieldDefsForEntries(entries)
         setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
         setNfcFaultReports(sheet.serverId ? await getNfcFaultReportsForSheet(sheet.serverId) : [])
-        if (nfcTagsBackfilled && localId) {
+        if (nfcBackfilled && localId) {
           await updateLogSheet(localId, { entries })
         }
       } catch (err) {
@@ -513,10 +509,10 @@ export function LogSheetFillPage() {
     void getLogSheet(localId).then(async sheet => {
       if (!sheet) return
       if (redirectIfNotAccessible(sheet)) return
-      const { entries, nfcTagsBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
+      const { entries, nfcBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
       await loadFieldDefsForEntries(entries)
       setLogSheet({ ...sheet, entries })
-      if (nfcTagsBackfilled) {
+      if (nfcBackfilled) {
         await updateLogSheet(localId, { entries })
       }
     })
@@ -539,22 +535,36 @@ export function LogSheetFillPage() {
   // -------------------------------------------------------------------------
 
   const handleTagId = useCallback(
-    (tagId: string, source: 'nfc' | 'manual' = 'manual') => {
+    (tagId: string, source: 'nfc' | 'manual' = 'manual', scannedSerial?: string | null) => {
       if (!logSheet) return
       setNfcError(null)
 
-      const entry = findLogSheetEntryByNfcTag(logSheet.entries ?? [], tagId)
-      if (!entry) {
+      // Strict serial verification only makes sense for a real chip read. Manual
+      // tag entry and the NFC-fault fallback have no hardware serial to compare.
+      const result = matchLogSheetEntryByTag(logSheet.entries ?? [], tagId, {
+        strictSerial: source === 'nfc' && settings.nfcStrictSerialMatch,
+        scannedSerial
+      })
+
+      if (result.kind === 'notInSheet') {
         setNfcError(`Asset مربوط به تگ "${tagId.trim()}" در این Log Sheet وجود ندارد`)
         return
       }
+      if (result.kind === 'serialMissing') {
+        setNfcError(t.logSheet.strictSerialMissing)
+        return
+      }
+      if (result.kind === 'serialMismatch') {
+        setNfcError(t.logSheet.strictSerialMismatch)
+        return
+      }
 
-      setActiveEntry(entry)
+      setActiveEntry(result.entry)
       setActiveEntryFilledVia(source)
       setDialogEditable(true)
       setDialogOpen(true)
     },
-    [logSheet]
+    [logSheet, settings.nfcStrictSerialMatch]
   )
 
   const openEntryForView = (entry: LogSheetEntryData) => {
@@ -615,7 +625,8 @@ export function LogSheetFillPage() {
     setManualTagId(tagId)
     stopScan()
     setLastScannedTag(null)
-    void handleTagId(tagId, 'nfc')
+    // `serialNumber` is the chip's hardware UID, distinct from the Record 1 payload.
+    void handleTagId(tagId, 'nfc', lastTag.serialNumber)
   }, [lastTag, isScanning, handleTagId, stopScan, setLastScannedTag])
 
   // -------------------------------------------------------------------------

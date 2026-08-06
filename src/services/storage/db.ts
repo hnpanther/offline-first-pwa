@@ -89,5 +89,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   syncIntervalMs: 30_000,
   operatorName: '',
   locationName: '',
-  allowManualEntry: false
+  allowManualEntry: false,
+  nfcStrictSerialMatch: false
 }
