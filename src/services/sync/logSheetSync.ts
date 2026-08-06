@@ -20,6 +20,7 @@ import { isLogSheetExpiredForSync, isLogSheetExpired, SYNC_OUTCOME_MESSAGES, isI
 import {
   mergeBundleContextToDb,
   mergeEntriesPreservingFormData,
+  normalizeFieldDefinitions,
   bundleScopeDisplayLabel
 } from '@/services/sync/mergeLogSheetBundle'
 import {
@@ -76,6 +77,14 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     preserveLocal
   })
   const scopeDisplayLabel = bundleScopeDisplayLabel(bundle)
+  // Freeze this bundle's schema onto the sheet. The shared per-class table cannot express
+  // "sheet A's Pump schema differs from sheet B's", which it must, because the server sends
+  // each sheet's own field_definitions_snapshot. An empty list means the bundle carried none
+  // — keep whatever the sheet already had rather than blanking a working form.
+  const bundleFieldDefinitions = normalizeFieldDefinitions(bundle.context?.fieldDefinitions ?? [])
+  const fieldDefinitionsPatch = bundleFieldDefinitions.length > 0
+    ? { fieldDefinitions: bundleFieldDefinitions }
+    : {}
 
   if (existing) {
     if (workflow === 'reset-draft') {
@@ -86,6 +95,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         await updateLogSheet(reset.localId, {
           ...serverSheetMetadataPatch(serverSheet, reset),
           entries,
+          ...fieldDefinitionsPatch,
           localOwnerUserId: undefined,
           ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
         })
@@ -105,6 +115,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
       }
       await updateLogSheet(existing.localId, {
         ...serverSheetMetadataPatch(serverSheet, existing),
+        ...fieldDefinitionsPatch,
         status: 'submitted',
         syncStatus: 'synced',
         serverStatus: 'SUBMITTED',
@@ -133,6 +144,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     await updateLogSheet(existing.localId, {
       ...serverSheetMetadataPatch(serverSheet, existing),
       entries,
+      ...fieldDefinitionsPatch,
       ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
     })
     const updated = await getLogSheetByServerId(serverId)
@@ -160,6 +172,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     assignmentType: serverSheet.assignmentType ?? undefined,
     dueAt: serverSheet.dueAt ?? undefined,
     entries,
+    ...fieldDefinitionsPatch,
     createdAt: serverSheet.createdAt ?? now,
     updatedAt: serverSheet.updatedAt ?? now
   })

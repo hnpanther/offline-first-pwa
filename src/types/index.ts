@@ -1,3 +1,5 @@
+import type { FieldDefinition } from './sync'
+
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed'
 
 export interface NFCTagData {
@@ -227,6 +229,18 @@ export interface LogSheet {
   syncedAt?: number
   syncError?: string
   entries: LogSheetEntryData[]
+  /**
+   * Field definitions frozen with this sheet, exactly as its bundle delivered them.
+   *
+   * The server derives a bundle's definitions from that sheet's own
+   * `field_definitions_snapshot`, so two sheets of the same asset class can legitimately
+   * carry different schemas when the class was edited between their generation dates.
+   * Keeping the copy on the sheet is what makes each sheet render the schema it was raised
+   * with; the shared `fieldDefinitions` table is only a fallback for sheets stored before
+   * this field existed. Stored as a plain property — it is never queried by index, so it
+   * needs no Dexie schema change.
+   */
+  fieldDefinitions?: FieldDefinition[]
   submittedAt?: number
   completedAt?: number
   clientActionId?: string

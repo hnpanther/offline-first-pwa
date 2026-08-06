@@ -49,6 +49,7 @@ import {
 } from '@/services/storage/nfcFaultReports'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
+import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 import { useNFC } from '@/hooks/useNFC'
 import { resolveNfcTagId } from '@/services/nfc'
 import { matchLogSheetEntryByTag } from '@/services/nfc/matchLogSheetEntry'
@@ -130,6 +131,8 @@ async function enrichEntriesWithNfc(
 interface AssetFillDialogProps {
   entry: LogSheetEntryData | null
   assetClass: AssetClass | undefined
+  /** The sheet being filled — supplies the schema it was raised with. */
+  logSheet: LogSheet | null
   open: boolean
   readOnly: boolean
   onClose: () => void
@@ -139,13 +142,19 @@ interface AssetFillDialogProps {
 function AssetFillDialog({
   entry,
   assetClass,
+  logSheet,
   open,
   readOnly,
   onClose,
   onSave
 }: AssetFillDialogProps) {
-  const { fields, loading: fieldsLoading, refresh: refreshFields } = useFieldDefinitions(
-    entry ? toIdString(entry.classId) : undefined
+  // The shared per-class table is only the fallback: it holds whichever bundle merged last,
+  // which for a device holding two sheets of the same class may not be this sheet's schema.
+  const { fields: fallbackFields, loading: fieldsLoading, refresh: refreshFields } =
+    useFieldDefinitions(entry ? toIdString(entry.classId) : undefined)
+  const fields = useMemo(
+    () => sheetFieldDefinitions(logSheet, entry?.classId, fallbackFields),
+    [logSheet, entry?.classId, fallbackFields]
   )
   const {
     control,
@@ -417,13 +426,21 @@ export function LogSheetFillPage() {
   const [rechecking, setRechecking] = useState(false)
   const [isArchivedView, setIsArchivedView] = useState(false)
 
-  const loadFieldDefsForEntries = useCallback(async (entries: LogSheetEntryData[]) => {
-    const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
-    const pairs = await Promise.all(
-      classIds.map(async classId => [classId, await getFieldsForClass(classId)] as const)
-    )
-    setFieldDefsByClass(new Map(pairs))
-  }, [])
+  const loadFieldDefsForEntries = useCallback(
+    async (entries: LogSheetEntryData[], sheet?: LogSheet | null) => {
+      const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
+      const pairs = await Promise.all(
+        classIds.map(async classId => {
+          // Same precedence as the fill dialog, so the completion badge can never disagree
+          // with the form the operator actually sees.
+          const fallback = await getFieldsForClass(classId)
+          return [classId, sheetFieldDefinitions(sheet, classId, fallback)] as const
+        })
+      )
+      setFieldDefsByClass(new Map(pairs))
+    },
+    []
+  )
 
   const getEntryCompletion = useCallback(
     (entry: LogSheetEntryData) => {
@@ -457,7 +474,7 @@ export function LogSheetFillPage() {
           }
           const { entries } = await enrichEntriesWithNfc(archived.entries ?? [])
           const classes = await loadAssetClassesForEntries(entries)
-          await loadFieldDefsForEntries(entries)
+          await loadFieldDefsForEntries(entries, archived)
           setLogSheet({ ...archived, entries })
           setAssetClasses(classes)
           setIsArchivedView(true)
@@ -487,7 +504,7 @@ export function LogSheetFillPage() {
 
         const { entries, nfcBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
         const classes = await loadAssetClassesForEntries(entries)
-        await loadFieldDefsForEntries(entries)
+        await loadFieldDefsForEntries(entries, sheet)
         setLogSheet({ ...sheet, entries })
         setAssetClasses(classes)
         setNfcFaultReports(sheet.serverId ? await getNfcFaultReportsForSheet(sheet.serverId) : [])
@@ -510,7 +527,7 @@ export function LogSheetFillPage() {
       if (!sheet) return
       if (redirectIfNotAccessible(sheet)) return
       const { entries, nfcBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
-      await loadFieldDefsForEntries(entries)
+      await loadFieldDefsForEntries(entries, sheet)
       setLogSheet({ ...sheet, entries })
       if (nfcBackfilled) {
         await updateLogSheet(localId, { entries })
@@ -1365,6 +1382,7 @@ export function LogSheetFillPage() {
       <AssetFillDialog
         entry={activeEntry}
         assetClass={activeEntry ? getAssetClass(activeEntry.classId) : undefined}
+        logSheet={logSheet}
         open={dialogOpen}
         readOnly={isSubmitted || !dialogEditable}
         onClose={closeDialog}

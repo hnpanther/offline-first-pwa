@@ -79,7 +79,7 @@ function normalizeAssetEntries(items: AssetEntry[] = []): AssetEntry[] {
   }))
 }
 
-function normalizeFieldDefinitions(items: FieldDefinition[] = []): FieldDefinition[] {
+export function normalizeFieldDefinitions(items: FieldDefinition[] = []): FieldDefinition[] {
   return items
     .filter(fd => !fd.deleted)
     .map(fd => ({
@@ -100,18 +100,24 @@ function normalizeFieldDefinitions(items: FieldDefinition[] = []): FieldDefiniti
     }))
 }
 
-async function replaceFieldDefinitionsForBundle(
+/**
+ * Upserts a bundle's field definitions into the shared per-class table.
+ *
+ * **Upsert, never replace.** This used to delete every row for the bundle's class ids first,
+ * which meant merging sheet B could thin the schema sheet A was being filled with: two sheets
+ * of the same class can legitimately differ, because the server sends each sheet's own frozen
+ * `field_definitions_snapshot` rather than the live class schema. Deleting made the
+ * last-merged bundle win globally.
+ *
+ * Since each sheet now also stores its own copy (`LogSheet.fieldDefinitions`), this table is
+ * a fallback for sheets saved before that existed. A stale row lingering here is harmless —
+ * the sheet's own copy wins — whereas a deleted row another sheet still needs is not.
+ */
+async function upsertFieldDefinitionsForBundle(
   fieldDefinitions: FieldDefinition[]
 ): Promise<void> {
   const normalized = normalizeFieldDefinitions(fieldDefinitions)
   if (normalized.length === 0) return
-
-  const classIds = [...new Set(normalized.map(fd => fd.classId))]
-  await Promise.all(
-    classIds.map(classId =>
-      db.fieldDefinitions.where('classId').equals(classId).delete()
-    )
-  )
   await db.fieldDefinitions.bulkPut(normalized)
 }
 
@@ -132,7 +138,7 @@ export async function mergeBundleContextToDb(
     bulkPutIfAny(db.assetEntries, normalizeAssetEntries(context.assetEntries ?? []))
   ])
 
-  await replaceFieldDefinitionsForBundle(fieldDefs)
+  await upsertFieldDefinitionsForBundle(fieldDefs)
 }
 
 export function mapServerEntryToLocal(

@@ -282,6 +282,29 @@ If README and code disagree, **trust the code** and fix README in the same task.
 
 ## Behaviour notes worth knowing
 
+**Field definitions belong to a sheet, not to a class.** The server derives a bundle's
+`context.fieldDefinitions` from that sheet's own `log_sheets.field_definitions_snapshot` —
+frozen at generation time — not from the live class schema. Two sheets of the same asset class
+therefore *can* carry different field sets, and will as soon as anyone edits that class while
+an older sheet is still open. The client used to store them in one shared table keyed by
+`classId` and **delete every row for a class before writing the bundle's rows**, so merging
+sheet B could thin the schema sheet A was being filled with (A loses a field it legitimately
+has; its stored `formData` survives, but the operator can no longer see or edit that value).
+
+The fix has two halves. `LogSheet.fieldDefinitions` carries the bundle's definitions on the
+sheet record — a plain property, **no Dexie schema change**, cleaned up with the sheet, and
+mirroring the server's own per-sheet freeze. And `upsertFieldDefinitionsForBundle` no longer
+deletes: the shared table is now a best-effort fallback for sheets stored before that field
+existed, where a lingering stale row is harmless but a deleted row another sheet needs is not.
+
+Read through `sheetFieldDefinitions(sheet, classId, fallback)` — never `getFieldsForClass`
+directly — anywhere a sheet is in scope; both the fill dialog and the completion badge use it,
+so the badge can never disagree with the form. One rule inside is easy to get backwards: when a
+sheet has definitions but **none for the requested class**, return empty rather than the
+fallback. "This class is not part of this sheet" is a real answer, and falling back there would
+show another sheet's schema — the exact bug. Tests: `utils/sheetFieldDefinitions.test.ts`.
+
+
 **`sessionUserId` may be unresolved, and everything user-scoped must cope.** Login binds it from
 `GET /api/bootstrap`, but that call can fail on its own — a server restart in the window right
 after the token was issued, a network blip, or the session being superseded from another device.
