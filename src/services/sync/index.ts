@@ -169,7 +169,8 @@ class SyncManager {
               syncedAt: Date.now(),
               serverId: toIdString(result.serverId ?? ls.serverId),
               serverStatus: 'SUBMITTED',
-              syncError: undefined
+              syncError: undefined,
+              lastSubmitOutcome: undefined
             })
             const ownerId = await getSessionUserId()
             const serverId = toIdString(result.serverId ?? ls.serverId)
@@ -191,7 +192,8 @@ class SyncManager {
               syncedAt: Date.now(),
               serverId: toIdString(result.serverId),
               serverStatus: 'SUBMITTED',
-              syncError: undefined
+              syncError: undefined,
+              lastSubmitOutcome: undefined
             })
             await bindAttachmentsToServerSheet(ls.localId, toIdString(result.serverId))
             const ownerId = await getSessionUserId()
@@ -208,6 +210,7 @@ class SyncManager {
             await updateLogSheet(ls.localId, {
               syncStatus: 'failed',
               syncError,
+              lastSubmitOutcome: result.outcome,
             })
             failedCount++
             continue
@@ -216,6 +219,9 @@ class SyncManager {
           await updateLogSheet(ls.localId, {
             syncStatus: 'failed',
             syncError,
+            // Kept so the UI can tell the one operator-fixable rejection (bad field values)
+            // from the three that are not. Only VALIDATION_ERROR unlocks correct-and-resubmit.
+            lastSubmitOutcome: result.outcome,
             serverStatus:
               result.outcome === 'EXPIRED'
                 ? 'EXPIRED'

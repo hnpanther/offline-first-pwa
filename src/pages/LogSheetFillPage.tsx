@@ -61,6 +61,7 @@ import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import {
   canSubmitLogSheet,
   canRevertSubmittedLogSheetToDraft,
+  failedOnFieldValidation,
   isLogSheetExpired,
   isExpiredDraft,
   isLogSheetCancelled,
@@ -889,6 +890,10 @@ export function LogSheetFillPage() {
   const backInMyInbox =
     !!logSheet.serverId && inboxAssignedIds.has(toIdString(logSheet.serverId))
   const canRevertToDraft = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline).ok
+  // The server rejected the values. Same control, different framing: this is not "undo an
+  // unsent completion", it is "the readings need fixing", and saying so is the difference
+  // between an operator who knows what to do and one staring at a dead end.
+  const needsCorrection = failedOnFieldValidation(logSheet)
   // Also offered for SUPERSEDED (already completed by someone else / taken over) and CANCELLED:
   // both are reported as terminal at the time of the failed sync, but a supervisor can still
   // reassign/reopen the sheet back to this operator afterwards — recheck picks that up the same
@@ -1022,8 +1027,8 @@ export function LogSheetFillPage() {
 
       {canRevertToDraft && (
         <Box sx={{ mb: 2 }}>
-          <Alert severity="info" sx={{ mb: 1.5 }}>
-            {t.logSheet.revertToDraftHint}
+          <Alert severity={needsCorrection ? 'warning' : 'info'} sx={{ mb: 1.5 }}>
+            {needsCorrection ? t.logSheet.correctAndResubmitHint : t.logSheet.revertToDraftHint}
           </Alert>
           <Button
             type="button"
@@ -1035,7 +1040,7 @@ export function LogSheetFillPage() {
             onClick={() => setConfirmRevertOpen(true)}
             disabled={saving || isScanning || dialogOpen}
           >
-            {t.logSheet.revertToDraft}
+            {needsCorrection ? t.logSheet.correctAndResubmit : t.logSheet.revertToDraft}
           </Button>
         </Box>
       )}

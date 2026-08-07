@@ -150,8 +150,15 @@ export async function resetLogSheetToOpenDraft(
   }
   delete next.submittedAt
   delete next.completedAt
+  // Dropping the idempotency key is what makes a corrected resubmission a NEW action rather
+  // than a replay. The earlier attempt's id may already be recorded server-side as used, and
+  // resending it would let the server's replay guard answer "already processed" — reporting
+  // success while never storing the corrected values. The submit path mints a fresh one.
   delete next.clientActionId
+  // The rejection is history the moment the sheet is editable again; leaving either of these
+  // would keep a failure banner up while the operator fixes the very thing it names.
   delete next.syncError
+  delete next.lastSubmitOutcome
   delete next.syncedAt
 
   await db.logSheets.put(next)

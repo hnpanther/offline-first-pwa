@@ -303,6 +303,15 @@ export interface LogSheet {
    * needs no Dexie schema change.
    */
   fieldDefinitions?: FieldDefinition[]
+  /**
+   * The server's outcome for the last rejected submission (e.g. `VALIDATION_ERROR`).
+   *
+   * Only a rejection sets this, and only `VALIDATION_ERROR` unlocks the correct-and-resubmit
+   * path — an operator can fix bad values, but not a sheet deleted server-side or an asset
+   * mismatch. Cleared whenever the sheet goes back to draft or syncs. Plain, non-indexed
+   * property: no Dexie version bump.
+   */
+  lastSubmitOutcome?: string
   submittedAt?: number
   completedAt?: number
   clientActionId?: string

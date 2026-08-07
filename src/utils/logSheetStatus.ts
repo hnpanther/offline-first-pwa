@@ -1,4 +1,9 @@
 import type { LogSheet } from '@/types'
+import type { FieldDefinition } from '@/types/sync'
+import {
+  describeSubmitBlockingIssues,
+  findSubmitBlockingIssues
+} from '@/utils/formDataValidation'
 import { parseArchivedLogSheetViewId } from '@/services/storage/logSheetArchive'
 
 export const SYNC_OUTCOME_MESSAGES = {
@@ -144,7 +149,29 @@ export function syncOutcomeMessage(outcome?: string, error?: string | null): str
   }
 }
 
-export function canSubmitLogSheet(sheet: LogSheet, now = Date.now()): { ok: boolean; reason?: string } {
+/**
+ * The server rejected this submission for bad field values — the one rejection an operator can
+ * actually fix, by editing them.
+ *
+ * The other three rejections (missing server id, sheet deleted server-side, asset mismatch) are
+ * not operator-fixable and deliberately do not unlock the correction path.
+ */
+export function failedOnFieldValidation(
+  sheet: Pick<LogSheet, 'syncStatus' | 'lastSubmitOutcome'>
+): boolean {
+  return sheet.syncStatus === 'failed' && sheet.lastSubmitOutcome === 'VALIDATION_ERROR'
+}
+
+/**
+ * @param fallbackDefs field definitions from the shared per-class table, used only for sheets
+ *        stored before sheets carried their own. Omitting it never blocks anything — a class
+ *        with no resolvable schema is left to the server.
+ */
+export function canSubmitLogSheet(
+  sheet: LogSheet,
+  now = Date.now(),
+  fallbackDefs: FieldDefinition[] = []
+): { ok: boolean; reason?: string } {
   if (isLogSheetCancelled(sheet)) {
     return { ok: false, reason: SYNC_OUTCOME_MESSAGES.CANCELLED }
   }
@@ -154,6 +181,18 @@ export function canSubmitLogSheet(sheet: LogSheet, now = Date.now()): { ok: bool
   if (sheet.serverStatus === 'SUBMITTED' && sheet.syncStatus === 'synced') {
     return { ok: false, reason: 'این کار قبلاً ثبت نهایی شده است.' }
   }
+
+  // Prevention, and the whole point of this gate: without it an operator could submit a sheet
+  // the server was certain to reject, then be left at the equipment reading a validation error
+  // with no action available. Refusing here happens while they are still on the form.
+  //
+  // Conservative by construction — see findSubmitBlockingIssues. It only reports fields it can
+  // prove the server would reject, so it cannot strand someone over data this device lacks.
+  const issues = findSubmitBlockingIssues(sheet, fallbackDefs)
+  if (issues.length > 0) {
+    return { ok: false, reason: describeSubmitBlockingIssues(issues) }
+  }
+
   return { ok: true }
 }
 
@@ -163,11 +202,29 @@ export function canRevertSubmittedLogSheetToDraft(
   effectivelyOffline: boolean,
   now = Date.now()
 ): { ok: boolean; reason?: string } {
-  if (!effectivelyOffline) {
-    return { ok: false, reason: 'فقط در حالت آفلاین امکان بازگشت به پیش‌نویس وجود دارد.' }
-  }
   if (sheet.status !== 'submitted') {
     return { ok: false }
+  }
+
+  // The correction path. A sheet the server rejected for bad values is a different situation
+  // from an unsent completion: the work is stuck, and re-sending the identical payload would
+  // only earn the identical refusal. Editing and resubmitting is legitimate precisely because
+  // the data changes — so this case is allowed online, and from 'failed' rather than 'pending'.
+  //
+  // The expiry check below still applies: a sheet past its deadline cannot be resubmitted by
+  // anyone, and offering the edit would only waste the operator's time.
+  if (failedOnFieldValidation(sheet)) {
+    if (isLogSheetExpired(sheet, now)) {
+      return { ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED }
+    }
+    if (isLogSheetCancelled(sheet)) {
+      return { ok: false, reason: SYNC_OUTCOME_MESSAGES.CANCELLED }
+    }
+    return { ok: true }
+  }
+
+  if (!effectivelyOffline) {
+    return { ok: false, reason: 'فقط در حالت آفلاین امکان بازگشت به پیش‌نویس وجود دارد.' }
   }
   if (sheet.syncStatus === 'synced') {
     return { ok: false, reason: 'این کار قبلاً به سرور ارسال شده است.' }

@@ -37,11 +37,12 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 19. [NFC](#nfc)
 20. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
 21. [Photo, Voice Note and Video Fields](#photo-voice-note-and-video-fields)
-22. [Synchronization](#synchronization)
-23. [IndexedDB Schema](#indexeddb-schema)
-24. [API Contract](#api-contract)
-25. [Production Deployment](#production-deployment)
-26. [Troubleshooting](#troubleshooting)
+22. [When the Server Rejects a Submission](#when-the-server-rejects-a-submission)
+23. [Synchronization](#synchronization)
+24. [IndexedDB Schema](#indexeddb-schema)
+25. [API Contract](#api-contract)
+26. [Production Deployment](#production-deployment)
+27. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -1028,6 +1029,41 @@ page served over plain HTTP.
   their tablet.
 - Video is not offered in the app. The backend understands the type end to end, so adding it
   later is a UI change rather than a redesign.
+
+---
+
+## When the Server Rejects a Submission
+
+Most sync trouble never reaches this state. A dropped link, a server restart or a 5xx leaves the
+sheet **pending** and the sync timer retries it automatically — nothing for the operator to do.
+
+A sheet only becomes **failed** when the server answered and said no, for one of four reasons.
+Three are not the operator's to fix (a missing server id, a sheet deleted server-side, an asset
+that is not part of the sheet) and need a supervisor to reopen or extend it.
+
+The fourth — **a required field left empty** — is different, and is handled in two places:
+
+**Before submitting.** The app now checks required fields itself and refuses a final submit the
+server would certainly reject, naming the asset and the field: «فیلدهای الزامی تکمیل نشده‌اند —
+پمپ ۱: دما». The operator sees this while still standing at the form, instead of discovering it
+after the work is already stuck.
+
+The check mirrors the server's own rules exactly, including the awkward ones — an unchecked
+required checkbox and a photo field whose only image was deleted both count as empty. It is
+deliberately cautious: anything it cannot judge (an asset the device has no schema for, an
+untouched asset on a multi-asset round) is allowed through, because blocking a submission the
+server would have accepted would be a worse trap than the one it prevents.
+
+**After a rejection.** A sheet rejected for field values shows «اصلاح مقادیر و ارسال مجدد».
+That returns it to an editable draft — available **online**, unlike the ordinary offline-only
+undo, because the fix requires editing and there is no sense waiting to lose signal. The entered
+readings are kept; only the failure state is cleared.
+
+There is deliberately **no "retry" button.** Re-sending the identical payload would earn the
+identical refusal while displaying "trying again…", and reusing the old submission id could make
+the server treat the retry as already processed — reporting success while storing nothing. A
+resubmission is only legitimate once the data has actually changed, which is why the path runs
+through editing.
 
 ---
 
