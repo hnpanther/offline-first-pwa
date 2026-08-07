@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_AUDIO_DURATION_MS,
   MAX_IMAGE_DIMENSION,
+  MAX_VIDEO_BYTES,
+  MAX_VIDEO_DIMENSION,
+  VIDEO_AUDIO_BITS_PER_SECOND,
+  VIDEO_BITS_PER_SECOND,
   fitWithin,
   formatBytes,
   formatDuration
@@ -44,6 +48,31 @@ describe('fitWithin', () => {
 
   it('keeps the shipped cap at a size that can still show a gauge face', () => {
     expect(MAX_IMAGE_DIMENSION).toBe(1600)
+  })
+})
+
+describe('video encoding budget', () => {
+  it('keeps the shipped numbers at a size a plant network can carry', () => {
+    // The arithmetic these constants exist for: bytes per second = (video + audio) / 8.
+    const bytesPerSecond = (VIDEO_BITS_PER_SECOND + VIDEO_AUDIO_BITS_PER_SECOND) / 8
+    const twoMinutes = bytesPerSecond * 120
+
+    expect(Math.round(bytesPerSecond / 1024)).toBe(88) // ~88 KB/s
+    expect(twoMinutes).toBeLessThan(12 * 1024 * 1024) // ~10.4 MB at the default duration
+    // And the hard ceiling has to sit above that, or every full-length clip would be cut off.
+    expect(MAX_VIDEO_BYTES).toBeGreaterThan(twoMinutes)
+  })
+
+  it('caps the long edge at 480p rather than 720p', () => {
+    // 720p would roughly double the bytes for no diagnostic gain on a leak or a gauge face,
+    // and unlike a photo a video cannot be cheaply re-encoded on the device afterwards.
+    expect(MAX_VIDEO_DIMENSION).toBe(854)
+  })
+
+  it('leaves the byte ceiling below the one the server enforces, so the client stops first', () => {
+    // The server refuses at 20 MB. Stopping at 15 MB means an overshooting encoder loses the
+    // tail of a clip rather than the whole thing.
+    expect(MAX_VIDEO_BYTES).toBeLessThan(20 * 1024 * 1024)
   })
 })
 

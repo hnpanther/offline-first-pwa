@@ -11,6 +11,8 @@
  * a copy nothing ever reads.
  */
 
+import { canUseMediaDevices } from '@/utils/mediaPermissions'
+
 /** Long-edge cap. Enough to read a gauge face or see a leak; far below what a camera emits. */
 export const MAX_IMAGE_DIMENSION = 1600
 
@@ -20,8 +22,38 @@ export const IMAGE_QUALITY = 0.8
 /**
  * Hard stop for a recording. A forgotten open microphone is the realistic failure, and two
  * minutes of speech is already far more than a field note needs.
+ *
+ * This is only the fallback: the real ceiling comes from the server's settings, so an
+ * administrator can change it centrally and every tablet picks it up on the next bootstrap.
  */
 export const MAX_AUDIO_DURATION_MS = 120_000
+
+/** Fallback video ceiling, same story as the audio one. */
+export const MAX_VIDEO_DURATION_MS = 120_000
+
+/**
+ * Video encoding, chosen to keep two minutes near 11 MB.
+ *
+ * 480p at 700 kbps is the deliberate call. Industrial evidence — a leak, a flame, a vibrating
+ * coupling, a gauge sweeping — is entirely legible at that size; 720p would roughly double the
+ * bytes for no diagnostic gain, and unlike a photo a video cannot be cheaply re-encoded on the
+ * device afterwards. The constraints handed to `getUserMedia` and `MediaRecorder` are the only
+ * lever there is, so they have to be right at capture time.
+ */
+export const MAX_VIDEO_DIMENSION = 854
+export const VIDEO_BITS_PER_SECOND = 700_000
+export const VIDEO_AUDIO_BITS_PER_SECOND = 24_000
+
+/**
+ * Hard byte ceiling for one recording, enforced while it runs.
+ *
+ * A bitrate is a **hint**, not a promise: a high-motion scene (steam, spray, a swinging torch)
+ * makes the encoder overshoot badly. Without this a "120 second" clip could arrive at 40 MB and
+ * be refused by the server after the operator already recorded it. Stopping early keeps what
+ * they captured up to that point, which is far better than losing all of it.
+ */
+export const MAX_VIDEO_BYTES = 15 * 1024 * 1024
+export const MAX_AUDIO_BYTES = 4 * 1024 * 1024
 
 export interface CompressedImage {
   blob: Blob
@@ -87,6 +119,19 @@ export function fitWithin(
   }
 }
 
+/** The best video container this browser can record, or null when none is supported. */
+export function pickVideoMimeType(): string | null {
+  // VP8/Opus in WebM is what Android Chrome actually produces and is by far the smallest of
+  // the widely supported options; the rest are fallbacks for browsers with other encoders.
+  const candidates = [
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4'
+  ]
+  if (typeof MediaRecorder === 'undefined') return null
+  return candidates.find(type => MediaRecorder.isTypeSupported(type)) ?? null
+}
+
 /** The best audio container this browser can record, or null when none is supported. */
 export function pickAudioMimeType(): string | null {
   // Opus in WebM is the small-and-universal choice on Android Chrome; the rest are fallbacks
@@ -105,6 +150,13 @@ export interface AudioRecording {
   blob: Blob
   mimeType: string
   durationMs: number
+  /** Set when the recording was cut short by the byte ceiling rather than by the operator. */
+  truncated?: boolean
+}
+
+export interface VideoRecording extends AudioRecording {
+  width?: number
+  height?: number
 }
 
 export interface AudioRecorderHandle {
@@ -123,6 +175,13 @@ export interface AudioRecorderHandle {
 export async function startAudioRecording(
   maxDurationMs = MAX_AUDIO_DURATION_MS
 ): Promise<AudioRecorderHandle> {
+  // Checked before anything else: over plain HTTP `navigator.mediaDevices` is undefined, and
+  // calling straight into it throws a TypeError about reading a property of undefined — which
+  // is a useless thing to put in front of an operator standing at a pump.
+  if (!canUseMediaDevices()) {
+    throw new DOMException('Media devices unavailable', 'SecurityError')
+  }
+
   const mimeType = pickAudioMimeType()
   if (!mimeType) throw new Error('این مرورگر از ضبط صدا پشتیبانی نمی‌کند.')
 
@@ -133,11 +192,23 @@ export async function startAudioRecording(
   const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24_000 })
   const chunks: Blob[] = []
   const startedAt = Date.now()
+  let bytes = 0
+  let truncated = false
 
   recorder.ondataavailable = e => {
-    if (e.data.size > 0) chunks.push(e.data)
+    if (e.data.size === 0) return
+    chunks.push(e.data)
+    bytes += e.data.size
+    // Same reasoning as video: the bitrate is a hint. Stopping here keeps what was captured
+    // instead of letting the server refuse the whole clip afterwards.
+    if (bytes >= MAX_AUDIO_BYTES && recorder.state === 'recording') {
+      truncated = true
+      recorder.stop()
+    }
   }
-  recorder.start()
+  // A timeslice is required for the byte check to run at all — without it `ondataavailable`
+  // fires once, at the very end, which is far too late to stop anything.
+  recorder.start(1000)
 
   const releaseStream = () => stream.getTracks().forEach(t => t.stop())
   const autoStop = setTimeout(() => {
@@ -155,7 +226,7 @@ export async function startAudioRecording(
             reject(new Error('ضبط صدا انجام نشد.'))
             return
           }
-          resolve({ blob, mimeType, durationMs: Date.now() - startedAt })
+          resolve({ blob, mimeType, durationMs: Date.now() - startedAt, truncated })
         }
         recorder.onerror = () => {
           releaseStream()
@@ -169,8 +240,119 @@ export async function startAudioRecording(
           resolve({
             blob: new Blob(chunks, { type: mimeType }),
             mimeType,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            truncated
           })
+        }
+      }),
+    cancel: () => {
+      clearTimeout(autoStop)
+      if (recorder.state === 'recording') recorder.stop()
+      releaseStream()
+    }
+  }
+}
+
+export interface VideoRecorderHandle {
+  stop: () => Promise<VideoRecording>
+  cancel: () => void
+  /** Live preview source, so the operator can see what they are filming. */
+  stream: MediaStream
+}
+
+/**
+ * Starts recording video from the rear camera.
+ *
+ * Everything here is about keeping the file small enough to sync over a plant network:
+ * 480p, a low bitrate, speech-grade audio, a duration cap **and** a byte cap. The byte cap is
+ * the one that actually saves you — the others are requests the encoder may not honour.
+ *
+ * The caller gets the live `MediaStream` back so the UI can show a preview; without one the
+ * operator is filming blind, which in practice means re-filming.
+ */
+export async function startVideoRecording(
+  maxDurationMs = MAX_VIDEO_DURATION_MS,
+  maxBytes = MAX_VIDEO_BYTES
+): Promise<VideoRecorderHandle> {
+  if (!canUseMediaDevices()) {
+    throw new DOMException('Media devices unavailable', 'SecurityError')
+  }
+  const mimeType = pickVideoMimeType()
+  if (!mimeType) throw new Error('این مرورگر از ضبط ویدئو پشتیبانی نمی‌کند.')
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      // `ideal` rather than `exact`: a camera that cannot do exactly this should still record
+      // at its nearest mode, not refuse outright.
+      width: { ideal: MAX_VIDEO_DIMENSION },
+      height: { ideal: 480 },
+      frameRate: { ideal: 24, max: 30 },
+      facingMode: 'environment'
+    },
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
+  })
+
+  const recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+    audioBitsPerSecond: VIDEO_AUDIO_BITS_PER_SECOND
+  })
+  const chunks: Blob[] = []
+  const startedAt = Date.now()
+  let bytes = 0
+  let truncated = false
+
+  const settings = stream.getVideoTracks()[0]?.getSettings?.() ?? {}
+
+  recorder.ondataavailable = e => {
+    if (e.data.size === 0) return
+    chunks.push(e.data)
+    bytes += e.data.size
+    if (bytes >= maxBytes && recorder.state === 'recording') {
+      truncated = true
+      recorder.stop()
+    }
+  }
+  recorder.start(1000)
+
+  const releaseStream = () => stream.getTracks().forEach(t => t.stop())
+  const autoStop = setTimeout(() => {
+    if (recorder.state === 'recording') recorder.stop()
+  }, maxDurationMs)
+
+  const finish = (): VideoRecording => ({
+    blob: new Blob(chunks, { type: mimeType }),
+    mimeType,
+    durationMs: Date.now() - startedAt,
+    width: typeof settings.width === 'number' ? settings.width : undefined,
+    height: typeof settings.height === 'number' ? settings.height : undefined,
+    truncated
+  })
+
+  return {
+    stream,
+    stop: () =>
+      new Promise<VideoRecording>((resolve, reject) => {
+        clearTimeout(autoStop)
+        recorder.onstop = () => {
+          releaseStream()
+          const result = finish()
+          if (result.blob.size === 0) {
+            reject(new Error('ضبط ویدئو انجام نشد.'))
+            return
+          }
+          resolve(result)
+        }
+        recorder.onerror = () => {
+          releaseStream()
+          reject(new Error('خطا در ضبط ویدئو.'))
+        }
+        if (recorder.state === 'recording') {
+          recorder.stop()
+        } else {
+          // Already stopped by the duration or byte cap — onstop will not fire again.
+          releaseStream()
+          resolve(finish())
         }
       }),
     cancel: () => {

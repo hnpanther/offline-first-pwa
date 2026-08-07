@@ -119,5 +119,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',
   syncIntervalMs: 30_000,
   allowManualEntry: false,
-  nfcStrictSerialMatch: false
+  nfcStrictSerialMatch: false,
+  // Mirrors the server's own defaults. Used until the first bootstrap lands, and after that
+  // only as the fallback for a server too old to send them.
+  attachmentLimits: {
+    maxImagesPerField: 3,
+    maxAudiosPerField: 1,
+    maxVideosPerField: 1,
+    maxAudioSeconds: 120,
+    maxVideoSeconds: 120
+  }
 }

@@ -230,6 +230,14 @@ export interface BootstrapResponse {
   accessibleUnitIds: number[]
   supervisorScopeUnitIds: number[]
   primaryUnitId?: number | null
+  /** Absent from a server older than this feature; the client keeps its defaults then. */
+  attachmentLimits?: {
+    maxImagesPerField: number
+    maxAudiosPerField: number
+    maxVideosPerField: number
+    maxAudioSeconds: number
+    maxVideoSeconds: number
+  }
 }
 
 /** @deprecated Use BootstrapResponse */

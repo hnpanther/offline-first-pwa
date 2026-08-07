@@ -123,8 +123,23 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   are kept and `retryFailedAttachment` is the manual way back in.
 - Compress before storing (`utils/mediaCapture.ts`) and always `revokeObjectURL` — both are
   load-bearing on a tablet that sits on one screen for a whole shift.
+- **Photo and audio need different permissions.** `<input capture>` needs none (it hands off to
+  the OS camera app); `getUserMedia` needs the microphone permission. Once denied, Chrome never
+  prompts again — so `utils/mediaPermissions.ts` checks the Permissions API *before* calling and
+  shows how to re-enable it, instead of surfacing a raw `DOMException.message` with nothing to
+  click. Never show `err.message` from a media call directly.
 - `required` from react-hook-form cannot be used on a media field: its value is an object and
   every object is truthy. `buildValidationRules` counts ids instead.
+- **Counts and durations are server-owned.** They arrive on `/api/bootstrap` and land in
+  `settings.attachmentLimits`. The device must never write them: `SettingsPage` shows them
+  read-only to admins and explicitly re-sends the stored value on submit, so a stale form cannot
+  overwrite a ceiling a bootstrap just refreshed. A missing/failed bootstrap keeps the last
+  known values — offline capture has to work against *some* rules.
+- **Video size is set at capture time and nowhere else** (`startVideoRecording`): 480p, 700 kbps,
+  plus a hard byte ceiling checked on every `ondataavailable`. `MediaRecorder` needs a timeslice
+  (`start(1000)`) for that check to run at all — without one the event fires once at the end,
+  far too late to stop anything. The client ceiling sits below the server's so the device
+  truncates rather than the server rejecting the whole clip.
 
 ### PWA / offline testing
 

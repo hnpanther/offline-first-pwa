@@ -4,6 +4,7 @@
  */
 
 import { db } from '@/services/storage/db'
+import { getSettings, saveSettings } from '@/services/storage'
 import { fetchBootstrap } from '@/services/api'
 import type { BootstrapResponse } from '@/services/api'
 import { toIdString } from '@/utils/ids'
@@ -47,6 +48,14 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
 
     if (units.length > 0) {
       await db.operationalUnits.bulkPut(units)
+    }
+
+    // Attachment ceilings are server-owned. Refreshing them here is what makes an admin's
+    // change in the web panel take effect on every tablet without anyone touching the device.
+    // A server that does not send them leaves whatever the device already had.
+    if (data.attachmentLimits) {
+      const settings = await getSettings()
+      await saveSettings({ ...settings, attachmentLimits: data.attachmentLimits })
     }
 
     await setLastBootstrapAt(data.serverTime)

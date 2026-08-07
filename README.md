@@ -36,7 +36,7 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 18. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
 19. [NFC](#nfc)
 20. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
-21. [Photo and Voice Note Fields](#photo-and-voice-note-fields)
+21. [Photo, Voice Note and Video Fields](#photo-voice-note-and-video-fields)
 22. [Synchronization](#synchronization)
 23. [IndexedDB Schema](#indexeddb-schema)
 24. [API Contract](#api-contract)
@@ -874,12 +874,34 @@ Logic mirrors backend `FieldValidationSupport` in `src/utils/fieldValidation.ts`
 
 ---
 
-## Photo and Voice Note Fields
+## Photo, Voice Note and Video Fields
 
-When an asset class has a field of type **`image`** or **`audio`**, that field renders as a
-capture control instead of a text box: a camera button (`AttachmentFieldInput`) or a
-record/stop pair with a live elapsed-time readout. Everything works offline — capture, review
-and delete need no connection at all.
+When an asset class has a field of type **`image`**, **`audio`** or **`video`**, that field
+renders as a capture control instead of a text box: a camera button, or a record/stop pair with
+a live elapsed-time readout (and a live preview while filming). Everything works offline —
+capture, review and delete need no connection at all.
+
+### Limits come from the server
+
+How many files a field accepts and how long a clip may run are set by an administrator in the
+**web panel**, not here. The app receives them on every `/api/bootstrap` call, so a change made
+in the panel takes effect on this device at its next reconnect, with nobody touching the tablet.
+
+| | Default |
+|---|---|
+| Images per field | 3 |
+| Voice notes per field | 1 |
+| Videos per field | 1 |
+| Max audio duration | 120 s |
+| Max video duration | 120 s |
+
+Counts are **per field per asset**. The capture button disables at the ceiling and the header
+shows `2 / 3`. The Settings screen shows the current values **read-only, to admins only** —
+they are not editable on the device, and the settings form deliberately never writes them back,
+so a stale form cannot overwrite ceilings a bootstrap refreshed in the meantime.
+
+If the server is older than this feature, or a pull fails, the app keeps whatever it last
+stored — offline capture has to keep working against the last known rules.
 
 ### Capture and compression
 
@@ -892,7 +914,19 @@ in case":
 | Media | What happens | Result |
 |-------|--------------|--------|
 | Photo | Drawn to a canvas, capped at **1600 px** on the long edge, re-encoded as WebP at quality 0.8 (JPEG fallback) | ~200–400 KB, still ample to read a gauge face or see a leak |
-| Audio | `MediaRecorder`, Opus in WebM, **mono at 24 kbps**, hard stop at **120 seconds** | ~150 KB per minute of speech |
+| Audio | `MediaRecorder`, Opus in WebM, **mono at 24 kbps** | ~150 KB per minute of speech |
+| Video | **480p (854 px), 700 kbps video + 24 kbps mono audio**, VP8/Opus in WebM | ~88 KB/s, so two minutes ≈ **10.5 MB** |
+
+Video needed a real decision because, unlike a photo, it **cannot be cheaply re-encoded on the
+device afterwards** — the constraints given to `getUserMedia` and `MediaRecorder` at capture
+time are the only lever. 480p rather than 720p is deliberate: a leak, a flame or a gauge
+sweeping is entirely legible at that size, and 720p would roughly double the bytes for no
+diagnostic gain.
+
+A bitrate is a **hint, not a promise**. A high-motion scene makes the encoder overshoot, so
+recording also stops at a hard **15 MB** ceiling — below the server's 20 MB, so the device cuts
+the clip rather than having the server refuse the whole thing after the operator already filmed
+it. When that happens the app says so explicitly instead of leaving a mysteriously short clip.
 
 The `capture="environment"` attribute is what makes Android open the camera directly rather
 than the photo gallery. The microphone track is released on every exit path — stop, cancel, or
@@ -962,10 +996,33 @@ camera the app checks free space and refuses the capture if the device is nearly
 first means the operator is told to sync while they can still act on it, rather than losing the
 shot to a failed write after taking it.
 
+### Microphone permission
+
+Photos and voice notes need **different** permissions, which surprises people: taking a photo
+goes through a file input with `capture`, which hands off to the OS camera app and needs no
+site permission at all, while recording audio goes through `getUserMedia`, which does. So a
+tablet can happily take photos and then refuse to record.
+
+The awkward part is that once microphone access has been denied for the origin, Chrome **never
+prompts again** — every later attempt fails instantly with nothing to click. The app detects
+that state up front via the Permissions API and, instead of showing the browser's raw
+"Permission denied", spells out where the setting lives:
+
+1. The 🔒 icon beside the address bar (or *Site settings* in the browser menu) → **Microphone**
+   → *Allow*.
+2. For an installed PWA: Android *Settings → Apps → this app → Permissions → Microphone*.
+3. Reopen the page and press «ضبط صدا» again.
+
+Other failures are separated out rather than lumped together, because the fixes differ: no
+microphone on the device, the microphone held by another app (a call, a voice recorder), or a
+page served over plain HTTP.
+
 ### Notes
 
 - **HTTPS is required** for camera and microphone access. The mkcert setup described above
-  already provides it; over plain HTTP the capture buttons will fail.
+  already provides it; over plain HTTP `navigator.mediaDevices` is not merely restricted, it is
+  *undefined* — the app checks for this explicitly so the operator gets a sentence rather than
+  a `TypeError`.
 - Deleting an attachment on the device is **local only**. A copy already on the server stays
   there deliberately — a submitted sheet's evidence should not vanish because someone tidied up
   their tablet.

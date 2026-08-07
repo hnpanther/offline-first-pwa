@@ -98,6 +98,22 @@ export interface AppSettings {
    * original Record-1-only behaviour.
    */
   nfcStrictSerialMatch: boolean
+  /**
+   * Attachment ceilings, owned by the server.
+   *
+   * Mirrored here so capture works offline, but **never edited on the device** — the Settings
+   * screen shows them read-only to admins. They refresh on every bootstrap, so an administrator
+   * changing them in the web panel reaches every tablet on its next reconnect.
+   */
+  attachmentLimits: AttachmentLimits
+}
+
+export interface AttachmentLimits {
+  maxImagesPerField: number
+  maxAudiosPerField: number
+  maxVideosPerField: number
+  maxAudioSeconds: number
+  maxVideoSeconds: number
 }
 
 export interface NFCScanResult {

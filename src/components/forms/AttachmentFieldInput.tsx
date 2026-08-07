@@ -11,6 +11,7 @@ import {
 } from '@mui/material'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import MicIcon from '@mui/icons-material/Mic'
+import VideocamIcon from '@mui/icons-material/Videocam'
 import StopIcon from '@mui/icons-material/Stop'
 import DeleteIcon from '@mui/icons-material/Delete'
 import RefreshIcon from '@mui/icons-material/Refresh'
@@ -31,10 +32,19 @@ import {
   formatBytes,
   formatDuration,
   startAudioRecording,
-  type AudioRecorderHandle
+  startVideoRecording,
+  type AudioRecorderHandle,
+  type VideoRecorderHandle
 } from '@/utils/mediaCapture'
+import { getSettings } from '@/services/storage'
+import { DEFAULT_SETTINGS } from '@/services/storage/db'
+import type { AttachmentLimits } from '@/types'
 import { downloadAttachment } from '@/services/api'
 import { getStorageStatus } from '@/utils/storageQuota'
+import {
+  describeMediaError,
+  getMicrophonePermission
+} from '@/utils/mediaPermissions'
 import { t } from '@/i18n'
 import type { AttachmentKind, LocalAttachment } from '@/types'
 
@@ -77,6 +87,12 @@ export function AttachmentFieldInput({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recorder, setRecorder] = useState<AudioRecorderHandle | null>(null)
+  const [videoRecorder, setVideoRecorder] = useState<VideoRecorderHandle | null>(null)
+  const [limits, setLimits] = useState<AttachmentLimits>(DEFAULT_SETTINGS.attachmentLimits)
+  const previewRef = useRef<HTMLVideoElement>(null)
+  // When set, the alert also shows how to re-enable the microphone. Kept separate from the
+  // plain error string because the fix lives outside the app and needs real instructions.
+  const [micBlocked, setMicBlocked] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const objectUrls = useRef<string[]>([])
@@ -119,13 +135,47 @@ export function AttachmentFieldInput({
 
   useEffect(() => releaseUrls, [releaseUrls])
 
+  // Server-owned ceilings. Read once per mount from the copy the last bootstrap stored, so
+  // capture still respects them with no connection at all.
+  useEffect(() => {
+    void getSettings().then(s => {
+      if (s.attachmentLimits) setLimits(s.attachmentLimits)
+    })
+  }, [])
+
+  // Attach the live camera feed to the preview element. Filming blind means re-filming.
+  useEffect(() => {
+    const el = previewRef.current
+    if (!el || !videoRecorder) return
+    el.srcObject = videoRecorder.stream
+    void el.play().catch(() => undefined)
+    return () => {
+      el.srcObject = null
+    }
+  }, [videoRecorder])
+
   // Elapsed-time readout while recording, so the operator can see the cap approaching.
   useEffect(() => {
-    if (!recorder) return
+    if (!recorder && !videoRecorder) return
     const started = Date.now()
     const id = setInterval(() => setRecordingMs(Date.now() - started), 250)
     return () => clearInterval(id)
-  }, [recorder])
+  }, [recorder, videoRecorder])
+
+  /** Ceiling for this field's kind, straight from the server's settings. */
+  const maxCount =
+    kind === 'IMAGE'
+      ? limits.maxImagesPerField
+      : kind === 'AUDIO'
+        ? limits.maxAudiosPerField
+        : limits.maxVideosPerField
+
+  const maxDurationMs =
+    kind === 'AUDIO' ? limits.maxAudioSeconds * 1000 : limits.maxVideoSeconds * 1000
+
+  // Counted from the stored rows rather than from `ids`, so a reference left dangling by a
+  // deleted row cannot silently consume a slot the operator can never free.
+  const atLimit = items.length >= maxCount
 
   const persist = async (attachment: LocalAttachment) => {
     await saveAttachment(attachment)
@@ -150,6 +200,10 @@ export function AttachmentFieldInput({
     setBusy(true)
     setError(null)
     try {
+      if (atLimit) {
+        setError(t.attachments.limitReached.replace('{{max}}', String(maxCount)))
+        return
+      }
       if (await blockedByStorage()) return
       const { blob, width, height } = await compressImage(file)
       await persist({
@@ -177,11 +231,29 @@ export function AttachmentFieldInput({
 
   const handleStartRecording = async () => {
     setError(null)
+    setMicBlocked(false)
     try {
+      if (atLimit) {
+        setError(t.attachments.limitReached.replace('{{max}}', String(maxCount)))
+        return
+      }
       if (await blockedByStorage()) return
-      setRecorder(await startAudioRecording())
+
+      // Asked up front so a browser that has already blocked this origin is reported as such
+      // rather than as a mysterious instant failure. `getUserMedia` would reject without ever
+      // showing a prompt, and the operator would have nothing to click.
+      const permission = await getMicrophonePermission()
+      if (permission === 'denied') {
+        setMicBlocked(true)
+        setError(t.attachments.micBlocked)
+        return
+      }
+
+      setRecorder(await startAudioRecording(maxDurationMs))
     } catch (err) {
-      setError(err instanceof Error ? err.message : t.attachments.captureFailed)
+      const failure = describeMediaError(err, (await getMicrophonePermission()) === 'denied')
+      setMicBlocked(failure.needsManualGrant)
+      setError(failure.message)
     }
   }
 
@@ -189,7 +261,7 @@ export function AttachmentFieldInput({
     if (!recorder) return
     setBusy(true)
     try {
-      const { blob, mimeType, durationMs } = await recorder.stop()
+      const { blob, mimeType, durationMs, truncated } = await recorder.stop()
       await persist({
         id: uuidv4(),
         logSheetLocalId,
@@ -204,10 +276,61 @@ export function AttachmentFieldInput({
         syncStatus: 'pending',
         createdAt: Date.now()
       })
+      if (truncated) setError(t.attachments.truncatedBySize)
     } catch (err) {
       setError(err instanceof Error ? err.message : t.attachments.captureFailed)
     } finally {
       setRecorder(null)
+      setRecordingMs(0)
+      setBusy(false)
+    }
+  }
+
+  const handleStartVideo = async () => {
+    setError(null)
+    setMicBlocked(false)
+    try {
+      if (atLimit) {
+        setError(t.attachments.limitReached.replace('{{max}}', String(maxCount)))
+        return
+      }
+      if (await blockedByStorage()) return
+      setVideoRecorder(await startVideoRecording(maxDurationMs))
+    } catch (err) {
+      const failure = describeMediaError(err, (await getMicrophonePermission()) === 'denied')
+      setMicBlocked(failure.needsManualGrant)
+      setError(failure.message)
+    }
+  }
+
+  const handleStopVideo = async () => {
+    if (!videoRecorder) return
+    setBusy(true)
+    try {
+      const { blob, mimeType, durationMs, width, height, truncated } = await videoRecorder.stop()
+      await persist({
+        id: uuidv4(),
+        logSheetLocalId,
+        logSheetServerId,
+        assetId,
+        fieldKey,
+        kind: 'VIDEO',
+        mimeType,
+        sizeBytes: blob.size,
+        durationMs,
+        width,
+        height,
+        blob,
+        syncStatus: 'pending',
+        createdAt: Date.now()
+      })
+      // Said out loud rather than hidden: the operator needs to know the clip is short because
+      // the size ceiling cut it, not because the camera failed.
+      if (truncated) setError(t.attachments.truncatedBySize)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.attachments.captureFailed)
+    } finally {
+      setVideoRecorder(null)
       setRecordingMs(0)
       setBusy(false)
     }
@@ -231,6 +354,9 @@ export function AttachmentFieldInput({
         <Typography variant="body2" fontWeight={600}>
           {label}
         </Typography>
+        <Typography variant="caption" color={atLimit ? 'warning.main' : 'text.secondary'}>
+          {items.length} / {maxCount}
+        </Typography>
         {items.length > 0 && (
           <Typography variant="caption" color="text.secondary">
             {t.attachments.pendingCount
@@ -241,8 +367,37 @@ export function AttachmentFieldInput({
       </Stack>
 
       {error && (
-        <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError(null)}>
+        <Alert
+          severity={micBlocked ? 'warning' : 'error'}
+          sx={{ mb: 1 }}
+          onClose={() => {
+            setError(null)
+            setMicBlocked(false)
+          }}
+        >
           {error}
+          {micBlocked && (
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="caption" fontWeight={700} display="block" sx={{ mb: 0.5 }}>
+                {t.attachments.micHowToFix}
+              </Typography>
+              <Box component="ol" sx={{ m: 0, pr: 2.5, '& li': { mb: 0.25 } }}>
+                {t.attachments.micHowToFixSteps.map(step => (
+                  <Typography component="li" variant="caption" key={step}>
+                    {step}
+                  </Typography>
+                ))}
+              </Box>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                display="block"
+                sx={{ mt: 0.75 }}
+              >
+                {t.attachments.micNoteVsPhoto}
+              </Typography>
+            </Box>
+          )}
         </Alert>
       )}
 
@@ -265,7 +420,7 @@ export function AttachmentFieldInput({
               <Button
                 variant="outlined"
                 startIcon={busy ? <CircularProgress size={16} /> : <PhotoCameraIcon />}
-                disabled={busy}
+                disabled={busy || atLimit}
                 onClick={() => fileInputRef.current?.click()}
               >
                 {t.attachments.takePhoto}
@@ -277,11 +432,44 @@ export function AttachmentFieldInput({
             <Button
               variant="outlined"
               startIcon={busy ? <CircularProgress size={16} /> : <MicIcon />}
-              disabled={busy}
+              disabled={busy || atLimit}
               onClick={() => void handleStartRecording()}
             >
               {t.attachments.recordAudio}
             </Button>
+          )}
+
+          {kind === 'VIDEO' && !videoRecorder && (
+            <Button
+              variant="outlined"
+              startIcon={busy ? <CircularProgress size={16} /> : <VideocamIcon />}
+              disabled={busy || atLimit}
+              onClick={() => void handleStartVideo()}
+            >
+              {t.attachments.recordVideo}
+            </Button>
+          )}
+          {kind === 'VIDEO' && videoRecorder && (
+            <>
+              <Button
+                variant="contained"
+                color="error"
+                startIcon={<StopIcon />}
+                onClick={() => void handleStopVideo()}
+              >
+                {t.attachments.stopVideo} ({formatDuration(recordingMs)})
+              </Button>
+              <Button
+                variant="text"
+                onClick={() => {
+                  videoRecorder.cancel()
+                  setVideoRecorder(null)
+                  setRecordingMs(0)
+                }}
+              >
+                {t.form.cancel}
+              </Button>
+            </>
           )}
           {kind === 'AUDIO' && recorder && (
             <>
@@ -306,6 +494,16 @@ export function AttachmentFieldInput({
             </>
           )}
         </Stack>
+      )}
+
+      {videoRecorder && (
+        <Box
+          component="video"
+          ref={previewRef}
+          muted
+          playsInline
+          sx={{ width: '100%', maxWidth: 320, borderRadius: 1, mb: 1, bgcolor: 'common.black' }}
+        />
       )}
 
       {items.length === 0 && (
@@ -335,6 +533,17 @@ export function AttachmentFieldInput({
                 alt={label}
                 sx={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 1 }}
               />
+            )}
+            {item.kind === 'VIDEO' && (
+              <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                <Box
+                  component="video"
+                  controls
+                  preload="metadata"
+                  sx={{ width: '100%', maxWidth: 260, borderRadius: 1 }}
+                  src={item.blob ? URL.createObjectURL(item.blob) : undefined}
+                />
+              </Box>
             )}
             {item.kind === 'AUDIO' && (
               <Box sx={{ minWidth: 0, flexGrow: 1 }}>

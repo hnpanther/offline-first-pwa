@@ -18,6 +18,7 @@ import { useSettings } from '@/hooks/useSettings'
 import { useAuth } from '@/hooks/useAuth'
 import { isAdminRole } from '@/types/auth'
 import { t } from '@/i18n'
+import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import type { AppSettings } from '@/types'
 
 export function SettingsPage() {
@@ -25,6 +26,7 @@ export function SettingsPage() {
   const { authSession } = useAuth()
   const isAdmin = !!authSession && isAdminRole(authSession.roles)
   const [saved, setSaved] = useState(false)
+  const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
 
   const { control, handleSubmit } = useForm<AppSettings>({
     values: settings
@@ -33,7 +35,11 @@ export function SettingsPage() {
   const onSubmit = async (data: AppSettings) => {
     await updateSettings({
       ...data,
-      syncIntervalMs: Number(data.syncIntervalMs) * 1000
+      syncIntervalMs: Number(data.syncIntervalMs) * 1000,
+      // Never written from this screen. The form was initialised from a snapshot, so
+      // submitting it back could overwrite ceilings a bootstrap refreshed in the meantime —
+      // and the device is not the owner of these values in the first place.
+      attachmentLimits: limits
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
@@ -160,6 +166,40 @@ export function SettingsPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Server-owned, so read-only and admin-only: showing it to an operator would invite a
+          support call about a setting they cannot change, and the value they see would be
+          whatever the last bootstrap brought rather than anything they control. */}
+      {isAdmin && (
+        <Card variant="outlined">
+          <CardContent>
+            <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+              {t.attachments.limitsTitle}
+            </Typography>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {t.attachments.limitsHint}
+            </Alert>
+            <Box component="dl" sx={{ m: 0, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 1, columnGap: 2 }}>
+              {[
+                [t.attachments.limitImages, limits.maxImagesPerField],
+                [t.attachments.limitAudios, limits.maxAudiosPerField],
+                [t.attachments.limitVideos, limits.maxVideosPerField],
+                [t.attachments.limitAudioSeconds, limits.maxAudioSeconds],
+                [t.attachments.limitVideoSeconds, limits.maxVideoSeconds]
+              ].map(([label, value]) => (
+                <Box key={String(label)} sx={{ display: 'contents' }}>
+                  <Typography component="dt" variant="body2" color="text.secondary">
+                    {label}
+                  </Typography>
+                  <Typography component="dd" variant="body2" fontWeight={700} sx={{ m: 0 }}>
+                    {String(value)}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          </CardContent>
+        </Card>
+      )}
 
       <Divider />
 
