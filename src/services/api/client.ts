@@ -141,7 +141,76 @@ async function request<T>(
   return response.json() as Promise<T>
 }
 
+/**
+ * Multipart upload and raw-blob download.
+ *
+ * These bypass {@link request} because it is JSON-only: it sets a JSON Content-Type (which
+ * must be left to the browser for multipart, so it can add the boundary) and parses the reply
+ * as JSON (wrong for a downloaded image). The auth, base-URL, unauthorized and reachability
+ * handling is reproduced here deliberately rather than generalised — the JSON path is used by
+ * everything and is not worth destabilising for two callers.
+ */
+async function multipart<T>(path: string, form: FormData, signal?: AbortSignal): Promise<T> {
+  if (await sessionSilentlyExpired()) {
+    onUnauthorized?.()
+    throw new ApiError(401, 'نشست شما به پایان رسیده است. دوباره وارد شوید.')
+  }
+  const token = await getAccessToken()
+  let response: Response
+  try {
+    response = await fetch(`${await getBaseUrl()}${path}`, {
+      method: 'POST',
+      // No Content-Type: the browser must set it, including the multipart boundary.
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+      signal
+    })
+  } catch {
+    useAppStore.getState().setServerReachable(false)
+    throw new ApiError(0, 'ارتباط با سرور برقرار نشد.')
+  }
+  if (response.status === 401) {
+    await clearAuthSession()
+    onUnauthorized?.()
+  }
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '')
+    let body: unknown = raw
+    if (raw) {
+      try { body = JSON.parse(raw) } catch { /* not JSON */ }
+    }
+    throw new ApiError(response.status, extractErrorMessage(body, `HTTP ${response.status}`), body)
+  }
+  useAppStore.getState().setServerReachable(true)
+  return response.json() as Promise<T>
+}
+
+async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  const token = await getAccessToken()
+  let response: Response
+  try {
+    response = await fetch(`${await getBaseUrl()}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal
+    })
+  } catch {
+    useAppStore.getState().setServerReachable(false)
+    throw new ApiError(0, 'ارتباط با سرور برقرار نشد.')
+  }
+  if (response.status === 401) {
+    await clearAuthSession()
+    onUnauthorized?.()
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, `HTTP ${response.status}`)
+  }
+  useAppStore.getState().setServerReachable(true)
+  return response.blob()
+}
+
 export const apiClient = {
+  multipart,
+  fetchBlob,
   get: <T>(path: string, signal?: AbortSignal, authRequired = true) =>
     request<T>('GET', path, undefined, signal, authRequired),
   post: <T>(path: string, body: unknown, signal?: AbortSignal, authRequired = true) =>

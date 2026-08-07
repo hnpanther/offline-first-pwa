@@ -1,4 +1,5 @@
 import { getAllLogSheets, deleteLogSheet } from '@/services/storage'
+import { deleteSyncedAttachmentsForLogSheet } from '@/services/storage/attachments'
 import type { LogSheet } from '@/types'
 import { SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 
@@ -28,6 +29,11 @@ function isExpiredDraftSheet(sheet: LogSheet): boolean {
  * - Expired draft → keep 1 day in history, then delete
  * - Active draft (in progress) → never delete
  * - Submitted but still pending sync → keep until synced or failed
+ *
+ * Deleting a sheet also drops its **already-uploaded** attachments, which would otherwise
+ * outlive every screen that could show them and grow the database without bound. Attachments
+ * still waiting to upload are kept on purpose: they carry their own server sheet id, so the
+ * queue can finish delivering them long after the local sheet is gone.
  */
 export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
   const all = await getAllLogSheets()
@@ -38,6 +44,7 @@ export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
       const anchor = sheet.dueAt ?? sheet.updatedAt ?? sheet.createdAt
       if (now - anchor > EXPIRED_DRAFT_RETENTION_MS) {
         await deleteLogSheet(sheet.localId)
+        await deleteSyncedAttachmentsForLogSheet(sheet.localId)
         deleted++
       }
       continue
@@ -48,6 +55,7 @@ export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
     if (sheet.syncStatus === 'synced') {
       if (now - syncedRetentionAnchor(sheet) > SYNCED_RETENTION_MS) {
         await deleteLogSheet(sheet.localId)
+        await deleteSyncedAttachmentsForLogSheet(sheet.localId)
         deleted++
       }
       continue
@@ -56,6 +64,7 @@ export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
     if (sheet.syncStatus === 'failed') {
       if (now - failedRetentionAnchor(sheet) > FAILED_RETENTION_MS) {
         await deleteLogSheet(sheet.localId)
+        await deleteSyncedAttachmentsForLogSheet(sheet.localId)
         deleted++
       }
     }

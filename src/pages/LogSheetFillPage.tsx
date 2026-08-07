@@ -237,6 +237,17 @@ function AssetFillDialog({
                 errors={errors}
                 readOnly={readOnly}
                 readOnlyValues={readOnly ? entry.formData : undefined}
+                attachmentContext={
+                  logSheet
+                    ? {
+                        logSheetLocalId: logSheet.localId,
+                        // May be absent for a sheet raised offline; the upload queue skips
+                        // those rows until the sheet itself has synced and been given an id.
+                        logSheetServerId: logSheet.serverId,
+                        assetId: toIdString(entry.assetId)
+                      }
+                    : undefined
+                }
               />
             )}
             {!readOnly && (

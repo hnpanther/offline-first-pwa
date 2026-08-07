@@ -300,6 +300,68 @@ export async function saveAssetNfcSerial(
   )
 }
 
+
+// ===========================================================================
+// Attachments (photo / voice note)
+// ===========================================================================
+
+export interface AttachmentDto {
+  id: string
+  logSheetId: number
+  assetId: number
+  fieldKey: string
+  kind: 'IMAGE' | 'AUDIO' | 'VIDEO'
+  mimeType: string
+  sizeBytes: number
+  sha256?: string
+  width?: number
+  height?: number
+  durationMs?: number
+  uploadedAt: number
+  createdByUserId?: number
+}
+
+/**
+ * Uploads one attachment.
+ *
+ * Deliberately its own request rather than part of `POST /api/log-sheets/batch`: a submission
+ * has to stay small and atomic, so a dropped connection costs one photo instead of a whole
+ * shift's readings. The `id` is minted on the device, which makes a retry idempotent — the
+ * server returns the existing row rather than storing the file twice.
+ */
+export async function uploadAttachment(params: {
+  id: string
+  logSheetServerId: string | number
+  assetId: string | number
+  fieldKey: string
+  blob: Blob
+  width?: number
+  height?: number
+  durationMs?: number
+  signal?: AbortSignal
+}): Promise<AttachmentDto> {
+  const form = new FormData()
+  form.append('id', params.id)
+  form.append('logSheetId', String(params.logSheetServerId))
+  form.append('assetId', String(params.assetId))
+  form.append('fieldKey', params.fieldKey)
+  if (params.width != null) form.append('width', String(params.width))
+  if (params.height != null) form.append('height', String(params.height))
+  if (params.durationMs != null) form.append('durationMs', String(Math.round(params.durationMs)))
+  form.append('file', params.blob, params.id)
+
+  return apiClient.multipart<AttachmentDto>('/api/attachments', form, params.signal)
+}
+
+/** Fetches the bytes — only when the device no longer holds its own copy. */
+export async function downloadAttachment(id: string, signal?: AbortSignal): Promise<Blob> {
+  return apiClient.fetchBlob(`/api/attachments/${id}`, signal)
+}
+
+export async function deleteRemoteAttachment(id: string, signal?: AbortSignal): Promise<void> {
+  await apiClient.delete<void>(`/api/attachments/${id}`, signal)
+}
+
 // ===========================================================================
 // Log sheets — submitted log sheet push
 // ===========================================================================

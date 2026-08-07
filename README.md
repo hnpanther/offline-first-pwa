@@ -36,11 +36,12 @@ The UI is **Persian (RTL)**. This document is in English for developers and oper
 18. [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy)
 19. [NFC](#nfc)
 20. [Field Validation (Warning / Danger Ranges)](#field-validation-warning--danger-ranges)
-21. [Synchronization](#synchronization)
-22. [IndexedDB Schema](#indexeddb-schema)
-23. [API Contract](#api-contract)
-24. [Production Deployment](#production-deployment)
-25. [Troubleshooting](#troubleshooting)
+21. [Photo and Voice Note Fields](#photo-and-voice-note-fields)
+22. [Synchronization](#synchronization)
+23. [IndexedDB Schema](#indexeddb-schema)
+24. [API Contract](#api-contract)
+25. [Production Deployment](#production-deployment)
+26. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -873,6 +874,98 @@ Logic mirrors backend `FieldValidationSupport` in `src/utils/fieldValidation.ts`
 
 ---
 
+## Photo and Voice Note Fields
+
+When an asset class has a field of type **`image`** or **`audio`**, that field renders as a
+capture control instead of a text box: a camera button (`AttachmentFieldInput`) or a
+record/stop pair with a live elapsed-time readout. Everything works offline — capture, review
+and delete need no connection at all.
+
+### Capture and compression
+
+Compression is not an optimisation here, it is what makes the feature viable. A tablet camera
+produces 8–12 MP frames of several megabytes each; at the target load of a daily sheet that
+would be tens of gigabytes a year moving over a plant network. `src/utils/mediaCapture.ts`
+compresses **before** anything is stored, and the original is discarded rather than kept "just
+in case":
+
+| Media | What happens | Result |
+|-------|--------------|--------|
+| Photo | Drawn to a canvas, capped at **1600 px** on the long edge, re-encoded as WebP at quality 0.8 (JPEG fallback) | ~200–400 KB, still ample to read a gauge face or see a leak |
+| Audio | `MediaRecorder`, Opus in WebM, **mono at 24 kbps**, hard stop at **120 seconds** | ~150 KB per minute of speech |
+
+The `capture="environment"` attribute is what makes Android open the camera directly rather
+than the photo gallery. The microphone track is released on every exit path — stop, cancel, or
+error — so the browser's recording indicator never stays on after the operator is done.
+
+### What is stored where
+
+The log sheet's `formData` holds **ids only**:
+
+```json
+{ "pump_photo": { "type": "attachment", "ids": ["a7f3…"] } }
+```
+
+The media itself lives in its own Dexie table as a native `Blob`. That separation is what keeps
+a sheet's form data small enough to sync as ordinary JSON no matter how many photos hang off
+it, and it is mirrored exactly on the server (see the backend README's *Attachments* chapter).
+
+### Upload: a separate queue
+
+Attachments **do not** travel inside the log-sheet submission. That payload has to stay small
+and atomic — a 400 KB photo in the middle of it would mean every dropped connection retried the
+whole shift's readings. Instead:
+
+1. The sheet submits with attachment ids only, through the unchanged batch path.
+2. Once the server accepts it, the new sheet id is stamped onto that sheet's attachment rows.
+   Until then the queue skips them on purpose: the server keys an attachment to a log sheet, so
+   uploading earlier is impossible.
+3. `syncPendingAttachments` then uploads the files **one at a time**. Sequential is deliberate —
+   on a weak field link three concurrent uploads are slower than one and far likelier to time
+   out, and it bounds memory to a single blob at a time.
+
+A dropped connection therefore costs exactly one file, and the next pass resumes where this one
+stopped. The attachment pass runs in its own error boundary: a photo that will not upload never
+fails a submission that already succeeded.
+
+Each attachment shows its own state — «در انتظار ارسال» / «ارسال شد» / the failure reason — and
+the field header shows the count («۱ از ۲ پیوست ارسال شد»). Pending attachments are also
+included in the sync bar's count, because the badge means "work not yet on the server" and a
+submitted sheet whose photos are still queued is exactly that.
+
+**Retries are safe.** Each file carries a UUID minted on the device, so a retry the server has
+already processed returns the existing record instead of creating a second copy.
+
+Failures are classified rather than lumped together: an unreachable server leaves the row
+completely untouched (a tunnel is not a rejection), a `4xx` other than 401 is treated as
+permanent because identical bytes will get an identical refusal, and everything else stays
+retryable with the reason recorded.
+
+### Device storage
+
+Once a file has been safely on the server for **7 days** its bytes are dropped from the device
+while the metadata row stays. The attachment still appears in the form; opening it re-fetches
+from the server. Without this a tablet would accumulate every photo ever taken on it.
+
+At startup the app requests **persistent storage** (`navigator.storage.persist()`), which
+exempts the origin from routine eviction. Chrome grants it silently to an installed PWA and
+refuses it for a casual tab, so a refusal is normal and is only logged. Before opening the
+camera the app checks free space and refuses the capture if the device is nearly full — checking
+first means the operator is told to sync while they can still act on it, rather than losing the
+shot to a failed write after taking it.
+
+### Notes
+
+- **HTTPS is required** for camera and microphone access. The mkcert setup described above
+  already provides it; over plain HTTP the capture buttons will fail.
+- Deleting an attachment on the device is **local only**. A copy already on the server stays
+  there deliberately — a submitted sheet's evidence should not vanish because someone tidied up
+  their tablet.
+- Video is not offered in the app. The backend understands the type end to end, so adding it
+  later is a UI change rather than a redesign.
+
+---
+
 ## Synchronization
 
 Three separate paths:
@@ -975,7 +1068,7 @@ synced (`removeArchivedLogSheet`).
 
 ## IndexedDB Schema
 
-Dexie version **1** — main tables:
+Dexie version **2** — main tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -986,6 +1079,7 @@ Dexie version **1** — main tables:
 | `logSheetTemplates` | Log sheet template slices carried by bundles |
 | `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only; never auto-purged) |
+| `attachments` | Captured photos / voice notes as native `Blob`s + upload state (added in version 2) |
 | `nfcFaultReports` | Locally-filed NFC fault reports (unlock manual entry per asset; `createdByUserId` scopes outbound sync) |
 | `operationalUnits` | From bootstrap |
 | `settings` | App settings (server URL, operator name, manual-entry and chip-serial policies, …) |
@@ -1003,9 +1097,11 @@ Dexie version **1** — main tables:
 | `inboxSnapshot` | Cached assigned / available / teamOpen lists |
 | `lastSeq` | Reserved for future incremental sync engine |
 
-`db.ts` declares a **single** `this.version(1)` block. The app has never shipped, so the
-historical versions that only ever built up to this shape were collapsed into it — there is
-no upgrade path to keep because there is no production data to upgrade.
+`db.ts` declared a **single** `this.version(1)` block: the app has never shipped, so the
+historical versions that only ever built up to that shape were collapsed into it — there was
+no upgrade path to keep because there was no production data to upgrade. `this.version(2)`
+was then added on top for the `attachments` table, repeating every version-1 store verbatim,
+which is the pattern to follow from here on.
 
 A development device that ran the app **before** the collapse holds an IndexedDB at version
 110, and IndexedDB refuses to open a database at a lower version than it was created with.
@@ -1014,8 +1110,9 @@ this is safe here because every table is either server-owned reference data that
 sync refetches, or local work a pre-production device can afford to lose. Any other failure
 is rethrown untouched.
 
-When the schema next changes, **add** `this.version(2).stores({...})` with the full store
-list rather than editing the `version(1)` block.
+When the schema next changes, **add** `this.version(3).stores({...})` with the full store
+list rather than editing an existing version block. Note that adding a plain, non-indexed
+property to a stored object needs no version bump at all — only new stores and new indexes do.
 
 ---
 

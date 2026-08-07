@@ -1,0 +1,378 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  IconButton,
+  Stack,
+  Typography
+} from '@mui/material'
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
+import MicIcon from '@mui/icons-material/Mic'
+import StopIcon from '@mui/icons-material/Stop'
+import DeleteIcon from '@mui/icons-material/Delete'
+import CloudDoneIcon from '@mui/icons-material/CloudDone'
+import CloudQueueIcon from '@mui/icons-material/CloudQueue'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
+import { v4 as uuidv4 } from 'uuid'
+import {
+  attachmentIdsOf,
+  buildAttachmentRef,
+  deleteAttachment,
+  getAttachmentsByIds,
+  saveAttachment
+} from '@/services/storage/attachments'
+import {
+  compressImage,
+  formatBytes,
+  formatDuration,
+  startAudioRecording,
+  type AudioRecorderHandle
+} from '@/utils/mediaCapture'
+import { downloadAttachment } from '@/services/api'
+import { getStorageStatus } from '@/utils/storageQuota'
+import { t } from '@/i18n'
+import type { AttachmentKind, LocalAttachment } from '@/types'
+
+interface Props {
+  kind: AttachmentKind
+  label: string
+  value: unknown
+  readOnly?: boolean
+  logSheetLocalId: string
+  logSheetServerId?: string
+  assetId: string
+  fieldKey: string
+  onChange: (value: ReturnType<typeof buildAttachmentRef>) => void
+}
+
+/**
+ * Capture and review control for an image/audio field.
+ *
+ * The form value it produces holds **ids only** — the media itself lives in IndexedDB and, once
+ * uploaded, on the server. That separation is what keeps a log sheet's `formData` small enough
+ * to sync as JSON no matter how many photos are attached to it.
+ *
+ * Object URLs are created for previews and revoked on every change and on unmount. Leaking them
+ * is a real problem here rather than a theoretical one: a tablet stays on one screen for a whole
+ * shift, and each leaked URL pins its whole blob in memory.
+ */
+export function AttachmentFieldInput({
+  kind,
+  label,
+  value,
+  readOnly,
+  logSheetLocalId,
+  logSheetServerId,
+  assetId,
+  fieldKey,
+  onChange
+}: Props) {
+  const [items, setItems] = useState<LocalAttachment[]>([])
+  const [previews, setPreviews] = useState<Map<string, string>>(new Map())
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [recorder, setRecorder] = useState<AudioRecorderHandle | null>(null)
+  const [recordingMs, setRecordingMs] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const objectUrls = useRef<string[]>([])
+
+  const ids = attachmentIdsOf(value)
+
+  const releaseUrls = useCallback(() => {
+    objectUrls.current.forEach(url => URL.revokeObjectURL(url))
+    objectUrls.current = []
+  }, [])
+
+  const refresh = useCallback(async () => {
+    const rows = await getAttachmentsByIds(ids)
+    setItems(rows)
+
+    releaseUrls()
+    const next = new Map<string, string>()
+    for (const row of rows) {
+      // Only images get an inline preview; audio is played from its own element on demand.
+      if (row.kind !== 'IMAGE') continue
+      let blob = row.blob
+      if (!blob) {
+        // The bytes were reclaimed after sync — fetch them back rather than showing a gap.
+        try {
+          blob = await downloadAttachment(row.id)
+        } catch {
+          continue
+        }
+      }
+      const url = URL.createObjectURL(blob)
+      objectUrls.current.push(url)
+      next.set(row.id, url)
+    }
+    setPreviews(next)
+  }, [ids.join(','), releaseUrls]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  useEffect(() => releaseUrls, [releaseUrls])
+
+  // Elapsed-time readout while recording, so the operator can see the cap approaching.
+  useEffect(() => {
+    if (!recorder) return
+    const started = Date.now()
+    const id = setInterval(() => setRecordingMs(Date.now() - started), 250)
+    return () => clearInterval(id)
+  }, [recorder])
+
+  const persist = async (attachment: LocalAttachment) => {
+    await saveAttachment(attachment)
+    onChange(buildAttachmentRef([...ids, attachment.id]))
+  }
+
+  /**
+   * Refuses a capture when the device is nearly full.
+   *
+   * Checked *before* the camera or microphone is used rather than at write time: a failed
+   * IndexedDB write after the operator has already taken the photo loses the shot, whereas a
+   * refusal up front tells them to sync first while they can still act on it.
+   */
+  const blockedByStorage = async (): Promise<boolean> => {
+    const status = await getStorageStatus()
+    if (!status.low) return false
+    setError(t.attachments.lowStorage)
+    return true
+  }
+
+  const handlePhoto = async (file: File) => {
+    setBusy(true)
+    setError(null)
+    try {
+      if (await blockedByStorage()) return
+      const { blob, width, height } = await compressImage(file)
+      await persist({
+        id: uuidv4(),
+        logSheetLocalId,
+        logSheetServerId,
+        assetId,
+        fieldKey,
+        kind: 'IMAGE',
+        mimeType: blob.type,
+        sizeBytes: blob.size,
+        width,
+        height,
+        blob,
+        syncStatus: 'pending',
+        createdAt: Date.now()
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.attachments.captureFailed)
+    } finally {
+      setBusy(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleStartRecording = async () => {
+    setError(null)
+    try {
+      if (await blockedByStorage()) return
+      setRecorder(await startAudioRecording())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.attachments.captureFailed)
+    }
+  }
+
+  const handleStopRecording = async () => {
+    if (!recorder) return
+    setBusy(true)
+    try {
+      const { blob, mimeType, durationMs } = await recorder.stop()
+      await persist({
+        id: uuidv4(),
+        logSheetLocalId,
+        logSheetServerId,
+        assetId,
+        fieldKey,
+        kind: 'AUDIO',
+        mimeType,
+        sizeBytes: blob.size,
+        durationMs,
+        blob,
+        syncStatus: 'pending',
+        createdAt: Date.now()
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.attachments.captureFailed)
+    } finally {
+      setRecorder(null)
+      setRecordingMs(0)
+      setBusy(false)
+    }
+  }
+
+  const handleRemove = async (id: string) => {
+    // Local-only removal. The server copy (if any) is left alone deliberately: a submitted
+    // sheet's evidence should not vanish because someone tidied their device.
+    await deleteAttachment(id)
+    onChange(buildAttachmentRef(ids.filter(existing => existing !== id)))
+  }
+
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+        <Typography variant="body2" fontWeight={600}>
+          {label}
+        </Typography>
+        {items.length > 0 && (
+          <Typography variant="caption" color="text.secondary">
+            {t.attachments.pendingCount
+              .replace('{{done}}', String(items.filter(i => i.syncStatus === 'synced').length))
+              .replace('{{total}}', String(items.length))}
+          </Typography>
+        )}
+      </Stack>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+
+      {!readOnly && (
+        <Stack direction="row" spacing={1} sx={{ mb: 1 }} flexWrap="wrap" useFlexGap>
+          {kind === 'IMAGE' && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                // `capture` asks Android to open the camera directly rather than the gallery.
+                capture="environment"
+                hidden
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (file) void handlePhoto(file)
+                }}
+              />
+              <Button
+                variant="outlined"
+                startIcon={busy ? <CircularProgress size={16} /> : <PhotoCameraIcon />}
+                disabled={busy}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {t.attachments.takePhoto}
+              </Button>
+            </>
+          )}
+
+          {kind === 'AUDIO' && !recorder && (
+            <Button
+              variant="outlined"
+              startIcon={busy ? <CircularProgress size={16} /> : <MicIcon />}
+              disabled={busy}
+              onClick={() => void handleStartRecording()}
+            >
+              {t.attachments.recordAudio}
+            </Button>
+          )}
+          {kind === 'AUDIO' && recorder && (
+            <>
+              <Button
+                variant="contained"
+                color="error"
+                startIcon={<StopIcon />}
+                onClick={() => void handleStopRecording()}
+              >
+                {t.attachments.stopRecording} ({formatDuration(recordingMs)})
+              </Button>
+              <Button
+                variant="text"
+                onClick={() => {
+                  recorder.cancel()
+                  setRecorder(null)
+                  setRecordingMs(0)
+                }}
+              >
+                {t.form.cancel}
+              </Button>
+            </>
+          )}
+        </Stack>
+      )}
+
+      {items.length === 0 && (
+        <Typography variant="caption" color="text.secondary">
+          {t.attachments.none}
+        </Typography>
+      )}
+
+      <Stack spacing={1}>
+        {items.map(item => (
+          <Box
+            key={item.id}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              p: 1,
+              border: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 1
+            }}
+          >
+            {item.kind === 'IMAGE' && previews.get(item.id) && (
+              <Box
+                component="img"
+                src={previews.get(item.id)}
+                alt={label}
+                sx={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 1 }}
+              />
+            )}
+            {item.kind === 'AUDIO' && (
+              <Box sx={{ minWidth: 0, flexGrow: 1 }}>
+                <audio
+                  controls
+                  style={{ width: '100%', maxWidth: 260 }}
+                  src={item.blob ? URL.createObjectURL(item.blob) : undefined}
+                />
+              </Box>
+            )}
+
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Typography variant="caption" color="text.secondary" component="div">
+                {formatBytes(item.sizeBytes)}
+                {item.durationMs != null && ` · ${formatDuration(item.durationMs)}`}
+              </Typography>
+              <SyncChip status={item.syncStatus} error={item.syncError} />
+            </Box>
+
+            {!readOnly && (
+              <IconButton size="small" color="error" onClick={() => void handleRemove(item.id)}>
+                <DeleteIcon fontSize="small" />
+              </IconButton>
+            )}
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  )
+}
+
+function SyncChip({ status, error }: { status: string; error?: string }) {
+  if (status === 'synced') {
+    return <Chip size="small" color="success" variant="outlined" icon={<CloudDoneIcon />} label={t.attachments.synced} />
+  }
+  if (status === 'failed') {
+    return (
+      <Chip
+        size="small"
+        color="error"
+        variant="outlined"
+        icon={<ErrorOutlineIcon />}
+        label={error || t.attachments.uploadFailed}
+      />
+    )
+  }
+  return <Chip size="small" variant="outlined" icon={<CloudQueueIcon />} label={t.attachments.pending} />
+}

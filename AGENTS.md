@@ -104,9 +104,28 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 - Online + expired JWT → logout.
 - Login always lands on `/` (no deep-link restore across users on shared devices).
 
+### Attachments (photo / audio fields)
+
+- `formData` holds **ids only** — `{type:'attachment', ids:[…]}`. Never inline bytes; base64
+  in a sheet’s form data would ride along on every read, sync and backup.
+- Media **never** goes inside `POST /api/log-sheets/batch`. It has its own queue
+  (`sync/attachmentSync.ts`), uploaded one file at a time, so a dropped connection costs one
+  photo rather than the whole shift’s readings. The pass has its own try/catch: an attachment
+  failure must never fail a submission that already succeeded.
+- A row without `logSheetServerId` is **skipped, not failed** — the server keys an attachment
+  to a log sheet, so there is nowhere to put it until the sheet syncs and
+  `bindAttachmentsToServerSheet` stamps the id.
+- `ApiError` status 0 (transport dead) leaves the row **untouched** and stops the pass. Marking
+  it failed would make a tunnel look like a rejection.
+- Compress before storing (`utils/mediaCapture.ts`) and always `revokeObjectURL` — both are
+  load-bearing on a tablet that sits on one screen for a whole shift.
+- `required` from react-hook-form cannot be used on a media field: its value is an object and
+  every object is truthy. `buildValidationRules` counts ids instead.
+
 ### PWA / offline testing
 
 - Install from **`preview:mobile` (:4173)** or production nginx — **not** from `dev:mobile` (:5173).
+- Camera and microphone need **HTTPS** — they silently fail over plain HTTP.
 
 ---
 
@@ -130,16 +149,19 @@ src/
   services/
     api/index.ts            all REST types + endpoints
     api/client.ts           serverUrl vs window.origin → relative /api
-    storage/db.ts           Dexie v1 schema (single version) + openDatabase()
+    storage/db.ts           Dexie v2 schema + openDatabase()
     storage/index.ts        log sheets, settings, reference-data slices, …
     storage/inboxCache.ts   syncMeta inboxSnapshot
     storage/logSheetArchive.ts  logSheetUserArchives
     storage/nfcFaultReports.ts  NFC fault report create/query/sync-status
+    storage/attachments.ts  attachment CRUD, pending query, blob retention,
+                            reference parsing (attachmentIdsOf / buildAttachmentRef)
     sync/
       pullBootstrap.ts
       pullInbox.ts
       mergeLogSheetBundle.ts
       logSheetSync.ts       ensureLocalLogSheet, applyLogSheetBundle, batch payload
+      attachmentSync.ts     separate one-at-a-time media upload queue
       index.ts              SyncManager singleton
     auth/sessionContext.ts  shared tablet isolation
   hooks/
@@ -148,6 +170,8 @@ src/
     useSync.ts              SyncManager lifecycle
   types/auth.ts             roles, permissions, canEnterTagManually
   utils/logSheetStatus.ts   history/active chips, revert rules, expiry
+  utils/mediaCapture.ts     photo compression + audio recording (size limits live here)
+  utils/storageQuota.ts     persist() request + free-space guard before capture
   i18n/fa.ts                UI strings (import { t } from '@/i18n')
 ```
 
@@ -155,15 +179,16 @@ Path alias: `@/*` → `src/*`.
 
 ---
 
-## IndexedDB (Dexie v1)
+## IndexedDB (Dexie v2)
 
-`services/storage/db.ts` declares **one** `this.version(1)` block. The app has never shipped, so the historical versions were collapsed into it — there is no upgrade path because there is no production data. A dev device still holding the pre-collapse database (IndexedDB version 110) cannot open a `version(1)` declaration; `openDatabase()` catches that `VersionError` and recreates the database. When the schema next changes, **add** `this.version(2).stores({...})` with the full store list rather than editing the version(1) block.
+`services/storage/db.ts` collapsed every pre-shipping version into **one** `this.version(1)` block — there was no upgrade path to keep because there is no production data. A dev device still holding the pre-collapse database (IndexedDB version 110) cannot open a `version(1)` declaration; `openDatabase()` catches that `VersionError` and recreates the database. `this.version(2)` was then added for `attachments`, **repeating every version-1 store verbatim** — that is the pattern from here on: **add** `this.version(3).stores({...})` rather than editing an existing block. Adding a plain non-indexed property to a stored object needs no bump at all; only new stores and new indexes do.
 
 | Table | Role |
 |-------|------|
 | `logSheets` | Local work + entries + sync fields + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots (shared tablet history) |
 | `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields, `createdByUserId` for shared-tablet outbound scoping) |
+| `attachments` | Captured photos / voice notes as native `Blob`s, plus upload state. The row **outlives the blob**: bytes are reclaimed 7 days after upload, metadata stays |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
 | `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch` |
@@ -183,6 +208,8 @@ server. Constants live at the top of that file — check them there before quoti
 | Active draft | never | — |
 | Submitted + pending sync | never (waits for a server outcome) | — |
 | `logSheetUserArchives` | **never** — not touched by cleanup at all | — |
+| `attachments` (bytes) | **7d after upload** (`ATTACHMENT_RETENTION_MS`, in `storage/attachments.ts`); the row survives and the file re-fetches on demand | `uploadedAt` → `createdAt` |
+| `attachments` (rows) | dropped with their sheet — but **only the synced ones** (`deleteSyncedAttachmentsForLogSheet`); anything still queued keeps its own `logSheetServerId` and is still delivered | — |
 
 Two consequences worth internalizing before changing any of this: (1) flipping a row to
 `synced` silently shortens its life to 24h, which is why the `mark-synced` gotcha above
@@ -265,6 +292,8 @@ Helpers: `isAdminRole`, `isSupervisorRole`, `hasPermission`, `canEnterTagManuall
 | New field on `LogSheetEntryData` | Check whether it must survive `mapServerEntryToLocal` (see "Log sheet merge" gotcha above) — local-only fields need an explicit `preserveLocal ?` line or they vanish on the next bundle refresh |
 | Auth/session | `sessionContext.ts`, `useAuth.ts`, shared tablet tests |
 | Manual NFC policy | `auth.ts`, `LogSheetFillPage.tsx`, Settings + `fa.ts` |
+| New field data type | `DynamicClassForm.tsx` (editable **and** read-only branches), `buildValidationRules`, backend `FormDataValidationSupport` + the field-type dropdown in `field-definitions.html` |
+| Attachment behaviour | `storage/attachments.ts`, `sync/attachmentSync.ts`, `utils/mediaCapture.ts`, and the mirror-image rules in the backend’s `AttachmentService` |
 | Production deploy | `.env.mobile.example`, README nginx section |
 
 ---

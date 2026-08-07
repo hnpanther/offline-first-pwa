@@ -12,6 +12,8 @@ import {
 } from '@/services/storage/nfcFaultReports'
 import { submitLogSheetsBatch, submitNfcFaultReportsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
+import { syncPendingAttachments } from '@/services/sync/attachmentSync'
+import { bindAttachmentsToServerSheet, getPendingAttachments } from '@/services/storage/attachments'
 import { getAuthSession } from '@/services/auth'
 import {
   ensureSessionUserId,
@@ -122,6 +124,9 @@ class SyncManager {
 
     const totalPending = pendingLogSheets.length + pendingFaultReports.length
     if (totalPending === 0) {
+      // Nothing to submit — but attachments queue independently of sheets, and a sheet that
+      // synced on an earlier pass can still be waiting on its photos.
+      await this.syncAttachments()
       await this.refreshPendingCount()
       return
     }
@@ -168,6 +173,11 @@ class SyncManager {
             })
             const ownerId = await getSessionUserId()
             const serverId = toIdString(result.serverId ?? ls.serverId)
+            // The sheet now exists on the server, so its attachments finally have somewhere
+            // to go. Until this stamp lands the upload queue skips them by design.
+            if (serverId) {
+              await bindAttachmentsToServerSheet(ls.localId, serverId)
+            }
             if (ownerId && serverId) {
               await removeArchivedLogSheet(serverId, ownerId)
             }
@@ -183,6 +193,7 @@ class SyncManager {
               serverStatus: 'SUBMITTED',
               syncError: undefined
             })
+            await bindAttachmentsToServerSheet(ls.localId, toIdString(result.serverId))
             const ownerId = await getSessionUserId()
             if (ownerId) {
               await removeArchivedLogSheet(toIdString(result.serverId), ownerId)
@@ -254,6 +265,7 @@ class SyncManager {
       const remaining = await this.refreshPendingCount()
       await cleanupLocalLogSheets()
       this.emit({ type: 'complete', syncedCount, failedCount, pendingCount: remaining })
+      await this.syncAttachments()
     } catch (err) {
       // Transient network error — keep items pending, avoid UI flash
       this.emit({
@@ -266,6 +278,21 @@ class SyncManager {
     } finally {
       this.isSyncing = false
       this.abortController = null
+    }
+  }
+
+  /**
+   * Drains the attachment queue.
+   *
+   * Isolated in its own try/catch: a photo that will not upload must never fail the log-sheet
+   * submission that already succeeded. The readings are the record of work; the media is
+   * supporting context, and it retries on the next pass regardless.
+   */
+  private async syncAttachments(): Promise<void> {
+    try {
+      await syncPendingAttachments(this.abortController?.signal)
+    } catch (err) {
+      console.warn('Attachment sync pass failed', err)
     }
   }
 
@@ -290,11 +317,15 @@ class SyncManager {
     const canSyncFaultReports = session
       ? hasPermission(session, 'POST:/api/nfc-fault-reports/batch')
       : false
-    const [logSheets, faultReports] = await Promise.all([
+    const [logSheets, faultReports, attachments] = await Promise.all([
       this.getPendingLogSheets(),
       canSyncFaultReports ? this.getPendingFaultReports() : Promise.resolve([]),
+      // Counted too: the badge means "work not yet on the server", and a submitted sheet
+      // whose photos are still queued is exactly that. Only uploadable rows count — an
+      // attachment whose sheet has not synced yet is represented by that sheet instead.
+      getPendingAttachments(),
     ])
-    return logSheets.length + faultReports.length
+    return logSheets.length + faultReports.length + attachments.length
   }
 
   private async getPendingLogSheets(): Promise<LogSheet[]> {

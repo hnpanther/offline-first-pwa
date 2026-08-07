@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport } from '@/types'
+import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment } from '@/types'
 import type { FieldDefinition, OutboxEntry, SyncMeta } from '@/types/sync'
 
 const DB_NAME = 'offline-pwa-db'
@@ -20,6 +20,7 @@ class AppDatabase extends Dexie {
   syncMeta!: Table<SyncMeta>
   logSheetUserArchives!: Table<LogSheetUserArchive>
   nfcFaultReports!: Table<NfcFaultReport>
+  attachments!: Table<LocalAttachment>
 
   constructor() {
     super(DB_NAME)
@@ -58,6 +59,36 @@ class AppDatabase extends Dexie {
       operationalUnits: 'id, code, parentId',
       logSheetUserArchives: 'id, serverId, userId',
       nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt'
+    })
+
+    /**
+     * v2 — attachments (photos / voice notes).
+     *
+     * Added as a new version rather than by editing v1, per the rule above: v1 has shipped to
+     * dev devices, and rewriting it would make their on-disk version un-openable. This is a
+     * pure additive store with no `.upgrade()` callback, which is safe precisely because no
+     * existing data is reshaped — every v1 store is repeated verbatim, as Dexie requires.
+     *
+     * `syncStatus` is indexed because the upload queue selects on it every tick; `blob` is not
+     * indexed (IndexedDB cannot index a Blob, and nothing queries by content).
+     */
+    this.version(2).stores({
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      outbox: 'id, entityType, synced, createdAt',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
+      attachments: 'id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt'
     })
   }
 }

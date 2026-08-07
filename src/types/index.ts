@@ -204,6 +204,43 @@ export interface LogSheetEntryData {
   filledVia?: 'nfc' | 'manual'
 }
 
+/** What an image/audio field stores in formData — ids only, never bytes. */
+export interface AttachmentRef {
+  type: 'attachment'
+  ids: string[]
+}
+
+export type AttachmentKind = 'IMAGE' | 'AUDIO' | 'VIDEO'
+
+/**
+ * An attachment held on this device.
+ *
+ * The `blob` is the compressed media itself. It is dropped once the file is safely on the
+ * server (`syncStatus === 'synced'`) and the retention window passes — the row stays so the
+ * UI can still describe the attachment and fetch it on demand when online.
+ */
+export interface LocalAttachment {
+  /** UUID minted here. It is also the server's primary key, which is what makes upload idempotent. */
+  id: string
+  logSheetLocalId: string
+  /** Server id of the sheet — null until the sheet itself has one, which gates upload. */
+  logSheetServerId?: string
+  assetId: string
+  fieldKey: string
+  kind: AttachmentKind
+  mimeType: string
+  sizeBytes: number
+  width?: number
+  height?: number
+  durationMs?: number
+  /** Dropped after upload + retention; absent means "on the server only". */
+  blob?: Blob
+  syncStatus: SyncStatus
+  syncError?: string
+  createdAt: number
+  uploadedAt?: number
+}
+
 export interface LogSheet {
   id: string
   localId: string

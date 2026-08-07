@@ -19,8 +19,11 @@
  */
 
 import { Box, Typography, Alert } from '@mui/material'
+import { Controller } from 'react-hook-form'
 import type { Control, FieldErrors, RegisterOptions } from 'react-hook-form'
 import { DynamicFormField } from './DynamicFormField'
+import { AttachmentFieldInput } from './AttachmentFieldInput'
+import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
 import type { FieldDefinition } from '@/types/sync'
 import type { FormField } from '@/types'
 import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
@@ -56,6 +59,13 @@ function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: strin
     return { value: '—' }
   }
 
+  // A media value is a reference object, not something to stringify. This is the fallback for
+  // read-only rendering without attachment context; with context the field renders previews.
+  if (attachmentKindForDataType(def.dataType)) {
+    const count = attachmentIdsOf(val).length
+    return { value: count === 0 ? '—' : `${count} پیوست` }
+  }
+
   const options = normalizeFieldOptions(def.validation?.options)
 
   if (def.dataType === 'checkbox') {
@@ -86,6 +96,15 @@ function readOnlyValueColor(severity: FieldValidationSeverity): string | undefin
  */
 export function buildValidationRules(def: FieldDefinition): RegisterOptions {
   const v = def.validation ?? {}
+
+  // `required` cannot be used for media: the value is always an object once the control has
+  // rendered, and an object is truthy even when it holds no ids. Count the ids instead.
+  if (attachmentKindForDataType(def.dataType)) {
+    return def.required
+      ? { validate: value => attachmentIdsOf(value).length > 0 || 'این فیلد الزامی است' }
+      : {}
+  }
+
   return {
     required: def.required ? 'این فیلد الزامی است' : false,
 
@@ -140,6 +159,15 @@ interface DynamicClassFormProps {
   readOnly?: boolean
   /** Values map for read-only display. Keys are FieldDefinition.key. */
   readOnlyValues?: Record<string, unknown>
+  /**
+   * Context an attachment field needs to bind captured media to the right place.
+   * Absent for forms outside a log sheet — image/audio fields then render as read-only.
+   */
+  attachmentContext?: {
+    logSheetLocalId: string
+    logSheetServerId?: string
+    assetId: string
+  }
 }
 
 export function DynamicClassForm({
@@ -149,6 +177,7 @@ export function DynamicClassForm({
   fieldPrefix,
   readOnly = false,
   readOnlyValues,
+  attachmentContext,
 }: DynamicClassFormProps) {
   const sorted = [...fields].sort((a, b) => a.order - b.order)
 
@@ -166,6 +195,26 @@ export function DynamicClassForm({
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {sorted.map(def => {
           const rawValue = readOnlyValues[def.key]
+
+          const readOnlyKind = attachmentKindForDataType(def.dataType)
+          if (readOnlyKind && attachmentContext) {
+            return (
+              <Box key={def.key} sx={{ py: 1.25, px: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+                <AttachmentFieldInput
+                  kind={readOnlyKind}
+                  label={def.label}
+                  value={rawValue}
+                  readOnly
+                  logSheetLocalId={attachmentContext.logSheetLocalId}
+                  logSheetServerId={attachmentContext.logSheetServerId}
+                  assetId={attachmentContext.assetId}
+                  fieldKey={def.key}
+                  onChange={() => {}}
+                />
+              </Box>
+            )
+          }
+
           const { value, unit } = formatReadOnlyValue(def, rawValue)
           const rangeSeverity =
             def.dataType === 'number' && def.validation
@@ -238,6 +287,32 @@ export function DynamicClassForm({
         const formField = toFormField(def, fieldName)
         const rules = buildValidationRules(def)
         const error = getError(errors, fieldName)
+
+        // Media fields do not go through DynamicFormField: their value is a reference object
+        // rather than a scalar, and capture needs the surrounding sheet/asset context.
+        const attachmentKind = attachmentKindForDataType(def.dataType)
+        if (attachmentKind && attachmentContext) {
+          return (
+            <Controller
+              key={fieldName}
+              name={fieldName}
+              control={control}
+              rules={rules}
+              render={({ field }) => (
+                <AttachmentFieldInput
+                  kind={attachmentKind}
+                  label={def.label + (def.required ? ' *' : '')}
+                  value={field.value}
+                  logSheetLocalId={attachmentContext.logSheetLocalId}
+                  logSheetServerId={attachmentContext.logSheetServerId}
+                  assetId={attachmentContext.assetId}
+                  fieldKey={def.key}
+                  onChange={field.onChange}
+                />
+              )}
+            />
+          )
+        }
 
         return (
           <DynamicFormField

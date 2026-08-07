@@ -183,6 +183,18 @@ const fa = {
     quickCollect: 'جمع‌آوری داده',
     drafts: 'پیش‌نویس'
   },
+  attachments: {
+    takePhoto: 'گرفتن عکس',
+    recordAudio: 'ضبط صدا',
+    stopRecording: 'پایان ضبط',
+    none: 'هنوز موردی ثبت نشده است.',
+    pending: 'در انتظار ارسال',
+    synced: 'ارسال شد',
+    uploadFailed: 'ارسال ناموفق',
+    captureFailed: 'خطا در ثبت فایل.',
+    pendingCount: '{{done}} از {{total}} پیوست ارسال شد',
+    lowStorage: 'حافظه دستگاه پر است. لطفاً پس از اتصال به سرور و ارسال پیوست‌های در انتظار، دوباره تلاش کنید.'
+  },
   nfcInspect: {
     title: 'بازرسی تگ NFC',
     subtitle: 'محتوای خام تگ را می‌خواند و در صورت ثبت‌شدن، اطلاعات دارایی را از سرور می‌گیرد',
