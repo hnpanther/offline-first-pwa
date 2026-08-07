@@ -46,21 +46,55 @@ export async function deleteAttachment(id: string): Promise<void> {
 /**
  * Attachments still waiting to reach the server.
  *
- * A row without a `logSheetServerId` is skipped deliberately: the server keys an attachment to
- * a log sheet, so uploading before the sheet exists there is impossible. Those rows are picked
- * up on a later pass, once the sheet has synced and been given its id.
+ * Three kinds of row are skipped, for three different reasons:
+ * - **no `logSheetServerId`** — the server keys an attachment to a log sheet, so uploading
+ *   before the sheet exists there is impossible. Picked up once the sheet syncs.
+ * - **no `blob`** — the bytes were reclaimed after a successful upload; nothing left to send.
+ * - **`permanentFailure`** — the server examined this file and refused it. Identical bytes get
+ *   an identical refusal, so retrying is pure waste.
  */
 export async function getPendingAttachments(): Promise<LocalAttachment[]> {
   const rows = await db.attachments.where('syncStatus').anyOf('pending', 'failed').toArray()
-  return rows.filter(r => r.blob != null && !!r.logSheetServerId)
+  return rows.filter(r => r.blob != null && !!r.logSheetServerId && !r.permanentFailure)
 }
 
 export async function markAttachmentSynced(id: string, uploadedAt = Date.now()): Promise<void> {
-  await db.attachments.update(id, { syncStatus: 'synced', syncError: undefined, uploadedAt })
+  await db.attachments.update(id, {
+    syncStatus: 'synced',
+    syncError: undefined,
+    permanentFailure: undefined,
+    uploadedAt
+  })
 }
 
-export async function markAttachmentFailed(id: string, syncError: string): Promise<void> {
-  await db.attachments.update(id, { syncStatus: 'failed', syncError })
+/**
+ * @param permanent when true the row is parked and the queue stops retrying it. Reserve this
+ *        for refusals the server will repeat — never for anything that smells like transport.
+ */
+export async function markAttachmentFailed(
+  id: string,
+  syncError: string,
+  permanent = false
+): Promise<void> {
+  await db.attachments.update(id, {
+    syncStatus: 'failed',
+    syncError,
+    permanentFailure: permanent || undefined
+  })
+}
+
+/**
+ * Clears the parked flag so the queue picks the file up again.
+ *
+ * The escape hatch for a rejection that was actually about server state rather than the file —
+ * a sheet that had not been generated yet, a field added after the tablet last synced.
+ */
+export async function retryFailedAttachment(id: string): Promise<void> {
+  await db.attachments.update(id, {
+    syncStatus: 'pending',
+    syncError: undefined,
+    permanentFailure: undefined
+  })
 }
 
 /**
@@ -92,11 +126,16 @@ export async function deleteAttachmentsForLogSheet(logSheetLocalId: string): Pro
 }
 
 /**
- * Removes only the attachments of a sheet that already reached the server.
+ * Removes the attachments of a sheet that can no longer do anything useful.
  *
- * Used when a local sheet is retired by the cleanup pass. Rows still waiting to upload are
- * deliberately left behind — they hold their own `logSheetServerId`, so the queue can still
- * deliver them, and dropping them would silently discard the operator's evidence.
+ * Used when a local sheet is retired by the cleanup pass. Two kinds go:
+ * - **synced** — already on the server, so the local copy is redundant.
+ * - **parked** (`permanentFailure`) — the server refused it and it is no longer queued; once
+ *   the sheet is gone there is no screen left to view it on and no button left to retry it
+ *   from, so keeping the bytes would be an unbounded leak with no path back.
+ *
+ * Rows still genuinely waiting are left behind: they hold their own `logSheetServerId`, so the
+ * queue can still deliver them, and dropping them would discard the operator's evidence.
  *
  * @returns how many rows were removed
  */
@@ -106,7 +145,7 @@ export async function deleteSyncedAttachmentsForLogSheet(
   return db.attachments
     .where('logSheetLocalId')
     .equals(logSheetLocalId)
-    .filter(row => row.syncStatus === 'synced')
+    .filter(row => row.syncStatus === 'synced' || row.permanentFailure === true)
     .delete()
 }
 

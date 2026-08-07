@@ -209,6 +209,20 @@ describe('deleting a sheet’s attachments', () => {
     expect(left.map(r => r.id).sort()).toEqual(['failed', 'waiting'])
   })
 
+  it('also drops a parked file, which has nowhere left to be seen or retried from', async () => {
+    // Parked = the server refused it and the queue no longer picks it up. Once the sheet row
+    // is gone there is no screen to view it on and no retry button to reach, so keeping the
+    // bytes would leak storage with no path back.
+    await saveAttachment(
+      attachment({ id: 'parked', syncStatus: 'failed', permanentFailure: true })
+    )
+    await saveAttachment(attachment({ id: 'waiting' }))
+
+    expect(await deleteSyncedAttachmentsForLogSheet('sheet-local-1')).toBe(1)
+    expect(await getAttachment('parked')).toBeUndefined()
+    expect(await getAttachment('waiting')).toBeDefined()
+  })
+
   it('leaves another sheet’s uploaded attachments alone', async () => {
     await saveAttachment(attachment({ id: 'mine', syncStatus: 'synced' }))
     await saveAttachment(

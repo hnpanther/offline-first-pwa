@@ -936,10 +936,18 @@ submitted sheet whose photos are still queued is exactly that.
 **Retries are safe.** Each file carries a UUID minted on the device, so a retry the server has
 already processed returns the existing record instead of creating a second copy.
 
-Failures are classified rather than lumped together: an unreachable server leaves the row
-completely untouched (a tunnel is not a rejection), a `4xx` other than 401 is treated as
-permanent because identical bytes will get an identical refusal, and everything else stays
-retryable with the reason recorded.
+Failures are classified rather than lumped together:
+
+| Failure | What happens |
+|---|---|
+| Server unreachable (no HTTP response) | Row left **completely untouched** and the pass stops — a tunnel is not a rejection |
+| `4xx` other than 401/408 | **Parked.** The server examined the file and refused it, so identical bytes get an identical refusal. It stops being retried, keeps its reason on screen, and offers a manual «تلاش مجدد» button |
+| `401` | Retryable — an expired session is not a bad payload |
+| `5xx` or anything unclassified | Retryable, with the reason recorded |
+
+Parking matters: without it a permanently refused file would be re-sent on every sync pass for
+the rest of the tablet's life. The bytes are kept either way, so nothing is lost — the operator
+can look at the photo, fix whatever the server objected to, and re-queue it.
 
 ### Device storage
 

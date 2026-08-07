@@ -117,6 +117,10 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   `bindAttachmentsToServerSheet` stamps the id.
 - `ApiError` status 0 (transport dead) leaves the row **untouched** and stops the pass. Marking
   it failed would make a tunnel look like a rejection.
+- A **permanent** refusal (4xx other than 401/408) sets `permanentFailure` and the row leaves
+  the queue for good — `getPendingAttachments` filters it out. Classifying a failure without
+  parking it is pointless: the file would simply be re-sent on every pass forever. The bytes
+  are kept and `retryFailedAttachment` is the manual way back in.
 - Compress before storing (`utils/mediaCapture.ts`) and always `revokeObjectURL` — both are
   load-bearing on a tablet that sits on one screen for a whole shift.
 - `required` from react-hook-form cannot be used on a media field: its value is an object and

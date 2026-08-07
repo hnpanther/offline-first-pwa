@@ -2,7 +2,11 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/services/api/client'
 import { db } from '@/services/storage/db'
-import { getAttachment, saveAttachment } from '@/services/storage/attachments'
+import {
+  getAttachment,
+  retryFailedAttachment,
+  saveAttachment
+} from '@/services/storage/attachments'
 import { syncPendingAttachments } from '@/services/sync/attachmentSync'
 import type { LocalAttachment } from '@/types'
 
@@ -152,6 +156,64 @@ describe('syncPendingAttachments', () => {
 
     const result = await syncPendingAttachments()
     expect(result.remaining).toBe(1)
+  })
+
+  it('stops retrying a file the server permanently refused', async () => {
+    // The bug this pins down: classifying a failure as permanent is pointless unless the row
+    // is actually taken out of the queue. Before this, a 400 was re-sent on every pass forever.
+    await saveAttachment(attachment())
+    uploadAttachment.mockRejectedValue(new ApiError(400, 'این فیلد پیوست نمی‌پذیرد'))
+
+    const first = await syncPendingAttachments()
+    expect(first.failed).toBe(1)
+    expect(first.remaining).toBe(0) // parked — no longer counted as waiting
+
+    const row = await getAttachment('att-1')
+    expect(row?.permanentFailure).toBe(true)
+    // The bytes are kept: the operator can still see the photo and decide what to do.
+    expect(row?.blob).toBeInstanceOf(Blob)
+
+    uploadAttachment.mockClear()
+    const second = await syncPendingAttachments()
+    expect(uploadAttachment).not.toHaveBeenCalled()
+    expect(second).toEqual({ uploaded: 0, failed: 0, remaining: 0 })
+  })
+
+  it('keeps re-attempting a file that failed for a reason that might pass later', async () => {
+    await saveAttachment(attachment())
+    uploadAttachment.mockRejectedValue(new ApiError(503, 'سرویس در دسترس نیست'))
+
+    await syncPendingAttachments()
+    expect((await getAttachment('att-1'))?.permanentFailure).toBeUndefined()
+
+    // Server recovers — the very next pass sends it, with no manual intervention.
+    uploadAttachment.mockResolvedValue({ id: 'att-1' })
+    expect(await syncPendingAttachments()).toEqual({ uploaded: 1, failed: 0, remaining: 0 })
+  })
+
+  it('re-queues a parked file once someone asks it to retry', async () => {
+    await saveAttachment(attachment())
+    uploadAttachment.mockRejectedValue(new ApiError(400, 'فیلد ناشناخته'))
+    await syncPendingAttachments()
+
+    // The escape hatch: the refusal was about server state (a field added after this tablet
+    // last synced), not about the file, so re-queueing must actually work.
+    await retryFailedAttachment('att-1')
+    uploadAttachment.mockResolvedValue({ id: 'att-1' })
+
+    expect(await syncPendingAttachments()).toEqual({ uploaded: 1, failed: 0, remaining: 0 })
+    expect((await getAttachment('att-1'))?.syncStatus).toBe('synced')
+  })
+
+  it('clears the parked flag when an upload eventually succeeds', async () => {
+    await saveAttachment(attachment({ permanentFailure: true, syncStatus: 'failed' }))
+    await retryFailedAttachment('att-1')
+    await syncPendingAttachments()
+
+    const row = await getAttachment('att-1')
+    expect(row?.syncStatus).toBe('synced')
+    expect(row?.permanentFailure).toBeUndefined()
+    expect(row?.syncError).toBeUndefined()
   })
 
   it('carries on after one file is rejected', async () => {

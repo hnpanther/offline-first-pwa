@@ -13,6 +13,7 @@ import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import MicIcon from '@mui/icons-material/Mic'
 import StopIcon from '@mui/icons-material/Stop'
 import DeleteIcon from '@mui/icons-material/Delete'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import CloudDoneIcon from '@mui/icons-material/CloudDone'
 import CloudQueueIcon from '@mui/icons-material/CloudQueue'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
@@ -22,6 +23,7 @@ import {
   buildAttachmentRef,
   deleteAttachment,
   getAttachmentsByIds,
+  retryFailedAttachment,
   saveAttachment
 } from '@/services/storage/attachments'
 import {
@@ -211,6 +213,11 @@ export function AttachmentFieldInput({
     }
   }
 
+  const handleRetry = async (id: string) => {
+    await retryFailedAttachment(id)
+    await refresh()
+  }
+
   const handleRemove = async (id: string) => {
     // Local-only removal. The server copy (if any) is left alone deliberately: a submitted
     // sheet's evidence should not vanish because someone tidied their device.
@@ -344,8 +351,24 @@ export function AttachmentFieldInput({
                 {formatBytes(item.sizeBytes)}
                 {item.durationMs != null && ` · ${formatDuration(item.durationMs)}`}
               </Typography>
-              <SyncChip status={item.syncStatus} error={item.syncError} />
+              <SyncChip
+                status={item.syncStatus}
+                error={item.syncError}
+                parked={item.permanentFailure}
+              />
             </Box>
+
+            {/* A parked file is never picked up again on its own, so the operator needs a way
+                to re-queue it once whatever the server objected to has been fixed. */}
+            {!readOnly && item.permanentFailure && (
+              <IconButton
+                size="small"
+                onClick={() => void handleRetry(item.id)}
+                aria-label={t.attachments.retry}
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            )}
 
             {!readOnly && (
               <IconButton size="small" color="error" onClick={() => void handleRemove(item.id)}>
@@ -359,7 +382,15 @@ export function AttachmentFieldInput({
   )
 }
 
-function SyncChip({ status, error }: { status: string; error?: string }) {
+function SyncChip({
+  status,
+  error,
+  parked
+}: {
+  status: string
+  error?: string
+  parked?: boolean
+}) {
   if (status === 'synced') {
     return <Chip size="small" color="success" variant="outlined" icon={<CloudDoneIcon />} label={t.attachments.synced} />
   }
@@ -368,9 +399,15 @@ function SyncChip({ status, error }: { status: string; error?: string }) {
       <Chip
         size="small"
         color="error"
-        variant="outlined"
+        // A parked row reads differently from a retrying one: filled rather than outlined, and
+        // labelled as a refusal, because nothing will change until someone acts.
+        variant={parked ? 'filled' : 'outlined'}
         icon={<ErrorOutlineIcon />}
-        label={error || t.attachments.uploadFailed}
+        label={
+          parked
+            ? `${t.attachments.rejected}${error ? ` — ${error}` : ''}`
+            : error || t.attachments.uploadFailed
+        }
       />
     )
   }

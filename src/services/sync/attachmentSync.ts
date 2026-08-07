@@ -34,7 +34,12 @@ export interface AttachmentSyncResult {
  * 4xx here means the server examined the request and refused it: the field is not an
  * attachment field, the type is not accepted, the sheet is gone. Re-sending identical bytes
  * gets an identical refusal. 401 is excluded because that is a session problem, not a payload
- * problem — the unauthorized handler deals with it and the file stays retryable.
+ * problem — the unauthorized handler deals with it and the file stays retryable. 408 likewise
+ * describes the connection, not the file.
+ *
+ * Parking is what this distinction is *for*: a parked row keeps its reason on screen and stays
+ * deletable, but `getPendingAttachments` no longer returns it, so the queue does not re-send a
+ * refused file on every pass for the rest of the tablet's life.
  */
 function isPermanentFailure(err: unknown): boolean {
   if (!(err instanceof ApiError)) return false
@@ -92,12 +97,9 @@ async function uploadOne(
       return 'aborted'
     }
     const message = err instanceof Error ? err.message : 'خطا در ارسال پیوست'
-    if (isPermanentFailure(err)) {
-      await markAttachmentFailed(attachment.id, message)
-      return 'failed'
-    }
-    // 5xx or anything unclassified: keep it retryable, but record why it did not go.
-    await markAttachmentFailed(attachment.id, message)
+    // Permanent → parked (never retried). 5xx or anything unclassified → still retryable, but
+    // the reason is recorded so the operator is not left guessing.
+    await markAttachmentFailed(attachment.id, message, isPermanentFailure(err))
     return 'failed'
   }
 }

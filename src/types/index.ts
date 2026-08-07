@@ -237,6 +237,15 @@ export interface LocalAttachment {
   blob?: Blob
   syncStatus: SyncStatus
   syncError?: string
+  /**
+   * True when the server refused this file in a way retrying cannot fix (a 4xx other than
+   * 401/408). Such a row is parked: it stays visible with its reason, but the upload queue
+   * stops picking it up. Without this flag a permanently rejected file would be re-sent on
+   * every sync pass forever, burning a field tablet's battery and data to no purpose.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  permanentFailure?: boolean
   createdAt: number
   uploadedAt?: number
 }
