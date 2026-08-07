@@ -885,8 +885,13 @@ capture, review and delete need no connection at all.
 ### Limits come from the server
 
 How many files a field accepts and how long a clip may run are set by an administrator in the
-**web panel**, not here. The app receives them on every `/api/bootstrap` call, so a change made
-in the panel takes effect on this device at its next reconnect, with nobody touching the tablet.
+**web panel**, not here. They arrive with `/api/bootstrap`.
+
+**When a change reaches a device:** immediately at the next **sign-in**, and otherwise within an
+hour — bootstrap is throttled to one pull per hour so a running app does not re-fetch constantly.
+If a change needs to apply right away on a tablet already in use, have the operator sign out and
+back in. The lag is harmless in the meantime because **the server enforces the limits regardless**;
+a stale device merely shows the wrong number, it cannot store more than the server allows.
 
 | | Default |
 |---|---|

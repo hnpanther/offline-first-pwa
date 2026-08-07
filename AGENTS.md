@@ -135,6 +135,11 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   read-only to admins and explicitly re-sends the stored value on submit, so a stale form cannot
   overwrite a ceiling a bootstrap just refreshed. A missing/failed bootstrap keeps the last
   known values — offline capture has to work against *some* rules.
+- **Propagation is not instant, by design.** `useMasterDataSync` throttles bootstrap to once an
+  hour, so an admin's change can lag that long on a running app. A **fresh sign-in forces a pull**
+  (`pullBootstrapIfStale(0)`, keyed on the session) precisely so there is a reliable way to apply
+  a change now. Do not lower the hourly throttle to "fix" this — the server enforces the limits
+  anyway, so the lag costs a wrong number on screen, not wrong data.
 - **Video size is set at capture time and nowhere else** (`startVideoRecording`): 480p, 700 kbps,
   plus a hard byte ceiling checked on every `ondataavailable`. `MediaRecorder` needs a timeslice
   (`start(1000)`) for that check to run at all — without one the event fires once at the end,

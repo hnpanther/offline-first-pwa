@@ -8,6 +8,9 @@ dev-dist/
 # Local TLS (mkcert) — never commit; created by npm run setup:mkcert
 certs/
 
+# AI
+.claude/
+
 # Environment — machine-specific URLs/secrets
 .env
 .env.local

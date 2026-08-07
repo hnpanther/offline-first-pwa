@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db, DEFAULT_SETTINGS } from '@/services/storage/db'
 import { getSettings, saveSettings } from '@/services/storage'
-import { pullBootstrap } from '@/services/sync/pullBootstrap'
+import { pullBootstrap, pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
 
 const fetchBootstrap = vi.fn()
 vi.mock('@/services/api', () => ({
@@ -100,6 +100,36 @@ describe('attachment limits over bootstrap', () => {
     expect(result.success).toBe(false)
     // Offline capture has to keep working against the last known rules.
     expect((await getSettings()).attachmentLimits).toEqual(LIMITS)
+  })
+
+  it('respects the staleness throttle for an ongoing session', async () => {
+    // Bootstrap is throttled to once an hour so a running app does not re-pull constantly.
+    // The consequence — an admin's change can lag by up to that hour — is real and documented;
+    // the sign-in path below is what makes it immediate when it matters.
+    await saveSettings({ ...DEFAULT_SETTINGS, attachmentLimits: LIMITS })
+    await db.syncMeta.put({ key: 'lastBootstrapAt', value: Date.now() })
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({ attachmentLimits: { ...LIMITS, maxImagesPerField: 9 } })
+    )
+
+    await pullBootstrapIfStale(60 * 60 * 1000)
+
+    expect(fetchBootstrap).not.toHaveBeenCalled()
+    expect((await getSettings()).attachmentLimits.maxImagesPerField).toBe(5)
+  })
+
+  it('ignores the throttle when asked for a forced pull', async () => {
+    // What a fresh sign-in does: a device starting a new session must start from the current
+    // rules, and "log out and back in" is the one instruction support can reliably give.
+    await saveSettings({ ...DEFAULT_SETTINGS, attachmentLimits: LIMITS })
+    await db.syncMeta.put({ key: 'lastBootstrapAt', value: Date.now() })
+    const tightened = { ...LIMITS, maxImagesPerField: 1 }
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: tightened }))
+
+    await pullBootstrapIfStale(0)
+
+    expect(fetchBootstrap).toHaveBeenCalledOnce()
+    expect((await getSettings()).attachmentLimits).toEqual(tightened)
   })
 
   it('applies a tightened ceiling, not just a loosened one', async () => {
