@@ -365,3 +365,50 @@ fallbacks that are now taken from the authenticated session instead — the faul
 report's `reportedByName` and `logSheetSync`'s `operatorName` fallback. On a shared
 tablet the old behaviour attributed every operator's work to whatever name an admin
 typed once.
+
+---
+
+## Known issue (not fixed yet): failed submissions have no correction path
+
+**The earlier issue asked for a retry button. That is the wrong fix — do not build it.**
+
+A retry would re-send the identical payload and get the identical rejection, while telling the
+operator "trying again…". That is worse than the current dead end: it manufactures false hope,
+hides the real problem, and risks a false success if the stale `clientActionId` is reused (the
+server's replay guard would report the submission as already processed).
+
+Two findings that reframe the problem:
+
+1. **Transient failures never reach `syncStatus = 'failed'`.** Network drops, server down and
+   5xx all throw before any per-sheet outcome is read, leaving sheets `pending`; the sync timer
+   already retries them. Automatic retry exists.
+
+2. **`failed` only means the server answered and said no.** All four `ERROR` branches in
+   `LogSheetService.submitBatch` are deterministic and payload-based:
+   - `serverId == null` (client bug)
+   - `Log sheet not found on server` (deleted server-side)
+   - `Asset(s) not part of this log sheet` (stale bundle / data mismatch)
+   - **field validation failed against the sheet's frozen `field_definitions_snapshot`**
+
+Only the fourth is operator-fixable — and not by retrying, but by **editing the values**. It is
+also reachable in normal use, because `canSubmitLogSheet` on the client checks lifecycle state
+only (cancelled / expired / already submitted) and never validates field values before final
+submit. So an operator can submit a sheet the server will reject, then stand at the equipment
+reading the exact Persian validation error with no available action.
+
+**Proposed fix**
+
+- *Prevention (primary):* gate final submit on client-side field validation. The pieces already
+  exist — `sheetFieldDefinitions` and `evaluateEntryCompletion` — they are just not wired into
+  `canSubmitLogSheet`. This removes the case almost entirely and surfaces the problem before the
+  work gets stuck.
+- *Cure (safety net):* allow "revert to draft and correct" for a sheet that failed validation,
+  i.e. relax the `offline-only` and `syncStatus === 'pending'` conditions in
+  `canRevertSubmittedLogSheetToDraft` for that case only. Resubmitting after an edit is
+  legitimate because the data actually changed. **Must mint a fresh `clientActionId`** — see
+  `resolveReopenedSheetUpdates` for why.
+- The other three outcomes stay supervisor/admin territory (reopen or extend). An operator
+  cannot fix a deleted sheet or an asset mismatch and should not be given a control implying
+  they can.
+
+Keep `SUPERSEDED` / `EXPIRED` / `CANCELLED` / `REVOKED` / `REASSIGNED` non-recoverable as today.
