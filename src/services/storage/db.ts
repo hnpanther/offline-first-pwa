@@ -119,7 +119,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',
   syncIntervalMs: 30_000,
   allowManualEntry: false,
-  nfcStrictSerialMatch: false,
+  // Strict by default: a scan must match BOTH the tag's Record 1 payload and the chip's
+  // hardware serial. Record 1 alone can be cloned onto any blank tag, so the serial is what
+  // makes "I scanned the right asset" mean something. An admin can relax it per device.
+  //
+  // Devices that already stored a choice keep it — getSettings spreads the saved row over
+  // these defaults — so this changes new installations only, never a tablet mid-shift.
+  nfcStrictSerialMatch: true,
   // Mirrors the server's own defaults. Used until the first bootstrap lands, and after that
   // only as the fallback for a server too old to send them.
   attachmentLimits: {

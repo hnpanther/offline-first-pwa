@@ -447,7 +447,7 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 
 > There is no operator-name or location field any more. The signed-in user's own name is used wherever a name is needed (log-sheet operator label, NFC fault-report reporter) — on a shared tablet a device-wide typed name attributed everyone's work to whoever the admin entered once.
 | **Allow manual tag entry** | When on, all roles may type NFC IDs on the fill page. When off, only supervisor / senior operator / users with web fill permission. |
-| **Chip-serial scan check** (`nfcStrictSerialMatch`, admin-only switch) | Off by default — an NFC scan on the fill page matches on the Record 1 payload alone. On — the chip's hardware serial must **also** equal the asset's stored `nfcSerial`, and an asset with no serial recorded is rejected. Applies to real scans only; manual tag entry and the NFC-fault fallback are unaffected. |
+| **Chip-serial scan check** (`nfcStrictSerialMatch`, admin-only switch) | **On by default** — a scan must match *both* the tag's Record 1 payload and the chip's hardware serial (the asset's stored `nfcSerial`), and an asset with no serial recorded is rejected. Record 1 alone can be copied onto any blank tag, so the serial is what makes "I scanned the right asset" mean something. An admin can relax it per device to Record 1 alone — useful while serials are still being recorded. Applies to real scans only; manual tag entry and the NFC-fault fallback are unaffected. **Devices that already stored a choice keep it**, since `getSettings()` spreads the saved row over the defaults — this changes new installations only, never a tablet mid-shift. |
 
 ### Server URL rules (`src/services/api/client.ts`)
 

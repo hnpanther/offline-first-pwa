@@ -75,12 +75,19 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
 
 const DEFAULT_MAX_AGE_MS = 60 * 60 * 1000
 
+/**
+ * @param maxAgeMs how old the last pull may be before this one actually fetches. **Zero means
+ *        force** — callers rely on that to apply a change right now (a fresh sign-in does).
+ *        The comparison is `>=` for exactly that reason: with `>`, a maxAge of 0 would decline
+ *        to fetch whenever no measurable time had passed since the previous pull, so the
+ *        "force" would silently do nothing on a fast path.
+ */
 export async function pullBootstrapIfStale(
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   signal?: AbortSignal
 ): Promise<PullResult> {
   const lastBootstrapAt = await getLastBootstrapAt()
-  const isStale = lastBootstrapAt == null || Date.now() - lastBootstrapAt > maxAgeMs
+  const isStale = lastBootstrapAt == null || Date.now() - lastBootstrapAt >= maxAgeMs
 
   if (!isStale) {
     return { success: true }
