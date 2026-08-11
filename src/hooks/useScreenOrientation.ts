@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppStore } from '@/store'
-import { applyScreenOrientation } from '@/services/device/screenOrientation'
+import { applyScreenOrientation, type OrientationOutcome } from '@/services/device/screenOrientation'
 
 /**
  * Keeps the device's orientation lock in step with the stored preference.
@@ -11,13 +11,39 @@ import { applyScreenOrientation } from '@/services/device/screenOrientation'
  *
  * Waits for `settingsLoaded`: applying the default before the stored row arrives would
  * unlock a device that had asked to stay locked, for the moment it takes Dexie to answer.
+ *
+ * Re-applies when the app returns to the foreground. Android drops the lock when a PWA is
+ * backgrounded and restored from the task switcher, and that is the ordinary way an operator
+ * uses the app all shift — without this the setting appears to work once and then stop.
+ *
+ * @returns the last outcome, so Settings can say whether the lock actually took hold
  */
-export function useScreenOrientation(): void {
+export function useScreenOrientation(): OrientationOutcome | null {
   const settingsLoaded = useAppStore(s => s.settingsLoaded)
   const mode = useAppStore(s => s.settings.screenOrientation)
+  const [outcome, setOutcome] = useState<OrientationOutcome | null>(null)
 
   useEffect(() => {
     if (!settingsLoaded) return
-    void applyScreenOrientation(mode ?? 'auto')
+
+    let cancelled = false
+    const apply = () => {
+      void applyScreenOrientation(mode ?? 'auto').then(result => {
+        if (!cancelled) setOutcome(result)
+      })
+    }
+
+    apply()
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') apply()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [settingsLoaded, mode])
+
+  return outcome
 }

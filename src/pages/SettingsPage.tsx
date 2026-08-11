@@ -20,6 +20,8 @@ import { isAdminRole } from '@/types/auth'
 import { t } from '@/i18n'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import { isOrientationLockSupported } from '@/services/device/screenOrientation'
+import { clampSyncInterval, fromSeconds, toSeconds } from '@/services/settings/syncInterval'
+import { useScreenOrientation } from '@/hooks/useScreenOrientation'
 import type { AppSettings } from '@/types'
 
 export function SettingsPage() {
@@ -29,6 +31,9 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
   const orientationLockSupported = isOrientationLockSupported()
+  // Calling the hook here re-applies the lock and reports back, so the alert below reflects
+  // the choice that was just saved rather than the one in force when the app launched.
+  const orientationOutcome = useScreenOrientation()
 
   const { control, handleSubmit } = useForm<AppSettings>({
     values: settings
@@ -37,7 +42,10 @@ export function SettingsPage() {
   const onSubmit = async (data: AppSettings) => {
     await updateSettings({
       ...data,
-      syncIntervalMs: Number(data.syncIntervalMs) * 1000,
+      // Already milliseconds: the field converts on the way in and out (see below). Converting
+      // again here multiplied the interval by 1000 on every save — including a save where
+      // nobody touched the field — so 30 seconds silently became 30,000 and grew from there.
+      syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
       // Never written from this screen. The form was initialised from a snapshot, so
       // submitting it back could overwrite ceilings a bootstrap refreshed in the meantime —
       // and the device is not the owner of these values in the first place.
@@ -88,8 +96,8 @@ export function SettingsPage() {
             render={({ field }) => (
               <TextField
                 {...field}
-                value={Number(field.value) / 1000}
-                onChange={e => field.onChange(Number(e.target.value) * 1000)}
+                value={toSeconds(field.value)}
+                onChange={e => field.onChange(fromSeconds(e.target.value))}
                 label={t.settings.syncInterval}
                 type="number"
                 fullWidth
@@ -200,12 +208,34 @@ export function SettingsPage() {
             )}
           />
 
-          {/* Said once, plainly, rather than failing silently later: on a desktop browser or
-              iOS the lock simply cannot be taken, and the app will keep rotating freely. */}
-          {!orientationLockSupported && (
+          {/* What actually happened, rather than silence. An administrator who picks Landscape
+              and watches the tablet keep rotating cannot otherwise tell a browser that refuses
+              to lock from a setting that did not save. */}
+          {!orientationLockSupported ? (
             <Alert severity="info" sx={{ mt: 2 }}>
               {t.settings.screenOrientationUnsupported}
             </Alert>
+          ) : (
+            orientationOutcome && (
+              <Alert
+                severity={
+                  orientationOutcome.applied || orientationOutcome.reason === 'auto'
+                    ? 'success'
+                    : orientationOutcome.reason === 'notInstalled'
+                      ? 'warning'
+                      : 'info'
+                }
+                sx={{ mt: 2 }}
+              >
+                {orientationOutcome.applied
+                  ? t.settings.screenOrientationApplied
+                  : orientationOutcome.reason === 'auto'
+                    ? t.settings.screenOrientationAutoActive
+                    : orientationOutcome.reason === 'notInstalled'
+                      ? t.settings.screenOrientationNotInstalled
+                      : t.settings.screenOrientationRefused}
+              </Alert>
+            )
           )}
 
           {!isAdmin && (
