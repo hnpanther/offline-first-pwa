@@ -1441,40 +1441,50 @@ sudo chmod 644 localCA.crt nginx.crt
 File: `/etc/nginx/sites-available/default` (or a dedicated site under `sites-available/offline-pwa`).
 
 ```nginx
-server {
-    listen 80;
-    server_name 192.168.1.4;
-    return 301 https://$host$request_uri;
+worker_processes  1;
+
+events {
+    worker_connections 1024;
 }
 
-server {
-    listen 443 ssl;
-    server_name 192.168.1.4;
+http {
 
-    ssl_certificate     /etc/nginx/ssl/local/nginx.crt;
-    ssl_certificate_key /etc/nginx/ssl/local/nginx.key;
+    include       mime.types;
+    default_type  application/octet-stream;
 
-    root /var/www/html/offline-first-pwa/dist;
-    index index.html;
+    server {
+        listen 80;
+        server_name 192.168.1.4;
 
-    # PWA + SPA routing
-    location / {
-        try_files $uri $uri/ /index.html;
+        return 301 https://$host$request_uri;
     }
 
-    # API → Spring Boot on data server (different host is fine)
-    location /api/ {
-        proxy_pass http://192.168.1.2:8081/api/;
+    server {
+        listen 443 ssl;
+        server_name 192.168.1.4;
 
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+        ssl_certificate     /etc/nginx/ssl/local/nginx.crt #D:/MyApp/nginx/ssl/192.168.1.101.pem;
+        ssl_certificate_key /etc/nginx/ssl/local/nginx.key #D:/MyApp/nginx/ssl/192.168.1.101-key.pem;
 
-    # Service Worker — avoid aggressive caching
-    location ~* (sw\.js|workbox-.*\.js)$ {
-        add_header Cache-Control "no-cache";
+        root /var/www/html/offline-first-pwa/dist #D:/MyApp/nginx/html/offline-first-pwa/dist;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        location /api/ {
+            proxy_pass http://192.168.1.4:8081/api/;
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location ~* (sw\.js|workbox-.*\.js)$ {
+            add_header Cache-Control "no-cache";
+        }
     }
 }
 ```
