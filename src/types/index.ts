@@ -88,6 +88,8 @@ export interface SyncState {
   error?: string
 }
 
+export type ScreenOrientationMode = 'auto' | 'portrait' | 'landscape'
+
 export interface AppSettings {
   serverUrl: string
   syncIntervalMs: number
@@ -98,6 +100,13 @@ export interface AppSettings {
    * original Record-1-only behaviour.
    */
   nfcStrictSerialMatch: boolean
+  /**
+   * How the app should sit on the device: follow rotation, or stay locked one way.
+   *
+   * A **device** preference, not an account one — it depends on how that particular tablet is
+   * mounted — so it stays local and never syncs. Admin-only to change, like the NFC scan rule.
+   */
+  screenOrientation: ScreenOrientationMode
   /**
    * Attachment ceilings, owned by the server.
    *

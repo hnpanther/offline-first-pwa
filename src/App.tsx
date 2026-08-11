@@ -26,7 +26,13 @@ function AuthBootstrap({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+import { useScreenOrientation } from '@/hooks/useScreenOrientation'
+
 export function App() {
+  // Re-applied on every launch: an orientation lock does not survive the app being closed,
+  // so the stored preference has to be put back each time rather than only when it changes.
+  useScreenOrientation()
+
   return (
     <CacheProvider value={rtlCache}>
       <ThemeProvider theme={theme}>

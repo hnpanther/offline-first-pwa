@@ -579,12 +579,10 @@ export function LogSheetFillPage() {
         setNfcError(`Asset مربوط به تگ "${tagId.trim()}" در این Log Sheet وجود ندارد`)
         return
       }
-      if (result.kind === 'serialMissing') {
-        setNfcError(t.logSheet.strictSerialMissing)
-        return
-      }
-      if (result.kind === 'serialMismatch') {
-        setNfcError(t.logSheet.strictSerialMismatch)
+      // Both verification failures give the same opaque answer on purpose — naming which
+      // check failed would hand the holder of the tag a map of how verification works.
+      if (result.kind === 'serialMissing' || result.kind === 'serialMismatch') {
+        setNfcError(t.logSheet.nfcVerificationFailed)
         return
       }
 
@@ -644,7 +642,9 @@ export function LogSheetFillPage() {
     const tagId = resolveNfcTagId(lastTag)
     if (!tagId) {
       stopScan()
-      setNfcError('محتوای Record 1 خوانده نشد — تگ باید text/plain با شناسه Asset باشد')
+      // Same opaque message as a failed serial check: "Record 1 could not be read, the tag
+      // must be text/plain" told the operator exactly how the tag is meant to be written.
+      setNfcError(t.logSheet.nfcVerificationFailed)
       return
     }
 

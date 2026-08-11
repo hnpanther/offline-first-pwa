@@ -136,10 +136,22 @@ const fa = {
     nfcFaultSubmitted: 'گزارش خرابی NFC ثبت شد. اکنون می‌توانید این Asset را به‌صورت دستی تکمیل کنید.',
     manualEntryUnlocked: 'ثبت دستی',
     manualEntryUnlockedHint: 'برای این Asset گزارش خرابی NFC ثبت شده و ثبت دستی (بدون اسکن) باز است.',
-    strictSerialMismatch:
-      'سریال تراشه این تگ با سریال ثبت‌شده روی این Asset یکسان نیست. حالت «بررسی سریال تراشه» فعال است، بنابراین اسکن پذیرفته نشد.',
-    strictSerialMissing:
-      'برای این Asset سریال تراشه‌ای ثبت نشده است. حالت «بررسی سریال تراشه» فعال است، بنابراین اسکن پذیرفته نشد.',
+    /*
+     * One message for every way a scan can fail verification: unreadable Record 1, a serial
+     * that does not match, or an asset with no serial recorded.
+     *
+     * Deliberately says nothing about WHICH check failed. The old messages named the
+     * mechanism — "the chip serial does not match", "no serial is recorded for this asset" —
+     * which is a map of how verification works, handed to whoever is holding the tag. Someone
+     * who knows the serial is what fails knows to look for a tag whose serial does match.
+     * The operator's next step is identical in all three cases (tell an administrator), so
+     * there is nothing they lose by not being told.
+     *
+     * The one failure that stays specific is a *valid* tag that simply is not on this sheet:
+     * that is a routing mistake the operator can act on themselves, and it reveals nothing.
+     */
+    nfcVerificationFailed:
+      'اطلاعات این تگ صحیح نیست. در صورت مشکل با مدیر سامانه تماس بگیرید.',
     entryCreatedAt: 'تاریخ ثبت',
     entryUpdatedAt: 'آخرین ویرایش'
   },
@@ -170,6 +182,15 @@ const fa = {
     strictSerialMatchHint:
       'به‌صورت پیش‌فرض فعال است: علاوه بر محتوای Record 1، سریال سخت‌افزاری تراشه هم باید با سریال ثبت‌شده روی دارایی یکسان باشد. محتوای Record 1 قابل کپی روی هر تگ خامی است، پس بررسی سریال همان چیزی است که به «تگ درست را اسکن کردم» معنا می‌دهد. اگر برای دارایی سریالی ثبت نشده باشد، اسکن پذیرفته نمی‌شود؛ در آن صورت این گزینه را غیرفعال کنید تا فقط Record 1 بررسی شود.',
     strictSerialMatchAdminOnly: 'تغییر این گزینه فقط برای مدیر سامانه امکان‌پذیر است.',
+    displaySection: 'نمایش و چرخش صفحه',
+    screenOrientation: 'جهت صفحه',
+    screenOrientationAuto: 'خودکار (بر اساس چرخش دستگاه)',
+    screenOrientationPortrait: 'عمودی (قفل‌شده)',
+    screenOrientationLandscape: 'افقی (قفل‌شده)',
+    screenOrientationHint:
+      'این تنظیم روی همین دستگاه ذخیره می‌شود و با حساب کاربری همگام نمی‌شود؛ چون به نحوه نصب همان تبلت یا گوشی بستگی دارد. پس از بستن و باز کردن برنامه هم باقی می‌ماند.',
+    screenOrientationUnsupported:
+      'این مرورگر قفل جهت صفحه را پشتیبانی نمی‌کند. قفل کردن معمولاً فقط در نسخه نصب‌شده (PWA) روی اندروید کار می‌کند؛ در غیر این صورت صفحه آزادانه می‌چرخد.',
     save: 'ذخیره',
     saved: 'تنظیمات ذخیره شد'
   },

@@ -23,6 +23,8 @@ import { Controller } from 'react-hook-form'
 import type { Control, FieldErrors, RegisterOptions } from 'react-hook-form'
 import { DynamicFormField } from './DynamicFormField'
 import { AttachmentFieldInput } from './AttachmentFieldInput'
+import { LocationFieldInput } from './LocationFieldInput'
+import { formatCoordinate, parseCoordinate } from '@/services/device/geolocation'
 import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
 import type { FieldDefinition } from '@/types/sync'
 import type { FormField } from '@/types'
@@ -36,6 +38,11 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** A `location` class field — matched the same way the server does, case-insensitively. */
+function isLocationDataType(dataType: string | undefined): boolean {
+  return (dataType ?? '').trim().toLowerCase() === 'location'
+}
 
 /**
  * Translate a FieldDefinition into the FormField shape that DynamicFormField
@@ -64,6 +71,10 @@ function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: strin
   if (attachmentKindForDataType(def.dataType)) {
     const count = attachmentIdsOf(val).length
     return { value: count === 0 ? '—' : `${count} پیوست` }
+  }
+
+  if (isLocationDataType(def.dataType)) {
+    return { value: formatCoordinate(val) || '—' }
   }
 
   const options = normalizeFieldOptions(def.validation?.options)
@@ -102,6 +113,14 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
   if (attachmentKindForDataType(def.dataType)) {
     return def.required
       ? { validate: value => attachmentIdsOf(value).length > 0 || 'این فیلد الزامی است' }
+      : {}
+  }
+
+  // Same reason as media: a coordinate is an object, and an object is truthy even when it
+  // holds nothing usable. Judge it by whether it parses into a real position.
+  if (isLocationDataType(def.dataType)) {
+    return def.required
+      ? { validate: value => parseCoordinate(value) != null || 'این فیلد الزامی است' }
       : {}
   }
 
@@ -215,6 +234,19 @@ export function DynamicClassForm({
             )
           }
 
+          if (isLocationDataType(def.dataType)) {
+            return (
+              <Box key={def.key} sx={{ py: 1.25, px: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+                <LocationFieldInput
+                  label={def.label}
+                  value={rawValue}
+                  onChange={() => {}}
+                  readOnly
+                />
+              </Box>
+            )
+          }
+
           const { value, unit } = formatReadOnlyValue(def, rawValue)
           const rangeSeverity =
             def.dataType === 'number' && def.validation
@@ -288,8 +320,28 @@ export function DynamicClassForm({
         const rules = buildValidationRules(def)
         const error = getError(errors, fieldName)
 
-        // Media fields do not go through DynamicFormField: their value is a reference object
-        // rather than a scalar, and capture needs the surrounding sheet/asset context.
+        // Neither media nor location goes through DynamicFormField: both hold an object
+        // rather than a scalar, and both are captured from the device rather than typed.
+        if (isLocationDataType(def.dataType)) {
+          return (
+            <Controller
+              key={fieldName}
+              name={fieldName}
+              control={control}
+              rules={rules}
+              render={({ field: f }) => (
+                <LocationFieldInput
+                  label={def.label}
+                  required={def.required}
+                  value={f.value}
+                  onChange={f.onChange}
+                  error={error}
+                />
+              )}
+            />
+          )
+        }
+
         const attachmentKind = attachmentKindForDataType(def.dataType)
         if (attachmentKind && attachmentContext) {
           return (

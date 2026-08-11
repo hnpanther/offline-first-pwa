@@ -19,6 +19,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { isAdminRole } from '@/types/auth'
 import { t } from '@/i18n'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
+import { isOrientationLockSupported } from '@/services/device/screenOrientation'
 import type { AppSettings } from '@/types'
 
 export function SettingsPage() {
@@ -27,6 +28,7 @@ export function SettingsPage() {
   const isAdmin = !!authSession && isAdminRole(authSession.roles)
   const [saved, setSaved] = useState(false)
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
+  const orientationLockSupported = isOrientationLockSupported()
 
   const { control, handleSubmit } = useForm<AppSettings>({
     values: settings
@@ -164,6 +166,53 @@ export function SettingsPage() {
               />
             )}
           />
+        </CardContent>
+      </Card>
+
+      {/* A device preference, not an account one — which is why it lives here and never syncs.
+          Admin-only to change, like the NFC scan rule: an operator flipping the orientation of
+          a wall-mounted tablet mid-round is not a decision that belongs to them. */}
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <CardContent>
+          <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+            {t.settings.displaySection}
+          </Typography>
+
+          <Controller
+            name="screenOrientation"
+            control={control}
+            render={({ field }) => (
+              <TextField
+                {...field}
+                value={field.value ?? 'auto'}
+                select
+                fullWidth
+                size="small"
+                label={t.settings.screenOrientation}
+                disabled={!isAdmin}
+                SelectProps={{ native: true }}
+                helperText={t.settings.screenOrientationHint}
+              >
+                <option value="auto">{t.settings.screenOrientationAuto}</option>
+                <option value="portrait">{t.settings.screenOrientationPortrait}</option>
+                <option value="landscape">{t.settings.screenOrientationLandscape}</option>
+              </TextField>
+            )}
+          />
+
+          {/* Said once, plainly, rather than failing silently later: on a desktop browser or
+              iOS the lock simply cannot be taken, and the app will keep rotating freely. */}
+          {!orientationLockSupported && (
+            <Alert severity="info" sx={{ mt: 2 }}>
+              {t.settings.screenOrientationUnsupported}
+            </Alert>
+          )}
+
+          {!isAdmin && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              {t.settings.strictSerialMatchAdminOnly}
+            </Typography>
+          )}
         </CardContent>
       </Card>
 

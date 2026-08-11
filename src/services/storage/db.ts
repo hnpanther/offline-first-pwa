@@ -126,6 +126,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // Devices that already stored a choice keep it — getSettings spreads the saved row over
   // these defaults — so this changes new installations only, never a tablet mid-shift.
   nfcStrictSerialMatch: true,
+  // Follow the device unless someone deliberately pins it. Auto is the only default that is
+  // right everywhere: a locked orientation on a device mounted the other way round is worse
+  // than no preference at all.
+  screenOrientation: 'auto',
   // Mirrors the server's own defaults. Used until the first bootstrap lands, and after that
   // only as the fallback for a server too old to send them.
   attachmentLimits: {
