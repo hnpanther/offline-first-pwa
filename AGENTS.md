@@ -2,6 +2,23 @@
 
 This file orients coding agents on **this repository only**: the **offline-first PWA** (React + Vite + Dexie). Human-oriented setup and deployment details live in **`README.md`**.
 
+## Where the detail lives
+
+This file is conventions and traps. The references below are kept current with the code:
+
+| Document | What it answers |
+|---|---|
+| **[docs/sync.md](docs/sync.md)** | The push sequence, every submission outcome, the separate attachment queue, conflict rules. |
+| **[docs/storage.md](docs/storage.md)** | The Dexie schema, every store and index, and the rules for changing it. |
+| **[docs/device-features.md](docs/device-features.md)** | NFC, camera, GPS, screen orientation — requirements and fallbacks. |
+| **[README.md](README.md)** | Setup, mobile testing, deployment, troubleshooting. |
+| **[CLAUDE.md](CLAUDE.md)** | The short entry point, and the rule below. |
+
+> **Any change to sync, storage, a device feature or a user-visible behaviour updates the
+> matching document in the same commit.** Documentation that lags the code is worse than none —
+> it is confidently wrong, and the next reader will trust it. When you learn a trap by
+> debugging, add it here with the *why*, not just the *what*.
+
 | Item | Value |
 |------|--------|
 | License | GPL-3.0-or-later — Copyright (C) 2026 hadi_hnp |

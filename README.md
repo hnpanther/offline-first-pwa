@@ -10,12 +10,31 @@ This repository is the **mobile / frontend** companion to the Java backend:
 
 The UI is **Persian (RTL)**. This document is in English for developers and operators setting up the system.
 
-**AI coding agents:** start with [`AGENTS.md`](AGENTS.md) for architecture, invariants, and commands; use this README for full deployment and troubleshooting.
+**AI coding agents:** start with [`CLAUDE.md`](CLAUDE.md), then [`AGENTS.md`](AGENTS.md) for architecture, invariants, and commands; use this README for full deployment and troubleshooting.
+
+---
+
+## Documentation map
+
+This README is the tour — setup, deployment, troubleshooting. When you need the detail, these
+are the references, and a change to behaviour is expected to update the matching file in the
+same commit.
+
+| Document | What it answers |
+|---|---|
+| **[docs/sync.md](docs/sync.md)** | How data moves to and from the server: the push sequence, every submission outcome, the separate attachment queue, and the conflict rules. |
+| **[docs/storage.md](docs/storage.md)** | The Dexie/IndexedDB schema, every store and index, what survives what, and the rules for changing it. |
+| **[docs/device-features.md](docs/device-features.md)** | NFC, camera/microphone, GPS and screen orientation — what each requires, and how each degrades. |
+| **[AGENTS.md](AGENTS.md)** | Conventions and the traps found the hard way. |
+| **[CLAUDE.md](CLAUDE.md)** | Entry point for AI agents working in this repository. |
+
+The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `docs/`.
 
 ---
 
 ## Table of Contents
 
+1. [Documentation map](#documentation-map)
 1. [Features](#features)
 2. [Prerequisites](#prerequisites)
 3. [Technology Stack](#technology-stack)
@@ -1613,9 +1632,12 @@ Should show **Completed — pending sync** if local `status: submitted`. Refresh
 
 ## Related Documentation
 
-- **`AGENTS.md`** — concise guide for AI coding agents (architecture, invariants, commands)
-- **`README.md`** — full setup, deployment, troubleshooting for humans
-- **Backend** — `backend-offline-first` repository for server-side log sheet lifecycle, validation rules, and admin web UI
+- **[`CLAUDE.md`](CLAUDE.md)** — entry point for AI agents, and the rule that these files are updated with the code
+- **[`AGENTS.md`](AGENTS.md)** — architecture, invariants, commands, and the traps found the hard way
+- **[`docs/sync.md`](docs/sync.md)** — synchronisation in full
+- **[`docs/storage.md`](docs/storage.md)** — the local database
+- **[`docs/device-features.md`](docs/device-features.md)** — NFC, camera, GPS, orientation
+- **Backend** — `backend-offline-first`, whose `docs/` covers the schema, the log-sheet lifecycle, the background jobs and the reports
 
 ---
 
