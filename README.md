@@ -1460,6 +1460,48 @@ sudo chmod 644 localCA.crt nginx.crt
 
 **Do not copy `certs/` from mkcert dev setup to production nginx** — production uses `/etc/nginx/ssl/local/` above.
 
+#### Easier alternative — mkcert
+
+If you would rather not hand-write the OpenSSL config, **mkcert** does the same two jobs (a root CA + a server certificate carrying the IP in `subjectAltName`) in a couple of commands. Install it with `winget install FiloSottile.mkcert`, or download `mkcert-v1.4.4-windows-amd64.exe` from the mkcert releases page.
+
+**1) Create the local CA and trust it on this machine:**
+
+```powershell
+mkcert.exe -install
+```
+
+**2) Find where the CA files live:**
+
+```powershell
+mkcert.exe -CAROOT
+```
+
+That folder holds `rootCA.pem` (the public CA — this is what goes on the tablets) and `rootCA-key.pem` (private — keep it on this machine only, and back it up; without it you cannot issue more certificates).
+
+**3) Issue the server certificate for the PWA IP:**
+
+```powershell
+mkcert-v1.4.4-windows-amd64.exe 192.168.1.101
+```
+
+This writes `192.168.1.101.pem` (certificate) and `192.168.1.101-key.pem` (key) into the current directory — the same pair referenced in the Windows nginx comments of [Step 3](#step-3--nginx-site-config). Copy them next to your nginx config and point `ssl_certificate` / `ssl_certificate_key` at them.
+
+Re-run this command for every extra name or address the server answers on, listing them together, e.g. `mkcert.exe 192.168.1.101 localhost 127.0.0.1`.
+
+**4) Then copy `rootCA.pem` to each Android tablet** and install it exactly as in the list above (Settings → Security → Encryption & credentials → Install a certificate → **CA certificate**), then force-stop Chrome and reopen. If the Android file picker refuses the file, rename it to `rootCA.crt` — Android matches on the extension, the content is unchanged.
+
+Equivalence with the OpenSSL steps:
+
+| OpenSSL above | mkcert |
+|---|---|
+| `localCA.key` + `localCA.crt` | `rootCA-key.pem` + `rootCA.pem` (in `-CAROOT`) |
+| `nginx.key` | `192.168.1.101-key.pem` |
+| `nginx.crt` | `192.168.1.101.pem` |
+| `server-cert.cnf` (`alt_names`) | implicit — the arguments become the SANs |
+| Install `localCA.crt` on tablets | install `rootCA.pem` on tablets |
+
+Two caveats: mkcert leaf certificates are valid for **825 days**, so re-issue and redeploy before they expire; and `mkcert -install` only trusts the CA on the machine that ran it — every other device (tablets, other PCs) still needs `rootCA.pem` installed manually.
+
 ---
 
 ### Step 3 — nginx site config
