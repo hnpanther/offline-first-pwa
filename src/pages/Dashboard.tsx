@@ -18,7 +18,7 @@ import { useAppStore } from '@/store'
 import { useLogSheets } from '@/hooks/useLogSheets'
 import { useManualSync } from '@/hooks/useSync'
 import { computeDashboardStats } from '@/utils/dashboardStats'
-import { isAdminRole } from '@/types/auth'
+import { hasPlantWideScope } from '@/types/auth'
 import { t } from '@/i18n'
 
 function StatCard({
@@ -89,7 +89,7 @@ export function Dashboard() {
   // Log sheets are the only work unit this app tracks. The device's table is
   // shared between everyone who signs in, so the counters are scoped to the
   // viewer — see utils/dashboardStats.ts for the exact rule.
-  const isAdmin = isAdminRole(authSession?.roles ?? [])
+  const isAdmin = hasPlantWideScope(authSession ?? null)
   const { open: openCount, submittedToday: todayCount, synced: syncedCount } =
     computeDashboardStats(logSheets, { sessionUserId, isAdmin })
 

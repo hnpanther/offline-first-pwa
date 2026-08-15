@@ -7,7 +7,8 @@ import rtlPlugin from 'stylis-plugin-rtl'
 import { theme } from '@/theme'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
-import { AdminRoute } from '@/components/auth/AdminRoute'
+import { PermissionRoute } from '@/components/auth/PermissionRoute'
+import { canManageNfcSerial, hasPlantWideScope } from '@/types/auth'
 import { Dashboard } from '@/pages/Dashboard'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { LogSheetListPage } from '@/pages/LogSheetListPage'
@@ -55,8 +56,8 @@ export function App() {
                   <Route path="history" element={<LogSheetListPage mode="history" />} />
                   <Route path=":localId" element={<LogSheetFillPage />} />
                 </Route>
-                <Route path="nfc-inspect" element={<AdminRoute><NfcInspectPage /></AdminRoute>} />
-                <Route path="settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
+                <Route path="nfc-inspect" element={<PermissionRoute allow={canManageNfcSerial}><NfcInspectPage /></PermissionRoute>} />
+                <Route path="settings" element={<PermissionRoute allow={hasPlantWideScope}><SettingsPage /></PermissionRoute>} />
                 {/*
                   Master data, asset registry and log-sheet templates are managed in the web
                   admin panel, not here — the PWA only ever consumes them through log-sheet

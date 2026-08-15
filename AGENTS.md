@@ -114,7 +114,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 - **Scan failures are deliberately opaque.** Missing Record 1, a serial mismatch and an asset with no recorded serial all show one message (`t.logSheet.nfcVerificationFailed`). Naming which check failed hands whoever is holding the tag a map of how verification works, and the operator's next step — tell an administrator — is the same in all three cases. Only "valid tag, not on this sheet" stays specific: that is a routing mistake the operator can fix and it reveals nothing. Keep that distinction if you add outcomes to `matchLogSheetEntryByTag`.
 - **Strict serial mode** (`nfcStrictSerialMatch` setting, **default on**, admin-only toggle in Settings → NFC): off = Record 1 only, identical to the behaviour that predates the setting. The default is strict because Record 1 alone can be cloned onto any blank tag, so the serial is what makes "I scanned the right asset" mean something; an admin can relax it per device while serials are still being recorded. Changing the default affects **new installations only** — `getSettings()` spreads the stored row over `DEFAULT_SETTINGS`, so a device that already saved a choice keeps it and no tablet changes behaviour mid-shift. On = Record 1 **and** the chip UID (`serialNumber`) must both match the entry's stored `nfcSerial` (AND, not OR); an asset with no stored serial is **rejected**, never waved through. Applies to real NFC scans only — manual tag entry and the fault-report fallback pass no serial and are deliberately unaffected. Serial comparison is case-insensitive with `:`/`-`/space stripped. `enrichEntriesWithNfc` backfills `nfcSerial` from the local asset table alongside `nfcTagId`.
 - Edit dialog: NFC or allowed manual entry; tap card = **view-only**.
-- **Manual tag entry** (type the tag instead of scanning): `canEnterTagManually()` in `src/types/auth.ts`. Unlocked by any of: the `allowManualEntry` app setting (applies to all roles), role `SUPERVISOR`/`SENIOR_OPERATOR` (**hardcoded**, not a revocable permission row), or the `GET:/log-sheets/{id}/fill` permission. Distinct from the fault-report unlock below: this still requires the typed value to match a real tag on the sheet; a fault report unlocks the form with no tag at all. Revoking `POST:/api/nfc-fault-reports/batch` from SENIOR_OPERATOR does **not** affect this — it comes from the role check, not that permission.
+- **Manual tag entry** (type the tag instead of scanning): `canEnterTagManually()` in `src/types/auth.ts`. Unlocked by either the `allowManualEntry` app setting (applies to everyone) or the `GET:/log-sheets/{id}/fill` permission. The hardcoded `SUPERVISOR`/`SENIOR_OPERATOR` role branch was removed: every role holding it also holds that permission, so the branch was redundant — and being keyed to a role name meant a duplicated role did not inherit it. Distinct from the fault-report unlock below: this still requires the typed value to match a real tag on the sheet; a fault report unlocks the form with no tag at all. Revoking `POST:/api/nfc-fault-reports/batch` from SENIOR_OPERATOR does **not** affect this — manual entry follows `GET:/log-sheets/{id}/fill`, a different permission.
 - **NFC fault reports** (`services/storage/nfcFaultReports.ts`): a per-entry, always-visible "اعلام خرابی NFC" report (works even when the asset never had a tag, not just after a failed scan) unlocks a manual-entry fallback for that one `(logSheetServerId, assetId)` pair, tracked locally in `LogSheetEntryData.filledVia` (`'nfc' | 'manual'`) and synced up via `POST /api/nfc-fault-reports/batch`. Only same-device self-filed reports unlock the button today — reports arriving from elsewhere (web-filed, other devices) are **not yet consumed** for auto-unlock by design (server already returns them in the bundle's `nfcFaultReports` field as groundwork; the PWA client type/parsing for that field doesn't exist yet — deliberate, not an oversight).
 - **The "report NFC fault" icon itself is gated by `hasPermission(authSession, 'POST:/api/nfc-fault-reports/batch')`** (`LogSheetFillPage.tsx`'s `canReportNfcFault`) — a role/user without this permission never sees the icon at all, mirroring the sync layer's own `canSyncFaultReports` gate in `services/sync/index.ts`. This mirroring matters: without the UI-level gate, a user lacking the permission could still fill out and "submit" a report that gets saved locally and then sits forever with `syncStatus: 'pending'`, since the sync layer silently excludes it from every outbound batch — no error, just a report that never leaves the device. The already-unlocked "manual entry" button for an asset that already has a fault report is **not** gated by this permission (an existing unlock is data, not a new create action) — only the icon that opens the *create* dialog is.
 
@@ -180,7 +180,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 
 ```
 src/
-  App.tsx                 Routes; AdminRoute for /settings and /nfc-inspect.
+  App.tsx                 Routes; PermissionRoute for /settings and /nfc-inspect.
                           /master-data/*, /logsheet-templates, /admin and /records
                           redirect to / (managed in the web panel, not here)
   pages/
@@ -289,7 +289,27 @@ Types and functions: **`src/services/api/index.ts`**.
 
 ---
 
-## Roles (frontend checks)
+## UI gates (frontend checks)
+
+**Never gate on a role name.** `src/types/auth.ts` has no role checks left, on purpose: a role
+duplicated from `ADMIN` copies its permissions but gets a **new code**, so `roles.includes('ADMIN')`
+turned the copy away from screens the server would happily serve it. Every gate now reads a
+permission or a capability the server ships in `session.permissions`.
+
+| Helper | Reads | Effective for |
+|---|---|---|
+| `hasPlantWideScope` | `CAP:SCOPE_PLANT_WIDE` | ADMIN, HIGH_USER |
+| `canManageNfcSerial` | `POST:/api/asset-entries/{id}/nfc-serial` | ADMIN, HIGH_USER |
+| `canAssignWork` | `POST:/api/log-sheets/{id}/assign` | ADMIN, HIGH_USER, SUPERVISOR |
+| `canEnterTagManually` | app setting **or** `GET:/log-sheets/{id}/fill` | + SENIOR_OPERATOR |
+| `hasPermission(session, PERM_NFC_FAULT_REPORT)` | `POST:/api/nfc-fault-reports/batch` | every field role |
+
+Each replaced a role test with an **identical** grant set, so no seeded role changed behaviour.
+Capabilities need no API change: the login response is built from the full authority set, so
+`CAP:*` codes simply appear in `permissions`. Route guarding is `PermissionRoute` (was
+`AdminRoute`), which takes a predicate rather than assuming "admin".
+
+By role, the resulting UI is unchanged:
 
 | Role | Mobile UI |
 |------|-----------|
@@ -298,7 +318,9 @@ Types and functions: **`src/services/api/index.ts`**.
 | `SUPERVISOR` | + team inbox, assign/release/reassign |
 | `ADMIN`, `HIGH_USER` | + Settings and the NFC inspect page. Master data, the asset registry and log-sheet templates are **not** managed in the PWA — those live in the web admin panel. |
 
-Helpers: `isAdminRole`, `isSupervisorRole`, `hasPermission`, `canEnterTagManually` in `src/types/auth.ts`.
+> These are UI gates only; the server is authoritative. Hiding a control the server would allow
+> misleads the operator just as much as showing one it would refuse — which is why the sets must
+> match. Backend model: [backend `docs/security.md`](../../JavaProject/backend-offline-first/docs/security.md).
 
 ---
 

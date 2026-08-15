@@ -16,7 +16,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { useState } from 'react'
 import { useSettings } from '@/hooks/useSettings'
 import { useAuth } from '@/hooks/useAuth'
-import { isAdminRole } from '@/types/auth'
+import { hasPlantWideScope } from '@/types/auth'
 import { t } from '@/i18n'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import { isOrientationLockSupported } from '@/services/device/screenOrientation'
@@ -27,7 +27,7 @@ import type { AppSettings } from '@/types'
 export function SettingsPage() {
   const { settings, updateSettings } = useSettings()
   const { authSession } = useAuth()
-  const isAdmin = !!authSession && isAdminRole(authSession.roles)
+  const isAdmin = hasPlantWideScope(authSession ?? null)
   const [saved, setSaved] = useState(false)
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
   const orientationLockSupported = isOrientationLockSupported()

@@ -34,7 +34,7 @@ import { t } from '@/i18n'
 import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
 import { toIdString } from '@/utils/ids'
-import { isSupervisorRole } from '@/types/auth'
+import { canAssignWork } from '@/types/auth'
 import { SYNC_OUTCOME_MESSAGES, isHistoryLogSheet, isActiveLogSheet, resolveLocalLogSheetStatusChip, isRevokedAssignment, isSupersededSyncError, isCancelledDraft } from '@/utils/logSheetStatus'
 import { canReachServer, isEffectivelyOffline } from '@/utils/connectivity'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
@@ -89,7 +89,7 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   const inboxWarning = useAppStore(s => s.inboxWarning)
   const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
   const lastSyncAt = useAppStore(s => s.lastSyncAt)
-  const isSupervisor = isSupervisorRole(authSession?.roles ?? [])
+  const isSupervisor = canAssignWork(authSession ?? null)
   const { refreshInbox } = useInboxSync()
   const { logs, loading, refresh: refreshLocal } = useLogSheets()
 

@@ -26,7 +26,7 @@ import {
   updateArchivedLogSheetSnapshot,
   parseArchivedLogSheetViewId
 } from '@/services/storage/logSheetArchive'
-import { hasPermission } from '@/types/auth'
+import { hasPermission, PERM_NFC_FAULT_REPORT } from '@/types/auth'
 import {
   isLogSheetExpiredForSync,
   isOwnershipReassignError,
@@ -115,7 +115,7 @@ class SyncManager {
 
     await this.markExpiredSheets()
 
-    const canSyncFaultReports = hasPermission(session, 'POST:/api/nfc-fault-reports/batch')
+    const canSyncFaultReports = hasPermission(session, PERM_NFC_FAULT_REPORT)
 
     const [pendingLogSheets, pendingFaultReports] = await Promise.all([
       this.getPendingLogSheets(),
@@ -321,7 +321,7 @@ class SyncManager {
   async getPendingCount(): Promise<number> {
     const session = await getAuthSession()
     const canSyncFaultReports = session
-      ? hasPermission(session, 'POST:/api/nfc-fault-reports/batch')
+      ? hasPermission(session, PERM_NFC_FAULT_REPORT)
       : false
     const [logSheets, faultReports, attachments] = await Promise.all([
       this.getPendingLogSheets(),

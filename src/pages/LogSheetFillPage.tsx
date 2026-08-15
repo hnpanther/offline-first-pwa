@@ -55,7 +55,7 @@ import { resolveNfcTagId } from '@/services/nfc'
 import { matchLogSheetEntryByTag } from '@/services/nfc/matchLogSheetEntry'
 import { useSettings } from '@/hooks/useSettings'
 import { useAppStore } from '@/store'
-import { canEnterTagManually, hasPermission } from '@/types/auth'
+import { canEnterTagManually, hasPermission, PERM_NFC_FAULT_REPORT } from '@/types/auth'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import {
@@ -394,15 +394,11 @@ export function LogSheetFillPage() {
     [sessionUserId, inboxAssignedIds, navigate]
   )
 
-  const allowManualEntry = canEnterTagManually(
-    authSession?.roles ?? [],
-    settings.allowManualEntry,
-    authSession?.permissions ?? []
-  )
+  const allowManualEntry = canEnterTagManually(authSession ?? null, settings.allowManualEntry)
   // Must mirror the sync layer's own gate (services/sync/index.ts `canSyncFaultReports`) —
   // filing a report the user can't sync would just strand it locally forever, unsynced,
   // with no visible error.
-  const canReportNfcFault = hasPermission(authSession, 'POST:/api/nfc-fault-reports/batch')
+  const canReportNfcFault = hasPermission(authSession, PERM_NFC_FAULT_REPORT)
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])

@@ -151,7 +151,7 @@ React components
 ```
 src/
 ├── components/
-│   ├── auth/           ProtectedRoute, AdminRoute
+│   ├── auth/           ProtectedRoute, PermissionRoute
 │   ├── common/         SyncStatusBar, InstallPwaPrompt, LogSheetIdentityMeta, ScopeLabel
 │   ├── forms/          DynamicClassForm, DynamicFormField
 │   ├── layout/         AppLayout, Header, Sidebar
@@ -428,7 +428,13 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 | Senior operator | `SENIOR_OPERATOR` | Manual NFC tag entry (always); web fill permission |
 | Operator | `OPERATOR` | Dashboard, log sheets, NFC scan only (manual tag only if admin enabled **Allow manual tag entry** on the tablet) |
 
-Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnterTagManually()`.
+Helpers in `src/types/auth.ts`: `hasPlantWideScope()`, `canManageNfcSerial()`, `canAssignWork()`, `canEnterTagManually()`, `hasPermission()`.
+
+> **These read permissions, never role names.** A role duplicated from `ADMIN` copies its
+> permissions but gets a new code, so a `roles.includes('ADMIN')` check turned the copy away from
+> screens the server would have served it. Each helper uses a permission whose grant set is
+> identical to the role test it replaced, so the table above is unchanged in practice. Route
+> guarding is `PermissionRoute` (formerly `AdminRoute`), which takes a predicate.
 
 **Note:** `ADMIN` / `HIGH_USER` also get manual entry via permission `GET:/log-sheets/{id}/fill` if they use the mobile fill UI.
 
@@ -444,8 +450,8 @@ Helpers in `src/types/auth.ts`: `isAdminRole()`, `isSupervisorRole()`, `canEnter
 | `/logsheets/active` | All — inbox + my work |
 | `/logsheets/history` | All — completed / failed / archived snapshots (see below) |
 | `/logsheets/:localId` | All — fill page |
-| `/nfc-inspect` | Admin only (`AdminRoute` + sidebar) — online-only NFC tag inspector |
-| `/settings` | Admin only (`AdminRoute` + sidebar) — server URL, sync interval, **Allow manual tag entry** and **chip-serial scan check** (both apply to all users on that device) |
+| `/nfc-inspect` | Gated on `POST:/api/asset-entries/{id}/nfc-serial` (`PermissionRoute` + sidebar) — online-only NFC tag inspector |
+| `/settings` | Gated on `CAP:SCOPE_PLANT_WIDE` (`PermissionRoute` + sidebar) — server URL, sync interval, **Allow manual tag entry** and **chip-serial scan check** (both apply to all users on that device) |
 
 Operators see Dashboard and Log Sheets only.
 

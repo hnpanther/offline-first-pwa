@@ -24,7 +24,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { t } from '@/i18n'
 import { useAuth } from '@/hooks/useAuth'
-import { isAdminRole } from '@/types/auth'
+import { canManageNfcSerial, hasPlantWideScope } from '@/types/auth'
 
 const DRAWER_WIDTH = 240
 
@@ -44,7 +44,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const navigate = useNavigate()
   const location = useLocation()
   const { authSession, signOut } = useAuth()
-  const showAdmin = authSession ? isAdminRole(authSession.roles) : false
+  // Two separate questions that happened to have the same answer for the seeded roles.
+  const showNfcInspect = canManageNfcSerial(authSession)
+  const showSettings = hasPlantWideScope(authSession)
+  const showAdmin = showNfcInspect || showSettings
 
   const isLogSheetRoute = location.pathname.startsWith('/logsheets')
 
