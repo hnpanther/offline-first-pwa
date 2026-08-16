@@ -4,7 +4,8 @@ import {
   shouldPreserveLocalFormData,
   shouldArchiveBeforeServerOverwrite,
   revivalUpdatesAfterReassign,
-  resolveReopenedSheetUpdates
+  resolveReopenedSheetUpdates,
+  canContinueReopenedLogSheet
 } from '@/utils/logSheetWorkflow'
 import type { LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
@@ -264,6 +265,93 @@ describe('resolveReopenedSheetUpdates', () => {
     const updates = resolveReopenedSheetUpdates(local, () => 'unused')
 
     expect(updates).toEqual({})
+  })
+})
+
+/**
+ * Resuming a completion a supervisor reopened.
+ *
+ * Every case here is judged against a **freshly fetched** bundle, which is the whole point of
+ * the guard: the inbox response that flagged the sheet as reopened may have been read from the
+ * server moments before this device's own submission landed, and acting on that stale picture
+ * would reopen work the server had already closed.
+ */
+describe('canContinueReopenedLogSheet', () => {
+  const me = '2'
+  const future = Date.now() + 6 * 60 * 60 * 1000
+  const reopenedServer = (overrides: Partial<ServerLogSheet> = {}) =>
+    baseServer({ status: 'IN_PROGRESS', assigneeUserId: 2, dueAt: future, ...overrides })
+
+  it('allows the assignee to resume an IN_PROGRESS sheet with a future deadline', () => {
+    expect(canContinueReopenedLogSheet(reopenedServer(), me)).toEqual({ ok: true })
+  })
+
+  it('allows the ASSIGNED variant as well', () => {
+    expect(canContinueReopenedLogSheet(reopenedServer({ status: 'ASSIGNED' }), me).ok).toBe(true)
+  })
+
+  it('refuses when the server still holds the sheet as SUBMITTED — the submit/inbox race', () => {
+    // The exact case the live re-check exists for: an inbox response fetched just before this
+    // device's submission landed still shows the sheet open. Reopening on that would let the
+    // operator edit a completed sheet and earn a DUPLICATE/SUPERSEDED refusal on resubmit.
+    const result = canContinueReopenedLogSheet(reopenedServer({ status: 'SUBMITTED' }), me)
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('ثبت نهایی')
+  })
+
+  it('refuses a cancelled sheet with the cancellation reason, not a generic one', () => {
+    const result = canContinueReopenedLogSheet(reopenedServer({ status: 'CANCELLED' }), me)
+
+    expect(result).toEqual({ ok: false, reason: SYNC_OUTCOME_MESSAGES.CANCELLED })
+  })
+
+  it('refuses an expired sheet with the expiry reason', () => {
+    const result = canContinueReopenedLogSheet(reopenedServer({ status: 'EXPIRED' }), me)
+
+    expect(result).toEqual({ ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED })
+  })
+
+  it('refuses a sheet reopened back into the pool — it has to be claimed, not resumed', () => {
+    const result = canContinueReopenedLogSheet(
+      reopenedServer({ status: 'PENDING', assigneeUserId: null }),
+      me
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('این کار در کارتابل شما باز نیست.')
+  })
+
+  it('refuses when the sheet now belongs to another operator', () => {
+    const result = canContinueReopenedLogSheet(reopenedServer({ assigneeUserId: 9 }), me)
+
+    expect(result).toEqual({ ok: false, reason: SYNC_OUTCOME_MESSAGES.REASSIGNED })
+  })
+
+  it('refuses when the sheet is open but unassigned', () => {
+    const result = canContinueReopenedLogSheet(reopenedServer({ assigneeUserId: null }), me)
+
+    expect(result).toEqual({ ok: false, reason: SYNC_OUTCOME_MESSAGES.REASSIGNED })
+  })
+
+  it('refuses once the reopened deadline has passed, and when there is none at all', () => {
+    expect(canContinueReopenedLogSheet(reopenedServer({ dueAt: Date.now() - 1 }), me))
+      .toEqual({ ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED })
+    expect(canContinueReopenedLogSheet(reopenedServer({ dueAt: null }), me))
+      .toEqual({ ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED })
+  })
+
+  it('refuses while the session has no resolved user id', () => {
+    // Same rule as the rest of the app: work that cannot be attributed is not acted on.
+    const result = canContinueReopenedLogSheet(reopenedServer(), null)
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('شناسایی نشد')
+  })
+
+  it('compares assignee ids across types, not by identity', () => {
+    // Server sends a number, the session holds a string.
+    expect(canContinueReopenedLogSheet(reopenedServer({ assigneeUserId: 2 }), '2').ok).toBe(true)
   })
 })
 

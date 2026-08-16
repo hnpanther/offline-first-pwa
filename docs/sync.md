@@ -205,6 +205,43 @@ older copy of it. This is the most delicate code in the sync layer and has the m
 | Device submits an expired sheet | Server records it as a void submission; nothing is lost |
 | Same sheet submitted twice | `clientActionId` makes the second a `DUPLICATE` |
 | Two operators on one pool sheet | The server's claim guard settles it; the loser gets a refusal outcome and keeps their data |
+| Server reopened a completion the device already delivered | Server wins — but only the operator may act on it, through the fill page's continue action (below) |
+
+---
+
+## Reopening a delivered completion
+
+Once a completion syncs, the server owns it: the device has no way back to a draft, and that is
+deliberate — otherwise an operator could reopen work a supervisor considers final. The way back
+is a supervisor **reopening** the sheet (`POST /log-sheets/{id}/reopen`, new deadline), which
+returns it to `IN_PROGRESS` with the readings intact.
+
+The device handles that in two separate halves, and the separation is the design:
+
+**Detection is passive.** The reopened sheet is back in the operator's assigned inbox, so the
+ordinary merge writes the fresh `serverStatus` and `dueAt` onto the local row and changes
+nothing else. The row stays `submitted`/`synced` — a combination that cannot arise any other
+way, which is what `isReopenedAfterSync` reads. `alignLocalWorkflowWithServer` is untouched by
+this feature and still returns `null` for a synced row whose assignee has not changed.
+
+**Resuming is explicit and server-verified.** The fill page's «ادامه‌ی کار» re-fetches the
+bundle and runs `canContinueReopenedLogSheet` against it before any local change:
+
+```ts
+await resetLogSheetToOpenDraft(localId)   // keeps entries, drops clientActionId
+await applyLogSheetBundle(bundle)         // now takes the plain draft path
+```
+
+> **The order is load-bearing.** Reversed, the bundle apply hits the `synced` short-circuit and
+> does nothing at all — a button that silently fails.
+
+Why re-fetch when the merge already used a fresh bundle: that inbox response may have been read
+from the server *moments before* this device's own submission landed, which would make a
+just-completed sheet look reopened. A fetch issued while the row is already `synced` cannot see
+that state, because the `synced` stamp is only written after the server committed the completion.
+
+`cleanupLogSheets` holds a reopened row back from the 24-hour synced purge while its new
+deadline stands — it is live work, and it is also the only place `filledVia` survives.
 
 ---
 

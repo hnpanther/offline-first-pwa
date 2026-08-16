@@ -36,6 +36,7 @@ import {
   getLogSheet,
   updateLogSheet,
   revertLogSheetToDraft,
+  resetLogSheetToOpenDraft,
   getAssetClass,
   getAllAssetEntries
 } from '@/services/storage'
@@ -70,9 +71,11 @@ import {
   isSupersededSyncError,
   isOwnershipReassignError,
   isRevokedAssignment,
+  isReopenedAfterSync,
   resolveLocalLogSheetStatusChip,
   SYNC_OUTCOME_MESSAGES
 } from '@/utils/logSheetStatus'
+import { canContinueReopenedLogSheet } from '@/utils/logSheetWorkflow'
 import { evaluateEntryCompletion } from '@/utils/entryCompletion'
 import { applyEntrySaveTimestamps } from '@/utils/entryTimestamps'
 import { formatJalaliDateTime } from '@/utils/formatDate'
@@ -432,6 +435,7 @@ export function LogSheetFillPage() {
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
   const [confirmRevertOpen, setConfirmRevertOpen] = useState(false)
   const [rechecking, setRechecking] = useState(false)
+  const [continuing, setContinuing] = useState(false)
   const [isArchivedView, setIsArchivedView] = useState(false)
 
   const loadFieldDefsForEntries = useCallback(
@@ -497,8 +501,16 @@ export function LogSheetFillPage() {
 
         if (redirectIfNotAccessible(sheet)) return
 
+        // Submitted sheets are deliberately excluded — a bundle refresh must never resolve a
+        // completion (see AGENTS.md § Log sheet merge). The one exception is a row the inbox
+        // merge has already flagged as reopened by a supervisor: it is `submitted`+`synced`, so
+        // there is no unsent work a refresh could destroy, and the refresh is what keeps the
+        // new deadline and server status current on the screen the operator acts from.
         const canRefreshBundle =
-          navigator.onLine && authSession && sheet.serverId && sheet.status === 'draft'
+          navigator.onLine &&
+          authSession &&
+          sheet.serverId &&
+          (sheet.status === 'draft' || isReopenedAfterSync(sheet))
         if (canRefreshBundle) {
           try {
             const bundle = await fetchLogSheetBundle(sheet.serverId!)
@@ -810,6 +822,63 @@ export function LogSheetFillPage() {
     }
   }
 
+  /**
+   * Resume a completion the supervisor reopened.
+   *
+   * The local row says `submitted`+`synced` and the inbox merge has flagged it as reopened, but
+   * that flag came from an inbox response that may have been read *before* this device's own
+   * submission landed. So the server is asked again, right now, and only its live answer decides:
+   * a fetch issued while the row is already `synced` cannot see a pre-submit state, because that
+   * stamp only exists once the server committed the completion.
+   *
+   * Order matters below. `resetLogSheetToOpenDraft` runs first so the row is an ordinary draft by
+   * the time the bundle is applied — `alignLocalWorkflowWithServer` then takes its plain path and
+   * merges the server's metadata while `shouldPreserveLocalFormData` keeps the operator's own
+   * readings. Applying the bundle first would hit the `synced` short-circuit and change nothing.
+   * The reset also drops `clientActionId`, so the corrected resubmission is a new action rather
+   * than a replay the server would answer "already processed".
+   */
+  const handleContinueReopened = async () => {
+    if (!logSheet || !localId) return
+    if (!logSheet.serverId) {
+      setSaveError('این کار از سرور دریافت نشده است.')
+      return
+    }
+    if (!canUseServer) {
+      setSaveError(t.logSheet.continueReopenedRequiresOnline)
+      return
+    }
+    setContinuing(true)
+    setSaveError(null)
+    try {
+      const bundle = await fetchLogSheetBundle(logSheet.serverId)
+      const check = canContinueReopenedLogSheet(bundle.sheet, sessionUserId)
+
+      if (!check.ok) {
+        // Refused — but the bundle still carries the truth, and leaving the screen showing a
+        // reopen that is not there any more would send the operator back to the same button.
+        const applied = await applyLogSheetBundle(bundle)
+        const { entries } = await enrichEntriesWithNfc(applied.entries ?? [])
+        await loadFieldDefsForEntries(entries, applied)
+        setLogSheet({ ...applied, entries })
+        setSaveError(check.reason ?? t.logSheet.continueReopenedFailed)
+        return
+      }
+
+      await resetLogSheetToOpenDraft(localId)
+      const reopened = await applyLogSheetBundle(bundle)
+      const { entries } = await enrichEntriesWithNfc(reopened.entries ?? [])
+      await loadFieldDefsForEntries(entries, reopened)
+      setLogSheet({ ...reopened, entries })
+      setNfcFaultReports(await getNfcFaultReportsForSheet(toIdString(logSheet.serverId)))
+      setSavedMessage(t.logSheet.continueReopenedSuccess)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : t.logSheet.continueReopenedFailed)
+    } finally {
+      setContinuing(false)
+    }
+  }
+
   const handleRecheckAssignment = async () => {
     if (!logSheet || !localId) return
     setRechecking(true)
@@ -885,6 +954,10 @@ export function LogSheetFillPage() {
   const isRevoked = isRevokedAssignment(logSheet)
   const backInMyInbox =
     !!logSheet.serverId && inboxAssignedIds.has(toIdString(logSheet.serverId))
+  // Completed, delivered, and since reopened by a supervisor with a new deadline. Only a
+  // candidate flag — pressing the button re-verifies against a live bundle before anything
+  // local changes.
+  const isReopened = isReopenedAfterSync(logSheet)
   const canRevertToDraft = canRevertSubmittedLogSheetToDraft(logSheet, effectivelyOffline).ok
   // The server rejected the values. Same control, different framing: this is not "undo an
   // unsent completion", it is "the readings need fixing", and saying so is the difference
@@ -1006,6 +1079,31 @@ export function LogSheetFillPage() {
           >
             {t.logSheet.recheckAssignment}
           </Button>
+        </Box>
+      )}
+
+      {isReopened && (
+        <Box sx={{ mb: 2 }}>
+          <Alert severity="info" sx={{ mb: 1.5 }}>
+            {t.logSheet.continueReopenedHint}
+          </Alert>
+          <Button
+            type="button"
+            variant="outlined"
+            color="warning"
+            size="large"
+            fullWidth
+            startIcon={continuing ? <CircularProgress size={18} color="inherit" /> : <UndoIcon />}
+            onClick={() => void handleContinueReopened()}
+            disabled={continuing || saving || rechecking || !canUseServer}
+          >
+            {t.logSheet.continueReopened}
+          </Button>
+          {!canUseServer && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: 'block' }}>
+              {t.logSheet.continueReopenedRequiresOnline}
+            </Typography>
+          )}
         </Box>
       )}
 

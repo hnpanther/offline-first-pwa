@@ -1,7 +1,7 @@
 import { getAllLogSheets, deleteLogSheet } from '@/services/storage'
 import { deleteSyncedAttachmentsForLogSheet } from '@/services/storage/attachments'
 import type { LogSheet } from '@/types'
-import { SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
+import { isReopenedAfterSync, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 
 const SYNCED_RETENTION_MS = 24 * 60 * 60 * 1000
 const FAILED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
@@ -29,6 +29,7 @@ function isExpiredDraftSheet(sheet: LogSheet): boolean {
  * - Expired draft → keep 1 day in history, then delete
  * - Active draft (in progress) → never delete
  * - Submitted but still pending sync → keep until synced or failed
+ * - Synced, then reopened by a supervisor → never delete while the new deadline stands
  *
  * Deleting a sheet also drops its **already-uploaded** attachments, which would otherwise
  * outlive every screen that could show them and grow the database without bound. Attachments
@@ -40,6 +41,16 @@ export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
   let deleted = 0
 
   for (const sheet of all) {
+    // A completion the supervisor reopened is live work again, not history: the operator has
+    // until the new deadline to continue it. Two reasons this must survive the 24h synced
+    // purge rather than being re-downloaded fresh from the inbox. First, the row is where the
+    // continue action lives, and purging it silently would make the reopened sheet look like
+    // untouched new work. Second, `filledVia` is local-only — the server never returns it — so
+    // a re-downloaded copy loses which assets were filled manually, and editing one of those
+    // after the reopen would re-stamp its `entry_source` as PWA_NFC despite no scan (the same
+    // local-only-field trap `mapServerEntryToLocal` carries — see AGENTS.md § Log sheet merge).
+    if (isReopenedAfterSync(sheet, now)) continue
+
     if (isExpiredDraftSheet(sheet)) {
       const anchor = sheet.dueAt ?? sheet.updatedAt ?? sheet.createdAt
       if (now - anchor > EXPIRED_DRAFT_RETENTION_MS) {

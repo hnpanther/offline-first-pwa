@@ -6,7 +6,7 @@ import {
   serverAssigneeId,
   sheetHasLocalEntryData
 } from '@/utils/logSheetLocalData'
-import { isOwnershipReassignError } from '@/utils/logSheetStatus'
+import { isOwnershipReassignError, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 
 /** Drop stale local completion when the server still has the sheet open. */
 export function alignLocalWorkflowWithServer(
@@ -135,6 +135,61 @@ export function revivalUpdatesAfterReassign(
     updates.clientActionId = newClientActionId()
   }
   return updates
+}
+
+/**
+ * Whether a **freshly fetched** server bundle really shows a reopened sheet this operator may
+ * pick up again, after they had already completed and synced it.
+ *
+ * This is the authorisation step behind the fill page's continue action, and it is deliberately
+ * judged on a live `GET /api/log-sheets/{id}/bundle` rather than on the local row or the inbox
+ * response. The inbox response that flagged the sheet as a candidate
+ * (`isReopenedAfterSync`) may have been read from the server moments *before* this device's own
+ * submission landed, which would make a just-completed sheet look reopened; a fetch issued after
+ * the row is already `synced` cannot, because that stamp only exists once the server committed
+ * the completion.
+ *
+ * Every refusal names its own reason: the operator is standing in front of the sheet and the
+ * difference between "the supervisor cancelled it" and "somebody else has it now" decides what
+ * they do next.
+ */
+export function canContinueReopenedLogSheet(
+  serverSheet: ServerLogSheet,
+  sessionUserId: string | null,
+  now = Date.now()
+): { ok: boolean; reason?: string } {
+  if (!sessionUserId) {
+    return { ok: false, reason: 'کاربر جاری شناسایی نشد. پس از اتصال به سرور دوباره تلاش کنید.' }
+  }
+
+  const status = serverSheet.status ?? null
+  if (status === 'SUBMITTED') {
+    return { ok: false, reason: 'این کار روی سرور همچنان ثبت نهایی است و بازگشایی نشده است.' }
+  }
+  if (status === 'CANCELLED') {
+    return { ok: false, reason: SYNC_OUTCOME_MESSAGES.CANCELLED }
+  }
+  if (status === 'EXPIRED') {
+    return { ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED }
+  }
+  // PENDING lands here on purpose: a reopen with no assignee returns the sheet to the pool,
+  // where it has to be claimed like any other pool work rather than silently resumed.
+  if (status !== 'ASSIGNED' && status !== 'IN_PROGRESS') {
+    return { ok: false, reason: 'این کار در کارتابل شما باز نیست.' }
+  }
+
+  if (serverAssigneeId(serverSheet.assigneeUserId) !== sessionUserId) {
+    return { ok: false, reason: SYNC_OUTCOME_MESSAGES.REASSIGNED }
+  }
+
+  // A reopen always carries a future deadline. One that has already passed means the reopened
+  // window closed before the operator got here — resuming would produce a submission the
+  // server judges late and refuses.
+  if (serverSheet.dueAt == null || serverSheet.dueAt <= now) {
+    return { ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED }
+  }
+
+  return { ok: true }
 }
 
 /**

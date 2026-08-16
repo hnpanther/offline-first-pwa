@@ -238,6 +238,36 @@ export function canRevertSubmittedLogSheetToDraft(
   return { ok: true }
 }
 
+/**
+ * A completion this device already delivered, which a supervisor has since **reopened**
+ * (`POST /log-sheets/{id}/reopen`) with a new future deadline.
+ *
+ * The server moves such a sheet back to `IN_PROGRESS` (or `ASSIGNED`), clears its submission
+ * timestamps and keeps the entry values, so it returns to this operator's assigned inbox and
+ * the ordinary inbox merge writes the fresh `serverStatus`/`dueAt` onto the local row — while
+ * `status`/`syncStatus` stay `submitted`/`synced`, because the local completion really was
+ * delivered. That otherwise-impossible combination is exactly the signal: a sheet the device
+ * completed and synced cannot be open on the server again for any other reason.
+ *
+ * Note this is only a *candidate* marker for the UI. The row is never reopened locally on the
+ * strength of it — `canContinueReopenedLogSheet` re-checks against a freshly fetched bundle
+ * first, because the inbox response that set these fields may have been read from the server
+ * moments *before* this device's own submission landed.
+ *
+ * `PENDING` is deliberately excluded: a reopen with no assignee sends the sheet back to the
+ * pool, where it must be claimed like any other pool work rather than silently resumed.
+ * Archived snapshots are excluded too — they are read-only history of a shared tablet.
+ */
+export function isReopenedAfterSync(
+  sheet: Pick<LogSheet, 'localId' | 'status' | 'syncStatus' | 'serverStatus' | 'dueAt'>,
+  now = Date.now()
+): boolean {
+  if (isArchivedSessionSnapshot(sheet)) return false
+  if (sheet.status !== 'submitted' || sheet.syncStatus !== 'synced') return false
+  if (sheet.serverStatus !== 'IN_PROGRESS' && sheet.serverStatus !== 'ASSIGNED') return false
+  return sheet.dueAt != null && sheet.dueAt > now
+}
+
 export function isExpiredDraft(
   sheet: Pick<LogSheet, 'status' | 'dueAt' | 'serverStatus' | 'syncError'>,
   now = Date.now()
@@ -309,6 +339,12 @@ export function resolveLocalLogSheetStatusChip(
 ): { label: string; color: 'primary' | 'warning' | 'success' | 'error' | 'default' } {
   // Synced completion wins over any stale revoke/reassign flag.
   if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') {
+    // …unless the supervisor reopened it. Without this the card keeps reading "ارسال شده"
+    // in History and nothing tells the operator the work is theirs to finish again — the
+    // fill page's continue action would never be found.
+    if (isReopenedAfterSync(sheet)) {
+      return { label: 'بازگشایی شده — قابل ادامه', color: 'warning' }
+    }
     return { label: 'ارسال شده', color: 'success' }
   }
   // Checked regardless of local status (draft or already-submitted-but-not-yet-synced) — a

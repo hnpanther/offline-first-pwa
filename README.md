@@ -620,6 +620,36 @@ Submit is local only until sync succeeds.
 
 **Recheck assignment:** When sync failed with ownership/revoked errors, **Recheck assignment** refreshes inbox, retries outbound sync if needed, and updates local state (e.g. work returned to assignee after supervisor reassignment).
 
+**Continue after a supervisor reopen (online only):** Once a completion has synced, the device
+can no longer undo it — the server owns it. If it has to be corrected, a supervisor **reopens**
+it from the web panel (`POST /log-sheets/{id}/reopen`, with a new deadline), which returns the
+sheet to `IN_PROGRESS` and keeps the readings. Note this is *reopen*, not *extend*: the backend
+refuses to extend a sheet that is already `SUBMITTED`.
+
+The next inbox sync brings the sheet back to the operator's assigned bucket, so the local row
+picks up the new `serverStatus` and `dueAt` while staying `submitted`/`synced` — that
+combination is what [`isReopenedAfterSync`](src/utils/logSheetStatus.ts) recognises. The
+History card then reads **بازگشایی شده — قابل ادامه**, and opening it shows a **«ادامه‌ی کار»**
+button on the fill page.
+
+Pressing it re-fetches the sheet's bundle and re-checks it live
+([`canContinueReopenedLogSheet`](src/utils/logSheetWorkflow.ts)) before anything local changes:
+the sheet must still be `ASSIGNED`/`IN_PROGRESS`, assigned to this user, with a deadline still
+ahead. Only then does the row go back to an editable draft, keeping every reading and dropping
+the delivered submission's `clientActionId` so the corrected resubmission is a new action rather
+than a replay. Every refusal names its own reason (already submitted, cancelled, expired, now
+someone else's, back in the pool).
+
+The live re-check is not ceremony. The inbox response that flagged the sheet may have been read
+from the server *moments before* this device's own submission landed, which would make a
+just-completed sheet look reopened; a fetch issued once the row is already `synced` cannot see
+that state, because the `synced` stamp only exists after the server committed the completion.
+
+> **A reopened sheet that is never resubmitted expires.** Reopening clears the server's
+> `submitted_at` / `draft_saved_at`, so if the new deadline passes untouched the scheduler marks
+> the sheet `EXPIRED` rather than restoring `SUBMITTED` — a completed round becomes a missed one
+> in the compliance report. Reopen only when the correction will actually be made.
+
 ### 6. Status in My Work
 
 | Local state | Chip in inbox list |
@@ -627,6 +657,7 @@ Submit is local only until sync succeeds.
 | Draft, in progress | Server status (e.g. In progress) |
 | Submitted, not synced | **Completed — pending sync** |
 | Submitted, synced | **Sent** |
+| Submitted, synced, server reopened it with a future deadline | **بازگشایی شده — قابل ادامه** |
 
 ### 7. Active inbox UI (`LogSheetListPage` — mode `active`)
 
@@ -653,10 +684,15 @@ A sheet appears in **History** when `isHistoryLogSheet()` is true:
 | Expired local draft | Missed deadline locally |
 | Archived snapshot | User B logged in while User A had work on device — A’s copy moved to archive |
 
+A sheet a supervisor **reopened** stays in History too, deliberately: it is still a delivered
+completion until the operator resumes it, and the «ادامه‌ی کار» button lives on the fill page,
+which is opened from that History card. It carries its own chip so it is not lost among the
+sent ones, and it moves back to **My Work** by itself the moment it becomes a draft again.
+
 Opening a history item:
 
 - Normal `localId` → fill page in read-only or limited edit (submitted / archived).
-- Archived view id (`archivedLogSheetViewId`) → load from `logSheetUserArchives`; **view-only**; cannot edit or re-submit.
+- Archived view id (`archivedLogSheetViewId`) → load from `logSheetUserArchives`; **view-only**; cannot edit or re-submit — including one that looks reopened, since an archive is another login's record, not this user's work.
 
 When the original assignee returns and sync succeeds, stale archive rows for synced work are removed automatically.
 
@@ -697,11 +733,13 @@ When the original assignee returns and sync succeeds, stale archive rows for syn
 | Operator worked offline; supervisor revoked/reassigned | Draft marked `REVOKED` — cannot continue |
 | Operator submitted offline; assignee changed on server | Sync `SUPERSEDED` |
 | Completed before deadline offline; sync after deadline online | Accepted — deadline checked against device `completedAt` |
+| Completion synced, then supervisor **reopened** the sheet | History card reads **بازگشایی شده — قابل ادامه**; «ادامه‌ی کار» on the fill page verifies with the server and returns it to an editable draft with the readings intact |
 
 ### Stale data limitations
 
 - Inbox snapshot may show revoked work until next online sync.
 - Extended deadlines from supervisor apply after inbox sync.
+- A supervisor reopening a synced completion likewise reaches the device only on the next inbox sync, and resuming it requires the server (the device never un-sends an accepted completion on its own).
 - Updated asset metadata (e.g. NFC tag change) applies on the next inbox bundle or online bundle refresh (server wins).
 - Shared tablet: logging in as a different user clears the previous inbox cache and isolates other users’ local work. Archived snapshots for each user are kept in `logSheetUserArchives` and appear under **History** (view-only). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
 
@@ -1181,6 +1219,7 @@ are in a terminal state.
 | Expired draft (deadline passed, never submitted) | **24 hours**, then deleted | `dueAt` → `updatedAt` → `createdAt` |
 | Active draft (in progress, not expired) | **Never** auto-deleted | — |
 | Submitted, pending sync | **Never** auto-deleted — kept until the server answers | — |
+| Synced, then **reopened** by a supervisor | **Never** while the new deadline stands; purged on the ordinary rules once it passes | `dueAt` decides whether the reopen is still live |
 | **Archived snapshots** (`logSheetUserArchives`) | **Never** auto-deleted | — |
 
 **What this means for operators:** a completed log sheet stays visible under **History**
@@ -1188,6 +1227,12 @@ on the device for roughly one day after it syncs; a rejected one for a week. Aft
 the local copy is purged to keep the tablet small — the record itself still lives on the
 server and remains visible in the web admin panel. Only the **device-local** history is
 time-limited.
+
+**A reopened completion is held back from the purge on purpose.** It is live work again, and
+the local row is where the continue action lives — but it is also the only place `filledVia`
+survives, since the server never returns it. Re-downloading a purged copy would lose which
+assets were filled manually, and editing one of those after the reopen would then re-stamp its
+`entry_source` as `PWA_NFC` despite no scan ever happening.
 
 **Archived snapshots are the exception and are kept indefinitely.** They are the only
 copy of work that never reached the server (another user took the sheet over on the same
