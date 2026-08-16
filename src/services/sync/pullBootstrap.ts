@@ -7,8 +7,9 @@ import { db } from '@/services/storage/db'
 import { getSettings, saveSettings } from '@/services/storage'
 import { fetchBootstrap } from '@/services/api'
 import type { BootstrapResponse } from '@/services/api'
+import { useAppStore } from '@/store'
 import { toIdString } from '@/utils/ids'
-import type { OperationalUnit } from '@/types'
+import type { AppSettings, OperationalUnit } from '@/types'
 
 export type PullStatus = 'idle' | 'pulling' | 'success' | 'error'
 
@@ -60,7 +61,7 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
     // would overwrite the first with its own stale snapshot.
     if (data.attachmentLimits || data.mobilePolicy) {
       const settings = await getSettings()
-      await saveSettings({
+      const merged: AppSettings = {
         ...settings,
         ...(data.attachmentLimits ? { attachmentLimits: data.attachmentLimits } : {}),
         ...(data.mobilePolicy
@@ -69,7 +70,21 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
               nfcStrictSerialMatch: data.mobilePolicy.nfcStrictSerialMatch
             }
           : {})
-      })
+      }
+      await saveSettings(merged)
+      // Publish to the store as well, and this is not optional bookkeeping.
+      //
+      // `useSettings` reads the settings row **once** per app lifetime and caches it in the
+      // store; nothing re-reads IndexedDB afterwards, and signing out and back in does not
+      // reload the page. Writing only to IndexedDB therefore left every store consumer on the
+      // value that happened to be there when the tab was opened: the Settings screen reported
+      // a policy the device was no longer running under, and — worse — the fill page kept
+      // scanning under the *old* `nfcStrictSerialMatch` until someone restarted the app.
+      //
+      // Worse still, the Settings form re-submits the server-owned fields it was initialised
+      // with, so a save from that stale snapshot wrote the outdated policy straight back into
+      // IndexedDB. One line here closes all three.
+      useAppStore.getState().setSettings(merged)
     }
 
     await setLastBootstrapAt(data.serverTime)

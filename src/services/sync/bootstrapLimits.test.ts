@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db, DEFAULT_SETTINGS } from '@/services/storage/db'
 import { getSettings, saveSettings } from '@/services/storage'
 import { pullBootstrap, pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
+import { useAppStore } from '@/store'
 
 const fetchBootstrap = vi.fn()
 vi.mock('@/services/api', () => ({
@@ -231,5 +232,70 @@ describe('mobile policy over bootstrap', () => {
     await pullBootstrap()
 
     expect((await getSettings()).nfcStrictSerialMatch).toBe(true)
+  })
+})
+
+/**
+ * Writing the refreshed values into the **store**, not only into IndexedDB.
+ *
+ * `useSettings` reads the settings row once per app lifetime and caches it in the store;
+ * nothing re-reads it afterwards, and signing out and back in does not reload the page. So a
+ * bootstrap that only wrote IndexedDB left every store consumer on the value that happened to
+ * be there when the tab was opened — the Settings screen reported a policy the device was not
+ * running under, and the fill page kept scanning under the previous `nfcStrictSerialMatch`.
+ *
+ * Reported from the field as "I disabled photo annotation in the panel, signed out and back
+ * in, and the app still shows it enabled".
+ */
+describe('the store follows the server, not just IndexedDB', () => {
+  beforeEach(() => {
+    useAppStore.getState().setSettings({ ...DEFAULT_SETTINGS })
+  })
+
+  it('publishes a refreshed policy to the store so open screens stop showing the old one', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        mobilePolicy: { imageAnnotationEnabled: false, nfcStrictSerialMatch: false }
+      })
+    )
+
+    await pullBootstrap()
+
+    const inStore = useAppStore.getState().settings
+    expect(inStore.imageAnnotationEnabled).toBe(false)
+    expect(inStore.nfcStrictSerialMatch).toBe(false)
+    // …and the two never disagree, which is the actual invariant.
+    expect(inStore).toEqual(await getSettings())
+  })
+
+  it('publishes refreshed ceilings too', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
+
+    await pullBootstrap()
+
+    expect(useAppStore.getState().settings.attachmentLimits).toEqual(LIMITS)
+  })
+
+  it('leaves the device-owned settings in the store untouched', async () => {
+    // The store carries the tablet's own configuration as well; a policy refresh must not
+    // reset the server URL somebody typed on that device.
+    await saveSettings({ ...DEFAULT_SETTINGS, serverUrl: 'https://plant.example' })
+    useAppStore.getState().setSettings({ ...DEFAULT_SETTINGS, serverUrl: 'https://plant.example' })
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({ mobilePolicy: { imageAnnotationEnabled: false, nfcStrictSerialMatch: true } })
+    )
+
+    await pullBootstrap()
+
+    expect(useAppStore.getState().settings.serverUrl).toBe('https://plant.example')
+  })
+
+  it('does not touch the store when the server sends no policy and no ceilings', async () => {
+    useAppStore.getState().setSettings({ ...DEFAULT_SETTINGS, imageAnnotationEnabled: false })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload())
+
+    await pullBootstrap()
+
+    expect(useAppStore.getState().settings.imageAnnotationEnabled).toBe(false)
   })
 })

@@ -643,6 +643,18 @@ export function AttachmentFieldInput({
   )
 }
 
+/**
+ * Upload state for one file, and — when the server refused it — the reason **in full**.
+ *
+ * The reason used to be crammed into the chip's own label, where MUI truncates it to one line
+ * with an ellipsis. The server's message is the only thing that says *why* a photo was refused
+ * ("the attachment limit for this field has been reached", "asset is not part of this log
+ * sheet", …) and it is exactly the part that got cut off — leaving an operator, and whoever
+ * they call, staring at «رد شد توسط سرور …» with nothing to act on.
+ *
+ * So the chip stays short and fixed, and the message is rendered underneath as ordinary
+ * wrapping text: selectable, copyable, and never clipped however long it is.
+ */
 function SyncChip({
   status,
   error,
@@ -657,19 +669,35 @@ function SyncChip({
   }
   if (status === 'failed') {
     return (
-      <Chip
-        size="small"
-        color="error"
-        // A parked row reads differently from a retrying one: filled rather than outlined, and
-        // labelled as a refusal, because nothing will change until someone acts.
-        variant={parked ? 'filled' : 'outlined'}
-        icon={<ErrorOutlineIcon />}
-        label={
-          parked
-            ? `${t.attachments.rejected}${error ? ` — ${error}` : ''}`
-            : error || t.attachments.uploadFailed
-        }
-      />
+      <Box>
+        <Chip
+          size="small"
+          color="error"
+          // A parked row reads differently from a retrying one: filled rather than outlined,
+          // and labelled as a refusal, because nothing will change until someone acts.
+          variant={parked ? 'filled' : 'outlined'}
+          icon={<ErrorOutlineIcon />}
+          label={parked ? t.attachments.rejected : t.attachments.uploadFailed}
+        />
+        {error && (
+          <Typography
+            variant="caption"
+            color="error"
+            component="div"
+            sx={{
+              mt: 0.5,
+              // The two that matter: wrap instead of clipping, and keep the server's own line
+              // breaks. `user-select` because the first thing anyone does with a server error
+              // is copy it into a message to whoever can fix it.
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+              userSelect: 'text'
+            }}
+          >
+            {error}
+          </Typography>
+        )}
+      </Box>
     )
   }
   return <Chip size="small" variant="outlined" icon={<CloudQueueIcon />} label={t.attachments.pending} />

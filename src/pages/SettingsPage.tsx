@@ -13,6 +13,7 @@ import SaveIcon from '@mui/icons-material/Save'
 import { useForm, Controller } from 'react-hook-form'
 import { useState } from 'react'
 import { useSettings } from '@/hooks/useSettings'
+import { getSettings } from '@/services/storage'
 import { useAuth } from '@/hooks/useAuth'
 import { hasPlantWideScope } from '@/types/auth'
 import { t } from '@/i18n'
@@ -38,18 +39,22 @@ export function SettingsPage() {
   })
 
   const onSubmit = async (data: AppSettings) => {
+    // Re-read the stored row instead of trusting the snapshot this form was built from. The
+    // server-owned values below can change under an open page — a bootstrap runs on every
+    // reconnect — and a form initialised minutes ago would otherwise write the policy it
+    // remembers back over the one the server has since sent. That is not a cosmetic race: for
+    // `nfcStrictSerialMatch` it would silently restore a scan rule an administrator changed.
+    const stored = await getSettings()
     await updateSettings({
       ...data,
       // Already milliseconds: the field converts on the way in and out (see below). Converting
       // again here multiplied the interval by 1000 on every save — including a save where
       // nobody touched the field — so 30 seconds silently became 30,000 and grew from there.
       syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
-      // None of these are written from this screen. The form was initialised from a snapshot,
-      // so submitting it back could overwrite a value a bootstrap refreshed while the page was
-      // open — and the device is not the owner of any of them in the first place.
-      attachmentLimits: limits,
-      nfcStrictSerialMatch: settings.nfcStrictSerialMatch,
-      imageAnnotationEnabled: settings.imageAnnotationEnabled
+      // None of these are written from this screen; the device is not their owner.
+      attachmentLimits: stored.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits,
+      nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
+      imageAnnotationEnabled: stored.imageAnnotationEnabled
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
