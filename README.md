@@ -470,10 +470,22 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 | **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). |
 | **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
 
-> There is no operator-name or location field any more. The signed-in user's own name is used wherever a name is needed (log-sheet operator label, NFC fault-report reporter) — on a shared tablet a device-wide typed name attributed everyone's work to whoever the admin entered once.
-| **Allow manual tag entry** | When on, all roles may type NFC IDs on the fill page. When off, only supervisor / senior operator / users with web fill permission. |
 | **Screen orientation** (`screenOrientation`, admin-only) | `auto` (default), `portrait` or `landscape`. Stored **on the device** and never synced — it depends on how that particular tablet is mounted, so a shared account must not drag one device's choice onto another. Re-applied on every launch, because an orientation lock does not survive the app closing. Locking generally works only in the **installed** PWA on Android; where the browser cannot lock (desktop, iOS Safari) the app simply rotates freely and the Settings screen says so once. |
-| **Chip-serial scan check** (`nfcStrictSerialMatch`, admin-only switch) | **On by default** — a scan must match *both* the tag's Record 1 payload and the chip's hardware serial (the asset's stored `nfcSerial`), and an asset with no serial recorded is rejected. Record 1 alone can be copied onto any blank tag, so the serial is what makes "I scanned the right asset" mean something. An admin can relax it per device to Record 1 alone — useful while serials are still being recorded. Applies to real scans only; manual tag entry and the NFC-fault fallback are unaffected. **Devices that already stored a choice keep it**, since `getSettings()` spreads the saved row over the defaults — this changes new installations only, never a tablet mid-shift. |
+
+> There is no operator-name or location field any more. The signed-in user's own name is used wherever a name is needed (log-sheet operator label, NFC fault-report reporter) — on a shared tablet a device-wide typed name attributed everyone's work to whoever the admin entered once.
+
+### What this screen no longer decides
+
+Two switches were removed from it, and neither moved somewhere else on the device.
+
+| Was a device switch | Now |
+|---|---|
+| **Allow manual tag entry** | **A permission.** The manual-entry box appears for whoever holds `GET:/log-sheets/{id}/fill` (supervisor / senior operator) and for nobody else. As a switch it granted the ability to *everyone* on that tablet, so anyone who could open Settings could let a whole shift type tags instead of scanning them — which is the entire point of the NFC step. Who may skip a scan is an access-control question, so access control answers it. Unrelated to the NFC-fault fallback, which unlocks one asset after a report is filed. |
+| **Chip-serial scan check** (`nfcStrictSerialMatch`) | **A plant-wide rule set in the web panel** (Settings → اسکن NFC, on by default), shipped on `/api/bootstrap` and applied without a restart. Record 1 can be copied onto any blank tag, so the serial is the only part of a scan that means "I stood in front of this equipment" — one plant, one answer, rather than each tablet deciding for itself. |
+
+The Settings screen now **shows** both, read-only and admin-only, alongside the attachment
+ceilings, so an admin can see which rules a device is running under. Also listed there:
+**علامت‌گذاری روی عکس** — the annotate-before-save step, likewise set in the web panel.
 
 ### Server URL rules (`src/services/api/client.ts`)
 
@@ -972,6 +984,47 @@ so a stale form cannot overwrite ceilings a bootstrap refreshed in the meantime.
 
 If the server is older than this feature, or a pull fails, the app keeps whatever it last
 stored — offline capture has to keep working against the last known rules.
+
+### Marking up a photo before it is saved
+
+**Setting:** «علامت‌گذاری روی عکس» in the web panel's Settings page (`attachments.image_annotation_enabled`), **on by default**, carried to the device on the same
+bootstrap as the ceilings.
+
+With it on, a photo is **not stored the moment it is taken**. The operator gets a full-screen
+review of the shot with:
+
+| Tool | |
+|---|---|
+| Freehand pen | drawing directly on the photo |
+| Arrow | for pointing at one fitting among twenty |
+| Box | for framing an area |
+| Text | typed in a normal field, then placed on the image |
+| Colours | six, including white and black — plant surfaces are neither |
+| Widths | three, scaled to the image so a mark reads the same on any photo |
+| Undo / redo / clear | clear is undoable too |
+
+Then **ذخیره**, **گرفتن دوباره** (throw the shot away and reopen the camera), or **انصراف**
+(keep nothing). Nothing reaches IndexedDB until one of those is chosen, so a cancelled capture
+leaves no orphan row and no orphan blob.
+
+The marks are **burned into the image** before it is stored. The attachment that syncs, the one
+the upload queue carries and the one a reviewer opens in the web panel are all the same
+annotated file — there is no overlay to render separately and nothing extra crosses the wire.
+Confirming without drawing anything stores the original bytes with no second encode at all.
+
+Two implementation details that are load-bearing rather than incidental:
+
+- **The annotation is applied to the compressed capture, not to the camera's original file.**
+  The compressed bitmap is what gets stored either way, so drawing on it guarantees a mark lands
+  in the saved file exactly where the operator put it. On the raw file, EXIF orientation can
+  differ between what a preview shows and what a later decode produces — every mark would be
+  rotated off its target.
+- **Marks are stored as shapes and re-rendered, not painted onto a canvas as you go.** That is
+  what makes undo, redo and clear cheap; the alternative is a full-canvas bitmap snapshot per
+  step, several megabytes each on a 1600 px photo.
+
+With the setting off, the capture path is exactly what it was before this existed: compress,
+store, done, no extra step.
 
 ### Capture and compression
 

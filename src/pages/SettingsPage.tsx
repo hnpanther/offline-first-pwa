@@ -7,9 +7,7 @@ import {
   Button,
   Alert,
   Divider,
-  InputAdornment,
-  FormControlLabel,
-  Switch
+  InputAdornment
 } from '@mui/material'
 import SaveIcon from '@mui/icons-material/Save'
 import { useForm, Controller } from 'react-hook-form'
@@ -46,10 +44,12 @@ export function SettingsPage() {
       // again here multiplied the interval by 1000 on every save — including a save where
       // nobody touched the field — so 30 seconds silently became 30,000 and grew from there.
       syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
-      // Never written from this screen. The form was initialised from a snapshot, so
-      // submitting it back could overwrite ceilings a bootstrap refreshed in the meantime —
-      // and the device is not the owner of these values in the first place.
-      attachmentLimits: limits
+      // None of these are written from this screen. The form was initialised from a snapshot,
+      // so submitting it back could overwrite a value a bootstrap refreshed while the page was
+      // open — and the device is not the owner of any of them in the first place.
+      attachmentLimits: limits,
+      nfcStrictSerialMatch: settings.nfcStrictSerialMatch,
+      imageAnnotationEnabled: settings.imageAnnotationEnabled
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
@@ -111,71 +111,52 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* NFC settings */}
-      <Card>
-        <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <Typography variant="subtitle1" fontWeight={600} color="text.secondary">
-            {t.settings.nfcSection}
-          </Typography>
-
-          <Controller
-            name="allowManualEntry"
-            control={control}
-            render={({ field }) => (
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={!!field.value}
-                    onChange={e => field.onChange(e.target.checked)}
-                  />
-                }
-                label={
-                  <Box>
-                    <Typography variant="body2">{t.settings.allowManualEntry}</Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {t.settings.allowManualEntryHint}
-                    </Typography>
-                  </Box>
-                }
-                sx={{ alignItems: 'flex-start', mt: 0.5 }}
-              />
-            )}
-          />
-
-          <Divider sx={{ my: 0.5 }} />
-
-          {/* Admin-only: tightening the scan rule is a site-wide policy decision. */}
-          <Controller
-            name="nfcStrictSerialMatch"
-            control={control}
-            render={({ field }) => (
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={!!field.value}
-                    disabled={!isAdmin}
-                    onChange={e => field.onChange(e.target.checked)}
-                  />
-                }
-                label={
-                  <Box>
-                    <Typography variant="body2">{t.settings.strictSerialMatch}</Typography>
-                    <Typography variant="caption" color="text.secondary" component="div">
-                      {t.settings.strictSerialMatchHint}
-                    </Typography>
-                    {!isAdmin && (
-                      <Typography variant="caption" color="text.disabled" component="div">
-                        {t.settings.strictSerialMatchAdminOnly}
-                      </Typography>
-                    )}
-                  </Box>
-                }
-                sx={{ alignItems: 'flex-start', mt: 0.5 }}
-              />
-            )}
-          />
-        </CardContent>
-      </Card>
+      {/* Rules the device follows but does not own — shown, never edited.
+          Manual tag entry used to be a switch here; it is now decided by the signed-in user's
+          own permission, which is why nothing about it appears on this screen at all. */}
+      {isAdmin && (
+        <Card variant="outlined">
+          <CardContent>
+            <Typography variant="subtitle1" fontWeight={700} gutterBottom>
+              {t.settings.serverPolicyTitle}
+            </Typography>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {t.settings.serverPolicyHint}
+            </Alert>
+            <Box
+              component="dl"
+              sx={{ m: 0, display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 1.5, columnGap: 2 }}
+            >
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.strictSerialMatch}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.strictSerialMatchHint}
+                  </Typography>
+                </Box>
+                <Typography component="dd" variant="body2" fontWeight={700} sx={{ m: 0 }}>
+                  {settings.nfcStrictSerialMatch ? t.settings.policyOn : t.settings.policyOff}
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.imageAnnotation}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.imageAnnotationHint}
+                  </Typography>
+                </Box>
+                <Typography component="dd" variant="body2" fontWeight={700} sx={{ m: 0 }}>
+                  {settings.imageAnnotationEnabled ? t.settings.policyOn : t.settings.policyOff}
+                </Typography>
+              </Box>
+            </Box>
+          </CardContent>
+        </Card>
+      )}
 
       {/* A device preference, not an account one — which is why it lives here and never syncs.
           Admin-only to change, like the NFC scan rule: an operator flipping the orientation of
@@ -240,7 +221,7 @@ export function SettingsPage() {
 
           {!isAdmin && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-              {t.settings.strictSerialMatchAdminOnly}
+              {t.settings.adminOnly}
             </Typography>
           )}
         </CardContent>

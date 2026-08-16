@@ -397,7 +397,7 @@ export function LogSheetFillPage() {
     [sessionUserId, inboxAssignedIds, navigate]
   )
 
-  const allowManualEntry = canEnterTagManually(authSession ?? null, settings.allowManualEntry)
+  const allowManualEntry = canEnterTagManually(authSession ?? null)
   // Must mirror the sync layer's own gate (services/sync/index.ts `canSyncFaultReports`) —
   // filing a report the user can't sync would just strand it locally forever, unsynced,
   // with no visible error.
@@ -1273,7 +1273,7 @@ export function LogSheetFillPage() {
         <Alert severity="info" sx={{ mb: 2 }}>
           {allowManualEntry
             ? 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، تگ NFC را اسکن کنید یا شناسه را دستی وارد کنید.'
-            : 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، فقط از اسکن NFC استفاده کنید.'}
+            : 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، تگ NFC را اسکن کنید. اگر تگ خراب است، با «اعلام خرابی NFC» ثبت دستی همان Asset باز می‌شود.'}
         </Alert>
       )}
 

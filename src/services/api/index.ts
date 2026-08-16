@@ -238,6 +238,15 @@ export interface BootstrapResponse {
     maxAudioSeconds: number
     maxVideoSeconds: number
   }
+  /**
+   * Rules the device follows but does not own. Optional for the same reason as the ceilings
+   * above — an older server simply says nothing and the tablet keeps what it has, which is
+   * the only safe answer for a policy that cannot be re-derived locally.
+   */
+  mobilePolicy?: {
+    imageAnnotationEnabled: boolean
+    nfcStrictSerialMatch: boolean
+  }
 }
 
 /** @deprecated Use BootstrapResponse */

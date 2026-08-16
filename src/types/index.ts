@@ -93,18 +93,28 @@ export type ScreenOrientationMode = 'auto' | 'portrait' | 'landscape'
 export interface AppSettings {
   serverUrl: string
   syncIntervalMs: number
-  allowManualEntry: boolean
   /**
-   * When on, an NFC scan on the log-sheet fill page must match BOTH the Record 1
-   * payload and the asset's stored chip serial. Off by default — the app's
-   * original Record-1-only behaviour.
+   * When on, an NFC scan on the log-sheet fill page must match BOTH the Record 1 payload and
+   * the asset's stored chip serial.
+   *
+   * **Server-owned and no longer editable anywhere** — not on the device, not in the web panel.
+   * Record 1 alone can be copied onto a blank tag, so the serial is the only part of a scan
+   * that means "I stood in front of this equipment"; that is an integrity rule rather than a
+   * preference, and it now ships from `app.nfc.strict-serial-match` on every bootstrap. The
+   * value here is a mirror kept so scanning still works offline.
    */
   nfcStrictSerialMatch: boolean
+  /**
+   * Whether the camera flow offers the annotate-before-save step. Server-owned like the
+   * ceilings below, admin-editable in the web panel. Off reproduces the original capture path
+   * exactly: the photo is compressed and stored with no extra step.
+   */
+  imageAnnotationEnabled: boolean
   /**
    * How the app should sit on the device: follow rotation, or stay locked one way.
    *
    * A **device** preference, not an account one — it depends on how that particular tablet is
-   * mounted — so it stays local and never syncs. Admin-only to change, like the NFC scan rule.
+   * mounted — so it stays local and never syncs. Admin-only to change.
    */
   screenOrientation: ScreenOrientationMode
   /**

@@ -108,16 +108,19 @@ export function canAssignWork(session: AuthSession | null): boolean {
 }
 
 /**
- * Manual tag entry: the site-wide setting, or the right to fill a sheet in the browser.
+ * Manual tag entry: the right to fill a sheet without standing at the equipment.
  *
- * The role branch that used to sit here (`SUPERVISOR || SENIOR_OPERATOR`) was redundant — every
- * role holding either also holds `GET:/log-sheets/{id}/fill`, and ADMIN/HIGH_USER reached it
- * through that permission already. Dropping it changes nothing and makes the rule copyable.
+ * **Permission, and nothing else.** Two earlier gates were removed on purpose. A hardcoded
+ * `SUPERVISOR || SENIOR_OPERATOR` branch went first: every role holding either also holds
+ * `GET:/log-sheets/{id}/fill`, and keying the rule to a role *name* meant a duplicated role
+ * did not inherit it. Then the device-level `allowManualEntry` switch went too — it let anyone
+ * who could reach a tablet's Settings screen hand every operator on that tablet the ability to
+ * type a tag instead of scanning one, which is the entire point of the NFC step. Who may skip
+ * a scan is an access-control decision, so access control is what answers it.
+ *
+ * Unrelated to the NFC-fault fallback, which unlocks one asset after a report is filed and is
+ * gated by its own permission.
  */
-export function canEnterTagManually(
-  session: AuthSession | null,
-  settingsEnabled: boolean
-): boolean {
-  if (settingsEnabled) return true
+export function canEnterTagManually(session: AuthSession | null): boolean {
   return hasPermission(session, PERM_WEB_FILL)
 }

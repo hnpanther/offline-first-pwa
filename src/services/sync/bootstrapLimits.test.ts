@@ -60,14 +60,15 @@ describe('attachment limits over bootstrap', () => {
     expect((await getSettings()).attachmentLimits).toEqual(LIMITS)
   })
 
-  it('keeps every other device setting untouched', async () => {
-    // The device owns serverUrl and the NFC policies; the server owns the ceilings. A refresh
-    // of one must not clobber the other, or a sync would silently reset the tablet's config.
+  it('keeps the settings the device does own untouched', async () => {
+    // serverUrl and the sync interval are the tablet's own; the ceilings and policies are the
+    // server's. A refresh of one must not clobber the other, or a sync would silently reset
+    // the connection settings somebody configured on that device.
     await saveSettings({
       ...DEFAULT_SETTINGS,
       serverUrl: 'https://plant.example',
-      allowManualEntry: true,
-      nfcStrictSerialMatch: true
+      syncIntervalMs: 45_000,
+      screenOrientation: 'landscape'
     })
     fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
 
@@ -75,8 +76,8 @@ describe('attachment limits over bootstrap', () => {
 
     const settings = await getSettings()
     expect(settings.serverUrl).toBe('https://plant.example')
-    expect(settings.allowManualEntry).toBe(true)
-    expect(settings.nfcStrictSerialMatch).toBe(true)
+    expect(settings.syncIntervalMs).toBe(45_000)
+    expect(settings.screenOrientation).toBe('landscape')
     expect(settings.attachmentLimits).toEqual(LIMITS)
   })
 
@@ -140,5 +141,95 @@ describe('attachment limits over bootstrap', () => {
     await pullBootstrap()
 
     expect((await getSettings()).attachmentLimits).toEqual(tightened)
+  })
+})
+
+/**
+ * Rules the device follows but does not own: the scan policy (a deployment property, editable
+ * nowhere in the UI) and the annotate-before-save switch (admin-editable in the web panel).
+ *
+ * They travel on bootstrap for the same reason the ceilings do — it is the one call every
+ * reconnect already makes — and they are held to the same two rules: a change must actually
+ * reach the device, and a server that says nothing must never reset one.
+ */
+describe('mobile policy over bootstrap', () => {
+  const POLICY = { imageAnnotationEnabled: false, nfcStrictSerialMatch: false }
+
+  it('ships with the strict rule and annotation on, before any sync', async () => {
+    const settings = await getSettings()
+    expect(settings.nfcStrictSerialMatch).toBe(true)
+    expect(settings.imageAnnotationEnabled).toBe(true)
+  })
+
+  it('adopts the server policy on a successful pull', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ mobilePolicy: POLICY }))
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.nfcStrictSerialMatch).toBe(false)
+    expect(settings.imageAnnotationEnabled).toBe(false)
+  })
+
+  it('applies the policy even when the payload carries no ceilings', async () => {
+    // The two blocks are independent; gating the policy write on attachmentLimits being
+    // present would make it depend on an unrelated part of the response.
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({ mobilePolicy: { imageAnnotationEnabled: false, nfcStrictSerialMatch: true } })
+    )
+
+    await pullBootstrap()
+
+    expect((await getSettings()).imageAnnotationEnabled).toBe(false)
+  })
+
+  it('applies both blocks in the same pull without either overwriting the other', async () => {
+    // Two read-modify-write passes over the settings row would race, and the second would win
+    // with its own stale copy — losing whichever block was written first.
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({ attachmentLimits: LIMITS, mobilePolicy: POLICY })
+    )
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.attachmentLimits).toEqual(LIMITS)
+    expect(settings.imageAnnotationEnabled).toBe(false)
+    expect(settings.nfcStrictSerialMatch).toBe(false)
+  })
+
+  it('leaves the stored policy alone when the server sends none', async () => {
+    // An older server. Falling back to defaults here would silently re-enable a step an
+    // administrator had switched off — and, worse, could hand a device a scan rule nobody chose.
+    await saveSettings({ ...DEFAULT_SETTINGS, ...POLICY })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.nfcStrictSerialMatch).toBe(false)
+    expect(settings.imageAnnotationEnabled).toBe(false)
+  })
+
+  it('leaves the stored policy alone when the pull fails', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, ...POLICY })
+    fetchBootstrap.mockRejectedValue(new Error('offline'))
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.nfcStrictSerialMatch).toBe(false)
+    expect(settings.imageAnnotationEnabled).toBe(false)
+  })
+
+  it('re-tightens the scan rule when the server turns it back on', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, nfcStrictSerialMatch: false })
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({ mobilePolicy: { imageAnnotationEnabled: true, nfcStrictSerialMatch: true } })
+    )
+
+    await pullBootstrap()
+
+    expect((await getSettings()).nfcStrictSerialMatch).toBe(true)
   })
 })

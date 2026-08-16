@@ -31,13 +31,35 @@ re-tagging: the new asset inherits the same sub-function and therefore the same 
 
 ## Strict serial mode
 
-`nfcStrictSerialMatch` — **on by default**, admin-only to change.
+`nfcStrictSerialMatch` — **on by default, and owned by the server.**
 
 With it on, a scan must match **both** Record 1 **and** the recorded `nfc_serial`. Record 1 is
 writable by anyone with a phone; the hardware serial is not. Checking only the logical tag
 means a cloned chip passes.
 
 An asset's serial is recorded the first time an admin scans it from the NFC inspect page.
+
+**The device cannot change it.** It arrives in the bootstrap payload's `mobilePolicy` from the
+backend's `nfc.strict_serial_match` setting; the value in `settings` is a mirror kept so scanning
+still works offline. It was a switch on this screen once, which made the integrity of every
+reading depend on a control an operator could reach — and let two tablets in one plant disagree
+about what a valid scan is.
+
+An administrator changes it in the **web panel's Settings page**, with no restart, for the one
+real case: a site whose serials are not recorded yet, where strict mode rejects every scan.
+
+## Typing a tag instead of scanning it
+
+`canEnterTagManually` — **a permission, not a setting.** The manual-entry box appears for whoever
+holds `GET:/log-sheets/{id}/fill` (supervisor / senior operator) and for nobody else.
+
+The device switch that used to grant it (`allowManualEntry`) is gone. It returned true for every
+caller, so anyone who could open the Settings screen could hand a whole shift the ability to type
+a tag instead of scanning one. Being a permission also means a **duplicated role inherits it**,
+which a role-name check never did.
+
+Distinct from the fault-report fallback below, which unlocks manual entry for **one asset** after
+a report is filed.
 
 ## Scan failures are deliberately opaque
 
@@ -79,6 +101,35 @@ photo; a round with a dozen photos would be 100 MB in IndexedDB and an unusable 
 plant Wi-Fi.
 
 Video is captured with strict size control for the same reason, more urgently.
+
+## Annotating a photo before it is stored
+
+**Code:** [`src/utils/imageAnnotation.ts`](../src/utils/imageAnnotation.ts),
+[`src/components/forms/ImageAnnotationDialog.tsx`](../src/components/forms/ImageAnnotationDialog.tsx)
+
+Server-owned switch (`imageAnnotationEnabled`, on by default, admin-editable in the web panel).
+With it on, a captured photo goes to a review step — pen, arrow, box, text, colours, widths,
+undo/redo/clear — and is stored only when the operator confirms. Off, the capture path is exactly
+what it was before: compress, store.
+
+Three decisions carry the whole feature:
+
+1. **It runs on the compressed capture, never the camera's raw file.** The compressed bitmap is
+   what gets stored either way, so a mark drawn on it lands in the saved file exactly where the
+   operator put it. On the raw file, EXIF orientation can differ between the preview and a later
+   decode, and every mark would be rotated off its target.
+2. **Marks are data, re-rendered on every change — not paint.** Undo, redo and clear are then
+   array operations rather than full-canvas bitmap snapshots of several megabytes each.
+3. **Coordinates are normalised to 0..1 of the image.** The canvas is displayed at whatever width
+   the screen allows and baked at the image's real size; a stroke recorded in screen pixels would
+   land elsewhere in the saved file, and would move again if the tablet rotated mid-annotation.
+
+The result is baked into the image before storage, so nothing downstream changes: one blob, the
+same upload queue, the same `width`/`height`, and a reviewer in the web panel opens the annotated
+file itself rather than an overlay something has to re-render.
+
+Confirming with no marks returns the original blob untouched — no second encode, no extra
+generation of lossy compression.
 
 ## Limits come from the server
 

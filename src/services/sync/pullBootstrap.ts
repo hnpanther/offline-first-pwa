@@ -50,12 +50,26 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
       await db.operationalUnits.bulkPut(units)
     }
 
-    // Attachment ceilings are server-owned. Refreshing them here is what makes an admin's
-    // change in the web panel take effect on every tablet without anyone touching the device.
-    // A server that does not send them leaves whatever the device already had.
-    if (data.attachmentLimits) {
+    // Ceilings and policies are server-owned. Refreshing them here is what makes a change in
+    // the web panel (or in the deployment's own configuration) take effect on every tablet
+    // without anyone touching the device. A server that does not send a block leaves whatever
+    // the device already had — never a reset to defaults, which would silently widen a limit
+    // or weaken the scan rule someone tightened.
+    //
+    // Both blocks land in one write. Two read-modify-write passes would race and the second
+    // would overwrite the first with its own stale snapshot.
+    if (data.attachmentLimits || data.mobilePolicy) {
       const settings = await getSettings()
-      await saveSettings({ ...settings, attachmentLimits: data.attachmentLimits })
+      await saveSettings({
+        ...settings,
+        ...(data.attachmentLimits ? { attachmentLimits: data.attachmentLimits } : {}),
+        ...(data.mobilePolicy
+          ? {
+              imageAnnotationEnabled: data.mobilePolicy.imageAnnotationEnabled,
+              nfcStrictSerialMatch: data.mobilePolicy.nfcStrictSerialMatch
+            }
+          : {})
+      })
     }
 
     await setLastBootstrapAt(data.serverTime)

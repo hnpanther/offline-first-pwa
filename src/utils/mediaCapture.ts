@@ -85,12 +85,7 @@ export async function compressImage(
     if (!ctx) throw new Error('canvas 2d context unavailable')
     ctx.drawImage(bitmap, 0, 0, width, height)
 
-    const blob =
-      (await canvasToBlob(canvas, 'image/webp', quality)) ??
-      (await canvasToBlob(canvas, 'image/jpeg', quality))
-    if (!blob) throw new Error('image encoding failed')
-
-    return { blob, width, height }
+    return { blob: await encodeCanvasImage(canvas, quality), width, height }
   } finally {
     // ImageBitmap holds decoded pixels — on a 12 MP photo that is ~48 MB of memory.
     bitmap.close?.()
@@ -376,6 +371,25 @@ export function formatBytes(bytes: number | undefined): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/**
+ * Encodes a canvas the way every image in this app is encoded: WebP, falling back to JPEG.
+ *
+ * Shared with the annotation step so a marked-up photo cannot end up in a different format
+ * from a plain one — the server sniffs magic bytes and only ever sees the two it already
+ * accepts. A failed encode is an error rather than a silent pass-through: handing back the
+ * unencoded original would defeat the compression this whole module exists for.
+ */
+export async function encodeCanvasImage(
+  canvas: HTMLCanvasElement,
+  quality = IMAGE_QUALITY
+): Promise<Blob> {
+  const blob =
+    (await canvasToBlob(canvas, 'image/webp', quality)) ??
+    (await canvasToBlob(canvas, 'image/jpeg', quality))
+  if (!blob) throw new Error('image encoding failed')
+  return blob
 }
 
 async function loadBitmap(file: Blob): Promise<ImageBitmap> {

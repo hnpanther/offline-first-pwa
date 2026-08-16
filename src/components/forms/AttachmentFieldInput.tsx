@@ -41,6 +41,7 @@ import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import type { AttachmentLimits } from '@/types'
 import { downloadAttachment } from '@/services/api'
 import { getStorageStatus } from '@/utils/storageQuota'
+import { ImageAnnotationDialog, type AnnotatedImage } from '@/components/forms/ImageAnnotationDialog'
 import {
   describeMediaError,
   getMicrophonePermission
@@ -89,6 +90,16 @@ export function AttachmentFieldInput({
   const [recorder, setRecorder] = useState<AudioRecorderHandle | null>(null)
   const [videoRecorder, setVideoRecorder] = useState<VideoRecorderHandle | null>(null)
   const [limits, setLimits] = useState<AttachmentLimits>(DEFAULT_SETTINGS.attachmentLimits)
+  // Server-owned, read alongside the ceilings. A capture already in the review step is not
+  // interrupted if this flips mid-shift — the dialog is driven by pendingCapture, not by this.
+  const [annotationEnabled, setAnnotationEnabled] = useState(
+    DEFAULT_SETTINGS.imageAnnotationEnabled
+  )
+  const [pendingCapture, setPendingCapture] = useState<{
+    blob: Blob
+    width: number
+    height: number
+  } | null>(null)
   const previewRef = useRef<HTMLVideoElement>(null)
   // When set, the alert also shows how to re-enable the microphone. Kept separate from the
   // plain error string because the fix lives outside the app and needs real instructions.
@@ -140,6 +151,7 @@ export function AttachmentFieldInput({
   useEffect(() => {
     void getSettings().then(s => {
       if (s.attachmentLimits) setLimits(s.attachmentLimits)
+      setAnnotationEnabled(s.imageAnnotationEnabled !== false)
     })
   }, [])
 
@@ -196,6 +208,24 @@ export function AttachmentFieldInput({
     return true
   }
 
+  const persistImage = async (blob: Blob, width: number, height: number) => {
+    await persist({
+      id: uuidv4(),
+      logSheetLocalId,
+      logSheetServerId,
+      assetId,
+      fieldKey,
+      kind: 'IMAGE',
+      mimeType: blob.type,
+      sizeBytes: blob.size,
+      width,
+      height,
+      blob,
+      syncStatus: 'pending',
+      createdAt: Date.now()
+    })
+  }
+
   const handlePhoto = async (file: File) => {
     setBusy(true)
     setError(null)
@@ -206,27 +236,41 @@ export function AttachmentFieldInput({
       }
       if (await blockedByStorage()) return
       const { blob, width, height } = await compressImage(file)
-      await persist({
-        id: uuidv4(),
-        logSheetLocalId,
-        logSheetServerId,
-        assetId,
-        fieldKey,
-        kind: 'IMAGE',
-        mimeType: blob.type,
-        sizeBytes: blob.size,
-        width,
-        height,
-        blob,
-        syncStatus: 'pending',
-        createdAt: Date.now()
-      })
+
+      // With annotation switched off this is the original path, unchanged: compress, store,
+      // done. With it on, the same compressed blob goes to the review step instead — the photo
+      // is not stored until the operator confirms it, so cancelling leaves nothing behind.
+      if (annotationEnabled) {
+        setPendingCapture({ blob, width, height })
+        return
+      }
+
+      await persistImage(blob, width, height)
     } catch (err) {
       setError(err instanceof Error ? err.message : t.attachments.captureFailed)
     } finally {
       setBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
+  }
+
+  const handleAnnotationConfirm = async (result: AnnotatedImage) => {
+    setPendingCapture(null)
+    setBusy(true)
+    setError(null)
+    try {
+      await persistImage(result.blob, result.width, result.height)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.attachments.captureFailed)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Discard the capture and reopen the camera — the operator judged the shot itself unusable. */
+  const handleAnnotationRetake = () => {
+    setPendingCapture(null)
+    fileInputRef.current?.click()
   }
 
   const handleStartRecording = async () => {
@@ -587,6 +631,14 @@ export function AttachmentFieldInput({
           </Box>
         ))}
       </Stack>
+
+      <ImageAnnotationDialog
+        open={pendingCapture != null}
+        source={pendingCapture?.blob ?? null}
+        onCancel={() => setPendingCapture(null)}
+        onRetake={handleAnnotationRetake}
+        onConfirm={result => void handleAnnotationConfirm(result)}
+      />
     </Box>
   )
 }

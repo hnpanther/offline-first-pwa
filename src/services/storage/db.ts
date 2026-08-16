@@ -118,14 +118,12 @@ export async function openDatabase(): Promise<void> {
 export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',
   syncIntervalMs: 30_000,
-  allowManualEntry: false,
-  // Strict by default: a scan must match BOTH the tag's Record 1 payload and the chip's
-  // hardware serial. Record 1 alone can be cloned onto any blank tag, so the serial is what
-  // makes "I scanned the right asset" mean something. An admin can relax it per device.
-  //
-  // Devices that already stored a choice keep it — getSettings spreads the saved row over
-  // these defaults — so this changes new installations only, never a tablet mid-shift.
+  // Both of the next two are server-owned: bootstrap overwrites them on every reconnect and
+  // nothing on the device may edit them. These values are what the app runs on until the first
+  // bootstrap of a fresh install lands, so each one deliberately matches the server's own
+  // default — a device must never start out on a *weaker* rule than the plant's.
   nfcStrictSerialMatch: true,
+  imageAnnotationEnabled: true,
   // Follow the device unless someone deliberately pins it. Auto is the only default that is
   // right everywhere: a locked orientation on a device mounted the other way round is worse
   // than no preference at all.

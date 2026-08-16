@@ -96,22 +96,39 @@ describe('assigning work', () => {
 })
 
 describe('manual tag entry', () => {
-  it('is open to everyone when the site-wide setting allows it', () => {
-    // Deliberately independent of who you are: the switch is a site policy.
-    expect(canEnterTagManually(session(OPERATOR_PERMISSIONS, ['OPERATOR']), true)).toBe(true)
-    expect(canEnterTagManually(null, true)).toBe(true)
+  it('follows the web-fill permission and nothing else', () => {
+    expect(canEnterTagManually(session(SUPERVISOR_PERMISSIONS, ['SUPERVISOR']))).toBe(true)
+    expect(canEnterTagManually(session(SENIOR_OPERATOR_PERMISSIONS, ['SENIOR_OPERATOR']))).toBe(true)
+    expect(canEnterTagManually(session(OPERATOR_PERMISSIONS, ['OPERATOR']))).toBe(false)
   })
 
-  it('otherwise follows the web-fill permission', () => {
-    expect(canEnterTagManually(session(SUPERVISOR_PERMISSIONS, ['SUPERVISOR']), false)).toBe(true)
-    expect(canEnterTagManually(session(SENIOR_OPERATOR_PERMISSIONS, ['SENIOR_OPERATOR']), false)).toBe(true)
-    expect(canEnterTagManually(session(OPERATOR_PERMISSIONS, ['OPERATOR']), false)).toBe(false)
-  })
-
-  it('still covers admin and high user, who reached it through the permission before too', () => {
+  it('covers admin and high user, who reach it through the same permission', () => {
     // The dropped `SUPERVISOR || SENIOR_OPERATOR` branch was redundant, not load-bearing.
-    expect(canEnterTagManually(session(ADMIN_PERMISSIONS, ['ADMIN']), false)).toBe(true)
-    expect(canEnterTagManually(session(HIGH_USER_PERMISSIONS, ['HIGH_USER']), false)).toBe(true)
+    expect(canEnterTagManually(session(ADMIN_PERMISSIONS, ['ADMIN']))).toBe(true)
+    expect(canEnterTagManually(session(HIGH_USER_PERMISSIONS, ['HIGH_USER']))).toBe(true)
+  })
+
+  it('is false without a session rather than throwing', () => {
+    expect(canEnterTagManually(null)).toBe(false)
+  })
+
+  it('cannot be granted by a device setting any more', () => {
+    // Regression guard for the switch that used to sit on the tablet's Settings screen: it
+    // returned true for *every* caller, so anyone who could open that screen could hand every
+    // operator on that tablet the ability to type a tag instead of scanning one — which is the
+    // entire point of the NFC step. The signature no longer accepts such an override, and this
+    // pins that an extra argument cannot resurrect it.
+    const asLegacyCaller = canEnterTagManually as unknown as (
+      s: ReturnType<typeof session> | null,
+      settingEnabled: boolean
+    ) => boolean
+
+    expect(asLegacyCaller(session(OPERATOR_PERMISSIONS, ['OPERATOR']), true)).toBe(false)
+    expect(asLegacyCaller(null, true)).toBe(false)
+  })
+
+  it('is inherited by a duplicated role, because it keys off the permission', () => {
+    expect(canEnterTagManually(session(SUPERVISOR_PERMISSIONS, ['ZZCOPY-SUPERVISOR']))).toBe(true)
   })
 })
 
