@@ -281,6 +281,19 @@ export interface LocalAttachment {
    * Plain, non-indexed property — needs no Dexie version bump.
    */
   permanentFailure?: boolean
+  /**
+   * The operator removed this file, the server still has it, and the deletion has not been
+   * delivered yet.
+   *
+   * Every read path filters these out, so the file is gone from the operator's point of view
+   * immediately — the row lingers only so the sync pass can tell the server too. It exists
+   * because a delete has to survive being made offline: dropping the row on the spot leaves the
+   * server copy behind forever, and the server counts its own copies against the per-field
+   * ceiling, so each such orphan permanently consumes a slot the operator can see is free.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  pendingDelete?: boolean
   createdAt: number
   uploadedAt?: number
 }

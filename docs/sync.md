@@ -193,6 +193,28 @@ older copy of it. This is the most delicate code in the sync layer and has the m
 - **Failure is retried, not dropped.** The blob stays until the server confirms it.
 - **Deleted after confirmation**, and only then — the device's copy is the only copy until the
   server has it.
+- **Deletions drain first**, before any upload in the same pass.
+
+### Deleting is sync work too
+
+A pass runs `drainPendingDeletes()` and only then the uploads. Both halves exist because the
+server enforces the per-field ceiling over **its own** attachments: a deletion that never
+reached it leaves a file nobody can see holding a slot, and the operator's replacement is
+refused for a field that looks half empty.
+
+| Situation | What happens |
+|---|---|
+| Delete, sheet not submitted | Marked `pendingDelete`, hidden everywhere at once, `DELETE /api/attachments/{id}` on the next pass, then the row goes |
+| Delete, sheet submitted | Local row goes; the server keeps its copy — delivered evidence |
+| Delete while offline | Marked and queued; delivered when the link returns |
+| Sheet submitted before the queued delete drains | The deletion is dropped, not applied |
+| File never uploaded | Row deleted outright — there is nothing on the server to remove |
+| Server answers 404 | Treated as done; the end state is what mattered |
+
+Deletions run first so a replacement captured after one is accepted on the **same** pass rather
+than being refused and waiting for the next tick. And a "field is full" refusal is a **409**,
+which `isPermanentFailure` deliberately excludes: unlike a rejected file type, it stops being
+true as soon as a slot frees, so the file stays queued instead of being parked forever.
 
 ---
 

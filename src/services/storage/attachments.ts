@@ -25,7 +25,7 @@ export async function getAttachment(id: string): Promise<LocalAttachment | undef
 export async function getAttachmentsByIds(ids: string[]): Promise<LocalAttachment[]> {
   if (ids.length === 0) return []
   const rows = await db.attachments.bulkGet(ids)
-  return rows.filter((r): r is LocalAttachment => r != null)
+  return rows.filter((r): r is LocalAttachment => r != null && !r.pendingDelete)
 }
 
 export async function getAttachmentsForEntry(
@@ -35,12 +35,72 @@ export async function getAttachmentsForEntry(
 ): Promise<LocalAttachment[]> {
   const rows = await db.attachments.where('logSheetLocalId').equals(logSheetLocalId).toArray()
   return rows
+    .filter(r => !r.pendingDelete)
     .filter(r => toIdString(r.assetId) === toIdString(assetId) && r.fieldKey === fieldKey)
     .sort((a, b) => a.createdAt - b.createdAt)
 }
 
 export async function deleteAttachment(id: string): Promise<void> {
   await db.attachments.delete(id)
+}
+
+/**
+ * Marks a file the operator removed that the **server still holds**, so the deletion can be
+ * carried to the server on the next pass.
+ *
+ * The row survives instead of being deleted outright because the deletion itself is a piece of
+ * pending work: the tablet is routinely offline when the operator changes their mind, and a row
+ * that was simply dropped locally leaves the server copy behind forever. That divergence is
+ * what caused the original bug — the server counts its own attachments against the per-field
+ * ceiling, so every local-only delete permanently consumed a slot the operator could see was
+ * free, and the next capture was refused.
+ *
+ * `pendingDelete` is a plain, non-indexed property (like `permanentFailure`) — no Dexie version
+ * bump. Every read path filters it out, so the file is gone from the operator's point of view
+ * the moment they tap delete, whether or not there is a network.
+ */
+export async function markAttachmentPendingDelete(id: string): Promise<void> {
+  await db.attachments.update(id, {
+    pendingDelete: true,
+    // Leaving it queued would race the deletion: the upload pass could re-send the very file
+    // the delete pass is about to remove, and on a slow link the two can interleave.
+    syncStatus: 'synced'
+  })
+}
+
+/**
+ * Removes an attachment the operator deleted, queueing a server-side deletion when the server
+ * holds a copy.
+ *
+ * **The row is re-read here rather than passed in, and that is the point of the function.** The
+ * caller is a React component holding a snapshot from its last render, while the upload queue
+ * marks rows `synced` in the background — so by the time somebody taps delete, a row the screen
+ * still believes is `pending` is very often already on the server. Deciding from that stale copy
+ * sends the file down the local-only path and orphans the server's copy, which is the exact
+ * divergence this mechanism exists to prevent. Found in a live run: the unit tests missed it
+ * because they called the marker directly and never went through the component's snapshot.
+ *
+ * @returns `queued` when the server still has to be told, `dropped` when the row was local only
+ */
+export async function removeAttachment(id: string): Promise<'queued' | 'dropped'> {
+  const row = await getAttachment(id)
+  if (row?.logSheetServerId && row.syncStatus === 'synced') {
+    await markAttachmentPendingDelete(id)
+    return 'queued'
+  }
+  await deleteAttachment(id)
+  return 'dropped'
+}
+
+/**
+ * Deletions waiting to reach the server.
+ *
+ * Only rows the server can actually be asked about: one with no `logSheetServerId` was never
+ * uploaded, so there is nothing there to delete and the row can simply go.
+ */
+export async function getPendingAttachmentDeletes(): Promise<LocalAttachment[]> {
+  const rows = await db.attachments.filter(r => r.pendingDelete === true).toArray()
+  return rows.filter(r => !!r.logSheetServerId)
 }
 
 /**
@@ -55,7 +115,9 @@ export async function deleteAttachment(id: string): Promise<void> {
  */
 export async function getPendingAttachments(): Promise<LocalAttachment[]> {
   const rows = await db.attachments.where('syncStatus').anyOf('pending', 'failed').toArray()
-  return rows.filter(r => r.blob != null && !!r.logSheetServerId && !r.permanentFailure)
+  return rows.filter(
+    r => r.blob != null && !!r.logSheetServerId && !r.permanentFailure && !r.pendingDelete
+  )
 }
 
 export async function markAttachmentSynced(id: string, uploadedAt = Date.now()): Promise<void> {

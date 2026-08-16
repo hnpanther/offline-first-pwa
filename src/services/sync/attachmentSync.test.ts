@@ -56,7 +56,7 @@ describe('syncPendingAttachments', () => {
 
     const result = await syncPendingAttachments()
 
-    expect(result).toEqual({ uploaded: 1, failed: 0, remaining: 0 })
+    expect(result).toEqual({ uploaded: 1, failed: 0, deleted: 0, remaining: 0 })
     expect((await getAttachment('att-1'))?.syncStatus).toBe('synced')
   })
 
@@ -97,7 +97,7 @@ describe('syncPendingAttachments', () => {
   })
 
   it('does nothing when the queue is empty', async () => {
-    expect(await syncPendingAttachments()).toEqual({ uploaded: 0, failed: 0, remaining: 0 })
+    expect(await syncPendingAttachments()).toEqual({ uploaded: 0, failed: 0, deleted: 0, remaining: 0 })
     expect(uploadAttachment).not.toHaveBeenCalled()
   })
 
@@ -176,7 +176,7 @@ describe('syncPendingAttachments', () => {
     uploadAttachment.mockClear()
     const second = await syncPendingAttachments()
     expect(uploadAttachment).not.toHaveBeenCalled()
-    expect(second).toEqual({ uploaded: 0, failed: 0, remaining: 0 })
+    expect(second).toEqual({ uploaded: 0, failed: 0, deleted: 0, remaining: 0 })
   })
 
   it('keeps re-attempting a file that failed for a reason that might pass later', async () => {
@@ -188,7 +188,7 @@ describe('syncPendingAttachments', () => {
 
     // Server recovers — the very next pass sends it, with no manual intervention.
     uploadAttachment.mockResolvedValue({ id: 'att-1' })
-    expect(await syncPendingAttachments()).toEqual({ uploaded: 1, failed: 0, remaining: 0 })
+    expect(await syncPendingAttachments()).toEqual({ uploaded: 1, failed: 0, deleted: 0, remaining: 0 })
   })
 
   it('re-queues a parked file once someone asks it to retry', async () => {
@@ -201,7 +201,7 @@ describe('syncPendingAttachments', () => {
     await retryFailedAttachment('att-1')
     uploadAttachment.mockResolvedValue({ id: 'att-1' })
 
-    expect(await syncPendingAttachments()).toEqual({ uploaded: 1, failed: 0, remaining: 0 })
+    expect(await syncPendingAttachments()).toEqual({ uploaded: 1, failed: 0, deleted: 0, remaining: 0 })
     expect((await getAttachment('att-1'))?.syncStatus).toBe('synced')
   })
 
@@ -236,7 +236,7 @@ describe('syncPendingAttachments', () => {
 
     expect(uploadAttachment).not.toHaveBeenCalled()
     // Not counted as failed either — it is simply not this pass's work.
-    expect(result).toEqual({ uploaded: 0, failed: 0, remaining: 0 })
+    expect(result).toEqual({ uploaded: 0, failed: 0, deleted: 0, remaining: 0 })
   })
 
   it('stops immediately when the caller aborts', async () => {

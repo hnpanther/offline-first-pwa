@@ -22,8 +22,9 @@ import { v4 as uuidv4 } from 'uuid'
 import {
   attachmentIdsOf,
   buildAttachmentRef,
-  deleteAttachment,
   getAttachmentsByIds,
+  getAttachmentsForEntry,
+  removeAttachment,
   retryFailedAttachment,
   saveAttachment
 } from '@/services/storage/attachments'
@@ -84,6 +85,8 @@ export function AttachmentFieldInput({
   onChange
 }: Props) {
   const [items, setItems] = useState<LocalAttachment[]>([])
+  /** Everything the device knows this field holds — the number the ceiling is judged against. */
+  const [fieldCount, setFieldCount] = useState(0)
   const [previews, setPreviews] = useState<Map<string, string>>(new Map())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -119,6 +122,16 @@ export function AttachmentFieldInput({
     const rows = await getAttachmentsByIds(ids)
     setItems(rows)
 
+    // Counted separately from what is displayed, because the two answer different questions.
+    // The list shows what this form value references; the ceiling is enforced by the server
+    // over **every** attachment of this (sheet, asset, field) — including ones another device
+    // or the web panel added, which this form value has never heard of. Counting the displayed
+    // rows is what let the device believe a slot was free while the server refused it.
+    const forField = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey)
+    const counted = new Set(rows.map(r => r.id))
+    forField.forEach(r => counted.add(r.id))
+    setFieldCount(counted.size)
+
     releaseUrls()
     const next = new Map<string, string>()
     for (const row of rows) {
@@ -138,7 +151,7 @@ export function AttachmentFieldInput({
       next.set(row.id, url)
     }
     setPreviews(next)
-  }, [ids.join(','), releaseUrls]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ids.join(','), logSheetLocalId, assetId, fieldKey, releaseUrls]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void refresh()
@@ -185,9 +198,11 @@ export function AttachmentFieldInput({
   const maxDurationMs =
     kind === 'AUDIO' ? limits.maxAudioSeconds * 1000 : limits.maxVideoSeconds * 1000
 
-  // Counted from the stored rows rather than from `ids`, so a reference left dangling by a
-  // deleted row cannot silently consume a slot the operator can never free.
-  const atLimit = items.length >= maxCount
+  // Counted from every stored row for this (asset, field) rather than from `ids` or from the
+  // displayed list: `ids` can hold a reference to a row that no longer exists, and the displayed
+  // list omits attachments this form value never referenced. The server counts its own rows for
+  // the same triple, and the number shown here has to be the one it will enforce.
+  const atLimit = fieldCount >= maxCount
 
   const persist = async (attachment: LocalAttachment) => {
     await saveAttachment(attachment)
@@ -386,10 +401,15 @@ export function AttachmentFieldInput({
   }
 
   const handleRemove = async (id: string) => {
-    // Local-only removal. The server copy (if any) is left alone deliberately: a submitted
-    // sheet's evidence should not vanish because someone tidied their device.
-    await deleteAttachment(id)
+    // `removeAttachment` re-reads the row from IndexedDB rather than trusting `items`, which is
+    // a snapshot from the last render: the upload queue flips rows to `synced` in the
+    // background, so the screen routinely still shows `pending` for a file the server already
+    // has. It queues the deletion when the server holds a copy — the sync pass then decides
+    // whether to carry it there (sheet not yet submitted) or keep the server's copy as
+    // delivered evidence (sheet submitted).
+    await removeAttachment(id)
     onChange(buildAttachmentRef(ids.filter(existing => existing !== id)))
+    await refresh()
   }
 
   return (
@@ -399,7 +419,7 @@ export function AttachmentFieldInput({
           {label}
         </Typography>
         <Typography variant="caption" color={atLimit ? 'warning.main' : 'text.secondary'}>
-          {items.length} / {maxCount}
+          {fieldCount} / {maxCount}
         </Typography>
         {items.length > 0 && (
           <Typography variant="caption" color="text.secondary">

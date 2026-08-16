@@ -1146,11 +1146,26 @@ page served over plain HTTP.
   already provides it; over plain HTTP `navigator.mediaDevices` is not merely restricted, it is
   *undefined* — the app checks for this explicitly so the operator gets a sentence rather than
   a `TypeError`.
-- Deleting an attachment on the device is **local only**. A copy already on the server stays
-  there deliberately — a submitted sheet's evidence should not vanish because someone tidied up
-  their tablet.
-- Video is not offered in the app. The backend understands the type end to end, so adding it
-  later is a UI change rather than a redesign.
+- **Deleting an attachment depends on whether the sheet has been submitted.** Before submission
+  the file is removed on the server too; afterwards only the local copy goes, because a
+  submitted sheet's evidence should not vanish because someone tidied up their tablet. The file
+  disappears from the screen the moment the operator taps delete either way — with no network
+  the removal is queued and delivered on the next sync, and if the sheet is submitted in the
+  meantime the queued deletion is dropped rather than applied.
+
+  This is not a preference, it is what keeps the per-field ceiling usable. The server counts
+  **its own** copies for that asset and field, so a delete that never reached it left a file
+  nobody could see occupying a slot: the app showed 2 / 3 and the next photo was refused. On
+  audio and video fields, whose ceiling is 1, one retake was enough to lock the field for good.
+  The counter now reflects every attachment the device knows that field holds — including ones
+  added from the web panel or another tablet — so the number on screen is the one the server
+  will enforce. And a refusal for "this field is full" is no longer treated as final: it is a
+  state that changes, so the file stays queued and goes up as soon as a slot frees.
+- **Video is offered, and its ceiling is 1 — the same as audio.** Both are the fields the
+  deletion rule above matters most for: with room for a single clip, retaking one *is* deleting
+  the old one, so a delete that never reached the server ended the field's usable life at one
+  recording. The clip is capped at capture time (480p, 700 kbps, hard byte ceiling) rather than
+  by the server refusing a finished upload.
 
 ---
 

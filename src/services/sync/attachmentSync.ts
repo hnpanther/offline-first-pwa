@@ -1,11 +1,15 @@
-import { uploadAttachment } from '@/services/api'
+import { deleteRemoteAttachment, uploadAttachment } from '@/services/api'
 import { ApiError } from '@/services/api/client'
 import {
+  deleteAttachment,
+  getPendingAttachmentDeletes,
   getPendingAttachments,
   markAttachmentFailed,
   markAttachmentSynced,
   purgeSyncedAttachmentBlobs
 } from '@/services/storage/attachments'
+import { getLogSheetByServerId } from '@/services/storage'
+import { toIdString } from '@/utils/ids'
 import type { LocalAttachment } from '@/types'
 
 /**
@@ -24,6 +28,8 @@ import type { LocalAttachment } from '@/types'
 export interface AttachmentSyncResult {
   uploaded: number
   failed: number
+  /** Deletions carried to the server (or resolved as already gone) on this pass. */
+  deleted: number
   /** Rows still waiting — including ones this pass never reached. */
   remaining: number
 }
@@ -37,16 +43,29 @@ export interface AttachmentSyncResult {
  * problem — the unauthorized handler deals with it and the file stays retryable. 408 likewise
  * describes the connection, not the file.
  *
+ * **409 is excluded too, and that one was learned the hard way.** The server answers 409 for a
+ * refusal about *state* rather than payload — today that is "this field already holds its
+ * maximum number of attachments". Parking those was half of a real field bug: an operator
+ * deleted a photo (which used to free a slot only on the device, never on the server), took
+ * another, and the upload was refused and buried for good. The bytes were fine; the field was
+ * momentarily full. Anything that can become true again later has to stay in the queue.
+ *
  * Parking is what this distinction is *for*: a parked row keeps its reason on screen and stays
  * deletable, but `getPendingAttachments` no longer returns it, so the queue does not re-send a
  * refused file on every pass for the rest of the tablet's life.
  */
 function isPermanentFailure(err: unknown): boolean {
   if (!(err instanceof ApiError)) return false
-  return err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 408
+  if (err.status === 401 || err.status === 408 || err.status === 409) return false
+  return err.status >= 400 && err.status < 500
 }
 
 export async function syncPendingAttachments(signal?: AbortSignal): Promise<AttachmentSyncResult> {
+  // Deletions first, and deliberately so: each one frees a slot against the server's per-field
+  // ceiling, so a capture that replaced a deleted file is accepted on this same pass instead of
+  // being refused and having to wait for the next one.
+  const deleted = await drainPendingDeletes(signal)
+
   const pending = await getPendingAttachments()
   let uploaded = 0
   let failed = 0
@@ -63,7 +82,63 @@ export async function syncPendingAttachments(signal?: AbortSignal): Promise<Atta
   await purgeSyncedAttachmentBlobs()
 
   const stillPending = await getPendingAttachments()
-  return { uploaded, failed, remaining: stillPending.length }
+  return { uploaded, failed, deleted, remaining: stillPending.length }
+}
+
+/**
+ * Carries the operator's deletions to the server.
+ *
+ * **The rule that decides each one is whether the sheet has been submitted.** Before submission
+ * the attachment is part of work still being assembled, so removing it should remove it
+ * everywhere — otherwise the server keeps counting a file nobody can see against the field's
+ * ceiling, and the operator is refused a replacement for a photo they already deleted. After
+ * submission it is delivered evidence: the local copy may go, the server's may not. Tidying a
+ * tablet must never erase the record of work that was actually done.
+ *
+ * A sheet that is gone locally is treated as submitted — the conservative reading. Cleanup only
+ * retires sheets that reached a terminal state, so "no local row" almost always means "delivered
+ * and purged", and guessing wrong in this direction costs a stale file rather than lost evidence.
+ */
+async function drainPendingDeletes(signal?: AbortSignal): Promise<number> {
+  const rows = await getPendingAttachmentDeletes()
+  let removed = 0
+
+  for (const row of rows) {
+    if (signal?.aborted) break
+    const sheet = row.logSheetServerId
+      ? await getLogSheetByServerId(toIdString(row.logSheetServerId))
+      : undefined
+    const submitted = !sheet || sheet.status === 'submitted'
+
+    if (submitted) {
+      // Keep the server's copy; the local row has served its purpose.
+      await deleteAttachment(row.id)
+      removed++
+      continue
+    }
+
+    try {
+      await deleteRemoteAttachment(row.id, signal)
+      await deleteAttachment(row.id)
+      removed++
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        // Already absent — the desired end state, reached by some other route.
+        await deleteAttachment(row.id)
+        removed++
+        continue
+      }
+      if (err instanceof ApiError && err.status === 0) {
+        // Offline. The row stays marked and the next pass tries again.
+        break
+      }
+      // Anything else (403, 409, a 5xx): leave it queued rather than dropping the row, or the
+      // deletion would be forgotten and the slot stay consumed with nothing left to retry.
+      break
+    }
+  }
+
+  return removed
 }
 
 type UploadOutcome = 'uploaded' | 'failed' | 'aborted'
