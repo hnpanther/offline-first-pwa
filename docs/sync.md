@@ -154,6 +154,49 @@ work.
 
 ---
 
+## Deadlines, offline
+
+**A deadline is judged on when the work was done, not when it reached the server.** An operator
+who finishes at 17:55 against an 18:00 deadline and only finds signal at 19:30 keeps their
+round. This is `isLogSheetExpiredForSync` on the device and `submitIfStillCompletable` on the
+server, and both sides have to agree or offline work is lost to the clock:
+
+| | Device (`isLogSheetExpiredForSync`) | Server (`submitIfStillCompletable`) |
+|---|---|---|
+| Submitted locally, `completedAt ≤ dueAt` | Still queued, however late the link returns | Accepted — **even if the sheet is already `EXPIRED`** |
+| Submitted locally, `completedAt > dueAt` | Refused before it is queued | Refused → void submission |
+| Still a draft | Judged on the wall clock — there is no completion to date it by | n/a |
+
+A `serverStatus` of `EXPIRED` overrides the stamps in both directions: the server said so, and
+the device does not argue with it except through the completion time above.
+
+## What an inbox pull does to offline work
+
+`mergeInboxIntoLocalSheets` is where every server-side lifecycle decision lands on the device.
+It runs on every pass, against rows that may hold hours of work nobody else has a copy of, so
+its rule is narrow: **update what the server owns, never destroy what the operator did.**
+
+| While the tablet was offline | On the next pull |
+|---|---|
+| The deadline passed | The draft is marked `EXPIRED` locally (`expireStaleLocalDrafts`) — the operator learns it before a round trip, and the readings stay |
+| A supervisor **extended** an expired round | New `dueAt`, status back to `IN_PROGRESS`, failure banner cleared, readings intact, submittable again |
+| A supervisor **cancelled** the round | The sheet leaves the inbox and the draft is blocked. The readings stay — a cancel is reopenable |
+| A cancelled round was later **extended** | Same as the extension row: it comes back editable, with the work still in it |
+| A completion was rejected as `EXPIRED` but finished **in time** | Re-queued with a **fresh `clientActionId`** — the old one was already answered, so reusing it would read as a replay |
+| A completion genuinely finished **late** | Left refused. Reviving it would push work the server has already ruled on, on every pass, forever |
+| A completion was submitted but never sent, and the deadline passed | Marked failed/`EXPIRED`, data kept, available as a void submission when it is pushed |
+| Nothing changed | Nothing changes — the merge is idempotent across passes |
+
+> **Absence is not a reason.** The inbox says only that a sheet is no longer assigned, never
+> why: released, reassigned or cancelled all look identical. `shouldMarkDraftRevokedForMissingInbox`
+> therefore blocks the draft either way but only ever *adds* the vaguer «واگذار شده» wording —
+> once the row already knows it was `CANCELLED`, from opening the sheet online or from a
+> `CANCELLED` submit outcome, a later pull must not talk it back down to a guess.
+
+Regression tests: [`logSheetLifecycle.test.ts`](../src/services/sync/logSheetLifecycle.test.ts).
+
+---
+
 ## Pull
 
 ### `pullBootstrap`
