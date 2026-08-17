@@ -51,6 +51,13 @@ import {
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
+import {
+  createFormDraftCache,
+  formInitialValues,
+  needsFormInitialisation,
+  type FormDraftCache
+} from '@/utils/formDraftCache'
+import { shouldShowFullPageLoader } from '@/utils/pageLoadState'
 import { useNFC } from '@/hooks/useNFC'
 import { resolveNfcTagId } from '@/services/nfc'
 import { matchLogSheetEntryByTag } from '@/services/nfc/matchLogSheetEntry'
@@ -141,6 +148,15 @@ interface AssetFillDialogProps {
   readOnly: boolean
   onClose: () => void
   onSave: (assetId: string, formData: Record<string, unknown>) => Promise<void>
+  /**
+   * Where in-progress values are kept, owned by the page rather than by this dialog.
+   *
+   * This dialog can be unmounted without being closed — anything that makes the page render a
+   * blocking state takes its whole subtree, and react-hook-form's values go with it. Handing
+   * the draft up to something that stays mounted is what lets a remount restore the operator's
+   * work instead of silently rebuilding the form from stored data.
+   */
+  draftCache: FormDraftCache
 }
 
 function AssetFillDialog({
@@ -150,7 +166,8 @@ function AssetFillDialog({
   open,
   readOnly,
   onClose,
-  onSave
+  onSave,
+  draftCache
 }: AssetFillDialogProps) {
   // The shared per-class table is only the fallback: it holds whichever bundle merged last,
   // which for a device holding two sheets of the same class may not be this sheet's schema.
@@ -164,6 +181,7 @@ function AssetFillDialog({
     control,
     handleSubmit,
     reset,
+    watch,
     formState: { errors, isSubmitting }
   } = useForm<Record<string, unknown>>({ defaultValues: {} })
 
@@ -171,10 +189,37 @@ function AssetFillDialog({
     if (open && entry) void refreshFields()
   }, [open, entry?.assetId, entry?.classId, refreshFields])
 
-  const entryId = entry?.assetId
+  /** What the form is currently showing: one asset while open, nothing while closed. */
+  const draftKey = open && entry ? entry.assetId : null
+
+  // Which asset this form instance has been filled in for. A **ref**, so it dies with the
+  // component: after an unmount it is null again, which is exactly the signal that the form
+  // needs re-filling — this time from the draft the page kept, not from stored data.
+  const initialisedFor = useRef<string | null>(null)
+
   useEffect(() => {
-    if (entry) reset(entry.formData ?? {})
-  }, [entryId, reset]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!draftKey || !entry) {
+      // Closed. Arm the next open so re-opening the same asset starts from stored data rather
+      // than from whatever this instance happened to be showing.
+      initialisedFor.current = null
+      return
+    }
+    // Already filled in for this asset, and still mounted: leave it alone. Re-running here is
+    // what would throw away edits every time an unrelated prop changed.
+    if (!needsFormInitialisation(initialisedFor.current, draftKey)) return
+    initialisedFor.current = draftKey
+    reset(formInitialValues(draftCache.read(draftKey), entry.formData))
+  }, [draftKey, entry, reset, draftCache])
+
+  // Mirror every change into the page-held cache, so an unmount at any moment is recoverable.
+  // `watch`'s subscription form does not re-render this component — it only writes to a Map.
+  useEffect(() => {
+    if (!draftKey || readOnly) return
+    const subscription = watch(values => {
+      draftCache.remember(draftKey, values as Record<string, unknown>)
+    })
+    return () => subscription.unsubscribe()
+  }, [draftKey, readOnly, watch, draftCache])
 
   const onSubmit = async (values: Record<string, unknown>) => {
     if (!entry) return
@@ -373,6 +418,10 @@ export function LogSheetFillPage() {
   const navigate = useNavigate()
   const { settings } = useSettings()
   const authSession = useAppStore(s => s.authSession)
+  // The load effect only ever asks *whether* there is a session, so it depends on the boolean
+  // rather than the object: a session re-published with identical contents must not be a reason
+  // to reload the page underneath an operator who is filling a form.
+  const hasAuthSession = !!authSession
   const sessionUserId = useAppStore(s => s.sessionUserId)
   const inboxAssigned = useAppStore(s => s.inboxAssigned)
   const inboxLastSyncAt = useAppStore(s => s.inboxLastSyncAt)
@@ -397,6 +446,21 @@ export function LogSheetFillPage() {
     [sessionUserId, inboxAssignedIds, navigate]
   )
 
+  /**
+   * The same check, reachable from an effect without becoming one of its triggers.
+   *
+   * `redirectIfNotAccessible` closes over `inboxAssignedIds`, which is rebuilt from a **new
+   * array** on every inbox pull, so the callback gets a new identity on every sync pass. Listing
+   * it as a dependency of the load effect therefore re-ran a full sheet load — bundle fetch
+   * included — every time the inbox refreshed, purely because a function's identity changed.
+   * That is what put the page into its loading state mid-round and unmounted an open asset
+   * form. Read through a ref, the check is always current and never a reason to reload.
+   */
+  const redirectIfNotAccessibleRef = useRef(redirectIfNotAccessible)
+  useEffect(() => {
+    redirectIfNotAccessibleRef.current = redirectIfNotAccessible
+  }, [redirectIfNotAccessible])
+
   const allowManualEntry = canEnterTagManually(authSession ?? null)
   // Must mirror the sync layer's own gate (services/sync/index.ts `canSyncFaultReports`) —
   // filing a report the user can't sync would just strand it locally forever, unsynced,
@@ -407,7 +471,16 @@ export function LogSheetFillPage() {
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
   const [fieldDefsByClass, setFieldDefsByClass] = useState<Map<string, FieldDefinition[]>>(new Map())
   const [loading, setLoading] = useState(true)
+  // Which route id the sheet on screen was loaded for. Stored rather than inferred because a
+  // sheet's own `localId` is not the route id in the archived view, and the loader has to be
+  // able to tell "refreshing what is already here" from "showing a different sheet".
+  const [loadedLocalId, setLoadedLocalId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+
+  // In-progress asset-form values, kept here because this component survives what the dialog
+  // does not. See utils/formDraftCache.ts. `useMemo` with no dependencies rather than a ref, so
+  // it is an ordinary stable value that effects can depend on.
+  const draftCache = useMemo(() => createFormDraftCache(), [])
 
   // NFC
   const { isScanning, isSupported, lastTag, error: nfcScanError, startScan, stopScan } = useNFC()
@@ -468,6 +541,9 @@ export function LogSheetFillPage() {
 
   useEffect(() => {
     if (!localId) return
+    // A different sheet means the previous sheet's unsaved asset values can never be restored
+    // into it — the keys are asset ids, which are not unique across sheets.
+    draftCache.clear()
     const load = async () => {
       setLoading(true)
       setLoadError(null)
@@ -488,6 +564,7 @@ export function LogSheetFillPage() {
           const classes = await loadAssetClassesForEntries(entries)
           await loadFieldDefsForEntries(entries, archived)
           setLogSheet({ ...archived, entries })
+          setLoadedLocalId(localId)
           setAssetClasses(classes)
           setIsArchivedView(true)
           return
@@ -499,7 +576,7 @@ export function LogSheetFillPage() {
           return
         }
 
-        if (redirectIfNotAccessible(sheet)) return
+        if (redirectIfNotAccessibleRef.current(sheet)) return
 
         // Submitted sheets are deliberately excluded — a bundle refresh must never resolve a
         // completion (see AGENTS.md § Log sheet merge). The one exception is a row the inbox
@@ -508,7 +585,7 @@ export function LogSheetFillPage() {
         // new deadline and server status current on the screen the operator acts from.
         const canRefreshBundle =
           navigator.onLine &&
-          authSession &&
+          hasAuthSession &&
           sheet.serverId &&
           (sheet.status === 'draft' || isReopenedAfterSync(sheet))
         if (canRefreshBundle) {
@@ -520,12 +597,13 @@ export function LogSheetFillPage() {
           }
         }
 
-        if (redirectIfNotAccessible(sheet)) return
+        if (redirectIfNotAccessibleRef.current(sheet)) return
 
         const { entries, nfcBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
         const classes = await loadAssetClassesForEntries(entries)
         await loadFieldDefsForEntries(entries, sheet)
         setLogSheet({ ...sheet, entries })
+        setLoadedLocalId(localId)
         setAssetClasses(classes)
         setNfcFaultReports(sheet.serverId ? await getNfcFaultReportsForSheet(sheet.serverId) : [])
         if (nfcBackfilled && localId) {
@@ -538,14 +616,25 @@ export function LogSheetFillPage() {
       }
     }
     void load()
-  }, [localId, authSession, sessionUserId, redirectIfNotAccessible, loadFieldDefsForEntries])
+    // Deliberately narrow. This effect puts the page into its blocking loading state, so
+    // anything listed here can take an open asset form down with it. `sessionUserId` and
+    // `hasAuthSession` are session identity — a change there genuinely means "load something
+    // else". The accessibility check is read through a ref for the same reason (above), and
+    // routine server updates are the business of the inbox effect below, which never touches
+    // `loading`.
+  }, [localId, hasAuthSession, sessionUserId, navigate, loadFieldDefsForEntries, draftCache])
 
-  // Refresh local sheet when inbox sync updates dueAt / status from server
+  // Refresh local sheet when inbox sync updates dueAt / status from server.
+  //
+  // This is the effect that is *supposed* to run on every sync pass, and it can: it re-reads the
+  // row and re-renders, without ever setting `loading`, so nothing on screen is unmounted and an
+  // open form keeps what the operator has typed. Its trigger is `inboxLastSyncAt` alone — the
+  // accessibility check goes through the ref so that a rebuilt callback is not a second trigger.
   useEffect(() => {
     if (!localId || !inboxLastSyncAt) return
     void getLogSheet(localId).then(async sheet => {
       if (!sheet) return
-      if (redirectIfNotAccessible(sheet)) return
+      if (redirectIfNotAccessibleRef.current(sheet)) return
       const { entries, nfcBackfilled } = await enrichEntriesWithNfc(sheet.entries ?? [])
       await loadFieldDefsForEntries(entries, sheet)
       setLogSheet({ ...sheet, entries })
@@ -553,7 +642,7 @@ export function LogSheetFillPage() {
         await updateLogSheet(localId, { entries })
       }
     })
-  }, [inboxLastSyncAt, localId, redirectIfNotAccessible, loadFieldDefsForEntries])
+  }, [inboxLastSyncAt, localId, loadFieldDefsForEntries])
 
   // Clear stale NFC tag when entering / leaving this page
   useEffect(() => {
@@ -619,6 +708,10 @@ export function LogSheetFillPage() {
   }
 
   const closeDialog = () => {
+    // The operator closed the form without saving, so the in-progress values are discarded on
+    // purpose. Keeping them would restore an abandoned edit the next time this asset is opened,
+    // which reads as the app ignoring a cancel.
+    if (activeEntry) draftCache.forget(activeEntry.assetId)
     setDialogOpen(false)
     setDialogEditable(false)
     setActiveEntryFilledVia(undefined)
@@ -686,6 +779,10 @@ export function LogSheetFillPage() {
     if (!logSheet || !localId) return
     setSaveError(null)
     try {
+      // The values are about to be in IndexedDB, so the in-memory draft has done its job. Dropped
+      // before the write rather than after: if the write throws, the dialog stays open holding
+      // the same values, and a stale draft underneath it would only be able to disagree.
+      draftCache.forget(assetId)
       const filledVia = activeEntryFilledVia ?? 'nfc'
       const updatedEntries = logSheet.entries.map(e =>
         e.assetId === assetId ? { ...applyEntrySaveTimestamps(e, formData), filledVia } : e
@@ -925,7 +1022,9 @@ export function LogSheetFillPage() {
   // Render
   // -------------------------------------------------------------------------
 
-  if (loading) {
+  // Only when there is nothing else to show. A blocking loader takes the whole subtree with it,
+  // including an open asset form and every unsaved value in it — see utils/pageLoadState.ts.
+  if (shouldShowFullPageLoader(loading, loadedLocalId, localId)) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
         <CircularProgress />
@@ -1497,6 +1596,7 @@ export function LogSheetFillPage() {
         readOnly={isSubmitted || !dialogEditable}
         onClose={closeDialog}
         onSave={handleSaveEntry}
+        draftCache={draftCache}
       />
 
       {/* NFC fault report dialog */}

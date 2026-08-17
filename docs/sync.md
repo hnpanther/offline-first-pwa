@@ -267,6 +267,32 @@ deadline stands — it is live work, and it is also the only place `filledVia` s
 
 ---
 
+## A sync pass must not disturb the screen
+
+Sync runs on a timer and on every reconnect, while an operator is mid-round with a form open. So
+a pass is only allowed to *update* what is on screen — never to rebuild it.
+
+The line that matters is **`loading`**. A page that renders a blocking loader unmounts its whole
+subtree, and React destroys the state of everything in it, including react-hook-form's values in
+an open asset dialog. The dialog then comes back still open, rebuilt from stored data, with
+everything typed or captured since silently gone.
+
+`LogSheetFillPage` therefore keeps two separate paths:
+
+| Effect | Trigger | Sets `loading`? |
+|---|---|---|
+| Load | route id, or the session identity behind it | **Yes** — but `shouldShowFullPageLoader` blocks only while the sheet on screen is not the one being asked for |
+| Inbox refresh | `inboxLastSyncAt` — every pass | **No.** Re-reads the row and re-renders, nothing more |
+
+> **Identity churn is not a reason to reload.** The load effect used to depend on a callback that
+> closed over `inboxAssignedIds`, which is rebuilt from a new array on every inbox pull — so each
+> pass triggered a full reload, bundle fetch included, and took the open form with it. The check
+> is read through a ref now, and the effect depends on `hasAuthSession` rather than the session
+> object.
+
+Unsaved values are additionally mirrored into a `FormDraftCache` held by the page, so an unmount
+from any *other* cause restores rather than loses. See `AGENTS.md` for the full rule.
+
 ## Debugging
 
 | Symptom | Look at |
@@ -276,6 +302,7 @@ deadline stands — it is live work, and it is also the only place `filledVia` s
 | Sync never fires | `settings.syncIntervalMs` — if it was corrupted to an enormous value, `clampSyncInterval` now catches it. |
 | Duplicate history on the server | A missing or regenerated `clientActionId`. |
 | A draft was overwritten | `mergeLogSheetBundle` — start from its tests. |
+| An open form emptied itself mid-round | Something set the page's `loading` again. See the section above. |
 
 ## Related
 
