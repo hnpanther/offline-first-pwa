@@ -124,6 +124,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // default — a device must never start out on a *weaker* rule than the plant's.
   nfcStrictSerialMatch: true,
   imageAnnotationEnabled: true,
+  // Deliberately the strict side, unlike the server's seeded value. A device that has never
+  // reached the server has no authorisation to hand out: refusing manual entry until the policy
+  // arrives costs a scan, while assuming it is allowed hands out a capability nobody granted.
+  nfcManualEntryEnabled: false,
   // Follow the device unless someone deliberately pins it. Auto is the only default that is
   // right everywhere: a locked orientation on a device mounted the other way round is worse
   // than no preference at all.

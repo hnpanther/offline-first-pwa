@@ -67,7 +67,10 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
         ...(data.mobilePolicy
           ? {
               imageAnnotationEnabled: data.mobilePolicy.imageAnnotationEnabled,
-              nfcStrictSerialMatch: data.mobilePolicy.nfcStrictSerialMatch
+              nfcStrictSerialMatch: data.mobilePolicy.nfcStrictSerialMatch,
+              // A server too old to send the field leaves `undefined`, which would read as
+              // "not allowed" — correct, and the safe direction for a capability.
+              nfcManualEntryEnabled: data.mobilePolicy.nfcManualEntryEnabled === true
             }
           : {})
       }

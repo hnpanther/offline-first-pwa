@@ -105,6 +105,16 @@ export interface AppSettings {
    */
   nfcStrictSerialMatch: boolean
   /**
+   * Site-wide switch above the manual-tag-entry permission, owned by the server.
+   *
+   * **An AND with the operator's own permission, never an OR.** Off means nobody may type a tag
+   * id however privileged, and an asset can only be opened by scanning it or through an NFC fault
+   * report. An earlier device-side switch of the same name did the opposite — it *granted* manual
+   * entry to everyone who could reach the tablet's Settings screen — which is exactly why this one
+   * arrives from the server and only ever restricts.
+   */
+  nfcManualEntryEnabled: boolean
+  /**
    * Whether the camera flow offers the annotate-before-save step. Server-owned like the
    * ceilings below, admin-editable in the web panel. Off reproduces the original capture path
    * exactly: the photo is compressed and stored with no extra step.

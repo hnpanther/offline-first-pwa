@@ -7,6 +7,7 @@ import {
   canManageNfcSerial,
   hasPermission,
   hasPlantWideScope,
+  isManualTagEntryAllowed,
   type AuthSession
 } from './auth'
 
@@ -140,5 +141,57 @@ describe('hasPermission', () => {
 
   it('does not match on a prefix', () => {
     expect(hasPermission(session(['CAP:SCOPE_PLANT_WIDE_EXTRA']), CAP_SCOPE_PLANT_WIDE)).toBe(false)
+  })
+})
+
+/**
+ * Typing a tag id instead of scanning it, now gated twice.
+ *
+ * A supervisor or senior operator holds the permission. Above it sits a **site policy** the
+ * server owns and bootstrap delivers, and the two are an **AND**: with the policy off nobody
+ * types a tag, however privileged — the asset is scanned, or opened through an NFC fault report.
+ *
+ * The direction is the whole point. The device switch this replaces did the opposite: it
+ * *granted* manual entry to every caller, so anyone who could reach the tablet's Settings screen
+ * could let a whole shift type tags instead of walking to the equipment. These cases exist to
+ * stop it drifting back into an OR.
+ */
+describe('isManualTagEntryAllowed', () => {
+  const supervisor: AuthSession = {
+    accessToken: 't',
+    username: 'sup',
+    roles: ['SUPERVISOR'],
+    permissions: ['GET:/log-sheets/{id}/fill']
+  } as AuthSession
+  const operator: AuthSession = {
+    accessToken: 't',
+    username: 'op',
+    roles: ['OPERATOR'],
+    permissions: []
+  } as AuthSession
+
+  it('allows a permitted operator while the plant allows it', () => {
+    expect(isManualTagEntryAllowed(supervisor, true)).toBe(true)
+  })
+
+  it('refuses the same operator once the plant turns it off', () => {
+    // The requirement in one line: the permission is not enough on its own.
+    expect(isManualTagEntryAllowed(supervisor, false)).toBe(false)
+  })
+
+  it('never grants it to somebody without the permission, policy on or off', () => {
+    expect(isManualTagEntryAllowed(operator, true)).toBe(false)
+    expect(isManualTagEntryAllowed(operator, false)).toBe(false)
+  })
+
+  it('refuses when there is no session at all', () => {
+    expect(isManualTagEntryAllowed(null, true)).toBe(false)
+  })
+
+  it('leaves the permission check itself unchanged', () => {
+    // `canEnterTagManually` still answers only "is this person trusted with it", which is what
+    // the rest of the app and its own regression cases rely on.
+    expect(canEnterTagManually(supervisor)).toBe(true)
+    expect(canEnterTagManually(operator)).toBe(false)
   })
 })

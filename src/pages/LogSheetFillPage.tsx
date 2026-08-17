@@ -63,7 +63,7 @@ import { resolveNfcTagId } from '@/services/nfc'
 import { matchLogSheetEntryByTag } from '@/services/nfc/matchLogSheetEntry'
 import { useSettings } from '@/hooks/useSettings'
 import { useAppStore } from '@/store'
-import { canEnterTagManually, hasPermission, PERM_NFC_FAULT_REPORT } from '@/types/auth'
+import { hasPermission, isManualTagEntryAllowed, PERM_NFC_FAULT_REPORT } from '@/types/auth'
 import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import {
@@ -461,7 +461,13 @@ export function LogSheetFillPage() {
     redirectIfNotAccessibleRef.current = redirectIfNotAccessible
   }, [redirectIfNotAccessible])
 
-  const allowManualEntry = canEnterTagManually(authSession ?? null)
+  // Permission AND site policy. The policy arrives from the server on every bootstrap, so an
+  // administrator turning manual entry off reaches every tablet on its next reconnect — and the
+  // device mirror keeps the answer correct while offline.
+  const allowManualEntry = isManualTagEntryAllowed(
+    authSession ?? null,
+    settings.nfcManualEntryEnabled
+  )
   // Must mirror the sync layer's own gate (services/sync/index.ts `canSyncFaultReports`) —
   // filing a report the user can't sync would just strand it locally forever, unsynced,
   // with no visible error.

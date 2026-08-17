@@ -246,6 +246,8 @@ export interface BootstrapResponse {
   mobilePolicy?: {
     imageAnnotationEnabled: boolean
     nfcStrictSerialMatch: boolean
+    /** Optional: a server older than this field says nothing, and the device stays strict. */
+    nfcManualEntryEnabled?: boolean
   }
 }
 

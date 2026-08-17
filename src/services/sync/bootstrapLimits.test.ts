@@ -162,6 +162,46 @@ describe('mobile policy over bootstrap', () => {
     expect(settings.imageAnnotationEnabled).toBe(true)
   })
 
+  it('ships with manual tag entry refused until the plant says otherwise', async () => {
+    // The opposite direction to the server's own seeded value, deliberately. A device that has
+    // never reached the server has no authorisation to hand out: refusing costs a scan, while
+    // assuming it is allowed grants a capability nobody chose.
+    expect((await getSettings()).nfcManualEntryEnabled).toBe(false)
+  })
+
+  it('adopts the plant policy for manual tag entry', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({
+      mobilePolicy: { ...POLICY, nfcManualEntryEnabled: true }
+    }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).nfcManualEntryEnabled).toBe(true)
+  })
+
+  it('turns manual tag entry off again when the plant withdraws it', async () => {
+    // The change has to *reach* the device — a policy that only tightens on a fresh install is
+    // not a policy.
+    await saveSettings({ ...DEFAULT_SETTINGS, nfcManualEntryEnabled: true })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({
+      mobilePolicy: { ...POLICY, nfcManualEntryEnabled: false }
+    }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).nfcManualEntryEnabled).toBe(false)
+  })
+
+  it('treats a server too old to mention it as a refusal, not a grant', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, nfcManualEntryEnabled: true })
+    // A policy block that carries the other two fields but not this one.
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ mobilePolicy: POLICY }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).nfcManualEntryEnabled).toBe(false)
+  })
+
   it('adopts the server policy on a successful pull', async () => {
     fetchBootstrap.mockResolvedValue(bootstrapPayload({ mobilePolicy: POLICY }))
 

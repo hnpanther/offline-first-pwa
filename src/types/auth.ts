@@ -124,3 +124,27 @@ export function canAssignWork(session: AuthSession | null): boolean {
 export function canEnterTagManually(session: AuthSession | null): boolean {
   return hasPermission(session, PERM_WEB_FILL)
 }
+
+/**
+ * Whether this operator may type a tag id **right now**, on this device.
+ *
+ * The site policy AND the operator's own permission — both, always. Two independent answers to
+ * two different questions, and the conjunction is the whole design:
+ *
+ * - `canEnterTagManually` asks whether *this person* is trusted with manual entry.
+ * - `policyEnabled` (server-owned, delivered by bootstrap) asks whether the *plant* allows it at
+ *   all. With it off nobody types a tag, however privileged: the asset is scanned, or it is
+ *   opened through an NFC fault report.
+ *
+ * **It restricts and never grants**, and that direction matters more than it looks. The device
+ * switch this replaces did the opposite — it granted manual entry to every caller, so anyone who
+ * could open the tablet's Settings screen could let a whole shift type tags instead of walking to
+ * the equipment. Kept as its own function rather than a second argument on the permission check,
+ * so that check keeps its meaning and its regression test.
+ */
+export function isManualTagEntryAllowed(
+  session: AuthSession | null,
+  policyEnabled: boolean
+): boolean {
+  return policyEnabled && canEnterTagManually(session)
+}
