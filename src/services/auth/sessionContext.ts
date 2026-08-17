@@ -5,7 +5,12 @@
 
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
-import { getAllLogSheets, updateLogSheet } from '@/services/storage'
+import { getAllLogSheets, getLogSheet, updateLogSheet } from '@/services/storage'
+import { getParkedAttachments, retryFailedAttachment } from '@/services/storage/attachments'
+import {
+  isAttachmentUploadableByUser,
+  shouldReviveParkedAttachment
+} from '@/utils/attachmentOwnership'
 import {
   archiveLogSheetForUser,
   archivedLogSheetViewId,
@@ -148,6 +153,36 @@ export async function reviveOwnedSubmittedQueueOnLogin(userId: string): Promise<
       syncStatus: 'pending',
       clientActionId: uuidv4()
     })
+  }
+  await reviveOwnedParkedAttachmentsOnLogin(userId)
+}
+
+/**
+ * Give this operator back the captured media a colleague's session got refused.
+ *
+ * The counterpart of the loop above, for the same reason: a block that exists because somebody
+ * else was holding the tablet is a device-side accident, not a server decision, and it must not
+ * outlive the sign-in that ends it.
+ *
+ * The queue no longer sends another operator's files, so nothing new is parked this way. This
+ * exists for the rows already stranded on tablets in the field — photographs, voice notes and
+ * video of work that cannot be repeated, which the queue had stopped offering entirely and only
+ * a per-file button in the UI could recover.
+ */
+async function reviveOwnedParkedAttachmentsOnLogin(userId: string): Promise<void> {
+  const parked = await getParkedAttachments()
+  if (parked.length === 0) return
+
+  const sheets = new Map<string, LogSheet | undefined>()
+  for (const row of parked) {
+    if (!shouldReviveParkedAttachment(row.failedStatus)) continue
+    if (!sheets.has(row.logSheetLocalId)) {
+      sheets.set(row.logSheetLocalId, await getLogSheet(row.logSheetLocalId))
+    }
+    // Judged by the same rule the queue uses, so reviving can never hand somebody a file the
+    // very next pass would refuse again.
+    if (!isAttachmentUploadableByUser(sheets.get(row.logSheetLocalId), userId)) continue
+    await retryFailedAttachment(row.id)
   }
 }
 

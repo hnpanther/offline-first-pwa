@@ -282,6 +282,18 @@ export interface LocalAttachment {
    */
   permanentFailure?: boolean
   /**
+   * The HTTP status behind the last refusal.
+   *
+   * `syncError` holds the backend's own translated sentence, so it can be shown but never
+   * classified. This can: it distinguishes a row parked because the wrong operator was signed in
+   * on a shared tablet (**403** — true only while they were) from one holding a file the server
+   * will always refuse (400, 422). Absent on rows parked before this field existed, which is
+   * itself meaningful — see `shouldReviveParkedAttachment`.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  failedStatus?: number
+  /**
    * The operator removed this file, the server still has it, and the deletion has not been
    * delivered yet.
    *

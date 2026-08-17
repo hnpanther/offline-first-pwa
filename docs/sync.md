@@ -230,6 +230,8 @@ older copy of it. This is the most delicate code in the sync layer and has the m
 
 **Code:** [`attachmentSync.ts`](../src/services/sync/attachmentSync.ts)
 
+- **Only this operator's own work.** See below — on a shared tablet this is the difference
+  between delivering evidence and destroying it.
 - **One file at a time.** Concurrent large uploads on plant Wi-Fi finish nothing.
 - **Only for sheets that exist on the server** — gated on `logSheetServerId`.
 - **`syncStatus` is the queue**, and it is indexed.
@@ -258,6 +260,42 @@ Deletions run first so a replacement captured after one is accepted on the **sam
 than being refused and waiting for the next tick. And a "field is full" refusal is a **409**,
 which `isPermanentFailure` deliberately excludes: unlike a rejected file type, it stops being
 true as soon as a slot frees, so the file stays queued instead of being parked forever.
+
+### Whose files these are
+
+A tablet is shared; captured media is not. **Signing out removes the session key and nothing
+else** — every sheet, blob and queue row stays, because on an offline round it is the only copy
+of the work.
+
+So "queued on this device" and "this operator may send it" are different sets, and treating them
+as one cost a round of evidence in the plant:
+
+> Operator 1 of unit 1 took a round offline, photographed the equipment, and signed out still
+> offline. Operator 2 of unit 2 picked the tablet up, connected and signed in. The pass pushed
+> operator 1's files under operator 2's token; the server refused each with **403**, correctly;
+> the refusal was read as permanent, so the files were **parked** — and when operator 1 signed
+> back in, the queue no longer offered them at all.
+
+`isAttachmentUploadableByUser` is the gate, on uploads and on server-side deletions alike:
+
+| Situation | Sent? |
+|---|---|
+| The sheet is this operator's work | Yes |
+| Assigned to them, nothing saved locally yet | Yes |
+| Belongs to another operator | No — left untouched for them |
+| No sheet row to prove ownership by | No — uploading on a guess is what caused the defect |
+| Sheet already delivered (`synced`) but photos still queued | Judged by ownership like any other; this is the case shared-tablet isolation deliberately leaves alone, and it is what leaked |
+| Sheet revoked or superseded | No — the server would refuse it on every pass forever |
+
+**403 is not a permanent failure**, for the same reason 409 is not: it describes who was signed
+in, not the file. The status is recorded on the row (`failedStatus`) because `syncError` holds
+the backend's own translated sentence and cannot be classified later. Signing in gives the owner
+back any row parked with 403 — or with no recorded status at all, which means a build that
+predates the field and is exactly the stranded population.
+
+The pending badge counts the same filtered set. A shared tablet must never show a number that
+cannot reach zero: it reads as broken sync, and invites someone to "fix" it by clearing the
+device, which is how the evidence would actually be lost.
 
 ---
 

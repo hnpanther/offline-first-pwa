@@ -7,8 +7,9 @@ import {
   retryFailedAttachment,
   saveAttachment
 } from '@/services/storage/attachments'
+import { saveLogSheet } from '@/services/storage'
 import { syncPendingAttachments } from '@/services/sync/attachmentSync'
-import type { LocalAttachment } from '@/types'
+import type { LocalAttachment, LogSheet } from '@/types'
 
 const uploadAttachment = vi.fn()
 vi.mock('@/services/api', () => ({
@@ -25,6 +26,33 @@ vi.mock('@/services/api', () => ({
  */
 
 const NOW = 1_700_000_000_000
+const SESSION_USER_ID = '7'
+
+/**
+ * The sheet these files belong to, owned by whoever is signed in.
+ *
+ * Required, not decoration: the queue only sends attachments belonging to the current
+ * operator's own work, because a shared tablet keeps a previous user's rows after they sign
+ * out. Without a sheet to prove ownership, nothing is uploadable at all — see
+ * `attachmentOwnership.test.ts` for that rule on its own.
+ */
+async function seedOwningSheet(overrides: Partial<LogSheet> = {}): Promise<void> {
+  await saveLogSheet({
+    localId: 'sheet-local-1',
+    serverId: '55',
+    templateId: '3',
+    templateName: 'راند روزانه',
+    scopeSummary: '',
+    assigneeUserId: SESSION_USER_ID,
+    localOwnerUserId: SESSION_USER_ID,
+    status: 'draft',
+    syncStatus: 'pending',
+    entries: [],
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides
+  } as LogSheet)
+}
 
 function attachment(overrides: Partial<LocalAttachment> = {}): LocalAttachment {
   return {
@@ -46,6 +74,10 @@ function attachment(overrides: Partial<LocalAttachment> = {}): LocalAttachment {
 beforeEach(async () => {
   if (!db.isOpen()) await db.open()
   await db.attachments.clear()
+  await db.logSheets.clear()
+  await db.syncMeta.clear()
+  await db.syncMeta.put({ key: 'sessionUserId', value: Number(SESSION_USER_ID) })
+  await seedOwningSheet()
   uploadAttachment.mockReset()
   uploadAttachment.mockResolvedValue({ id: 'att-1' })
 })

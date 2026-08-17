@@ -132,17 +132,30 @@ export async function markAttachmentSynced(id: string, uploadedAt = Date.now()):
 /**
  * @param permanent when true the row is parked and the queue stops retrying it. Reserve this
  *        for refusals the server will repeat — never for anything that smells like transport.
+ * @param failedStatus the HTTP status the server answered with. Recorded because "why was this
+ *        parked" is otherwise unanswerable later: the stored `syncError` is the backend's own
+ *        translated sentence, which no code can classify. It is what lets a row parked because
+ *        the wrong operator was signed in be told apart from one holding a file the server will
+ *        never accept. Plain, non-indexed property — no Dexie version bump.
  */
 export async function markAttachmentFailed(
   id: string,
   syncError: string,
-  permanent = false
+  permanent = false,
+  failedStatus?: number
 ): Promise<void> {
   await db.attachments.update(id, {
     syncStatus: 'failed',
     syncError,
-    permanentFailure: permanent || undefined
+    permanentFailure: permanent || undefined,
+    failedStatus
   })
+}
+
+/** Rows the queue has stopped returning, so they can be reconsidered. */
+export async function getParkedAttachments(): Promise<LocalAttachment[]> {
+  const rows = await db.attachments.where('syncStatus').equals('failed').toArray()
+  return rows.filter(r => r.permanentFailure === true && !r.pendingDelete)
 }
 
 /**
@@ -155,7 +168,8 @@ export async function retryFailedAttachment(id: string): Promise<void> {
   await db.attachments.update(id, {
     syncStatus: 'pending',
     syncError: undefined,
-    permanentFailure: undefined
+    permanentFailure: undefined,
+    failedStatus: undefined
   })
 }
 

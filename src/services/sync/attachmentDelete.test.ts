@@ -58,6 +58,13 @@ function attachment(overrides: Partial<LocalAttachment> = {}): LocalAttachment {
   }
 }
 
+const SESSION_USER_ID = '7'
+
+/**
+ * The sheet, owned by whoever is signed in. Ownership matters here because a deletion that
+ * reaches the server goes out under the current operator's token, exactly like an upload —
+ * see `attachmentOwnership.test.ts`.
+ */
 async function seedSheet(status: LogSheet['status']): Promise<void> {
   await saveLogSheet({
     localId: 'sheet-local-1',
@@ -65,6 +72,8 @@ async function seedSheet(status: LogSheet['status']): Promise<void> {
     templateId: '3',
     templateName: 'راند روزانه',
     scopeSummary: '',
+    assigneeUserId: SESSION_USER_ID,
+    localOwnerUserId: SESSION_USER_ID,
     status,
     syncStatus: status === 'submitted' ? 'synced' : 'pending',
     entries: [],
@@ -77,6 +86,8 @@ beforeEach(async () => {
   if (!db.isOpen()) await db.open()
   await db.attachments.clear()
   await db.logSheets.clear()
+  await db.syncMeta.clear()
+  await db.syncMeta.put({ key: 'sessionUserId', value: Number(SESSION_USER_ID) })
   uploadAttachment.mockReset()
   uploadAttachment.mockResolvedValue({ id: 'att-1' })
   deleteRemoteAttachment.mockReset()
@@ -324,6 +335,7 @@ describe('a refusal about state, not about the file', () => {
   it('keeps a file refused for "field is full" in the queue instead of parking it', async () => {
     // 409 is the server saying "not right now". The bytes are fine, and a slot frees the moment
     // a queued deletion lands — which is exactly the sequence the original bug produced.
+    await seedSheet('draft')
     await saveAttachment(attachment({ id: 'replacement', syncStatus: 'pending' }))
     uploadAttachment.mockRejectedValue(
       new ApiError(409, 'تعداد پیوست این فیلد به حد مجاز رسیده است (حداکثر 3).')
@@ -339,6 +351,7 @@ describe('a refusal about state, not about the file', () => {
   })
 
   it('shows the server\'s own words rather than a generic message', async () => {
+    await seedSheet('draft')
     await saveAttachment(attachment({ id: 'replacement', syncStatus: 'pending' }))
     uploadAttachment.mockRejectedValue(
       new ApiError(409, 'تعداد پیوست این فیلد به حد مجاز رسیده است (حداکثر 3).')
@@ -352,6 +365,7 @@ describe('a refusal about state, not about the file', () => {
   it('still parks a refusal that is about the file itself', async () => {
     // The distinction has to keep working in both directions: 400 means the same bytes will be
     // refused forever, and retrying those is what parking exists to prevent.
+    await seedSheet('draft')
     await saveAttachment(attachment({ id: 'bad', syncStatus: 'pending' }))
     uploadAttachment.mockRejectedValue(new ApiError(400, 'Unsupported attachment file type.'))
 

@@ -12,8 +12,8 @@ import {
 } from '@/services/storage/nfcFaultReports'
 import { submitLogSheetsBatch, submitNfcFaultReportsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
-import { syncPendingAttachments } from '@/services/sync/attachmentSync'
-import { bindAttachmentsToServerSheet, getPendingAttachments } from '@/services/storage/attachments'
+import { getOwnPendingAttachments, syncPendingAttachments } from '@/services/sync/attachmentSync'
+import { bindAttachmentsToServerSheet } from '@/services/storage/attachments'
 import { getAuthSession } from '@/services/auth'
 import {
   ensureSessionUserId,
@@ -328,8 +328,10 @@ class SyncManager {
       canSyncFaultReports ? this.getPendingFaultReports() : Promise.resolve([]),
       // Counted too: the badge means "work not yet on the server", and a submitted sheet
       // whose photos are still queued is exactly that. Only uploadable rows count — an
-      // attachment whose sheet has not synced yet is represented by that sheet instead.
-      getPendingAttachments(),
+      // attachment whose sheet has not synced yet is represented by that sheet instead, and
+      // one belonging to another operator's work on this shared tablet is not this user's to
+      // deliver, so counting it would show a badge that never drains.
+      getOwnPendingAttachments(),
     ])
     return logSheets.length + faultReports.length + attachments.length
   }
