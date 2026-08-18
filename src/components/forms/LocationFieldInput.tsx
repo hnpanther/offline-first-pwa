@@ -9,6 +9,7 @@ import {
   parseCoordinate,
   LocationCaptureError
 } from '@/services/device/geolocation'
+import { FONT_MONO } from '@/theme'
 
 interface Props {
   label: string
@@ -75,7 +76,7 @@ export function LocationFieldInput({
             label={formatCoordinate(coordinate)}
             color="primary"
             variant="outlined"
-            sx={{ fontFamily: 'monospace', direction: 'ltr' }}
+            sx={{ fontFamily: FONT_MONO, fontVariantNumeric: 'tabular-nums', direction: 'ltr' }}
           />
           {!readOnly && (
             <Button

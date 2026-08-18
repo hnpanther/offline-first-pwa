@@ -528,6 +528,33 @@ The Settings screen now **shows** both, read-only and admin-only, alongside the 
 ceilings, so an admin can see which rules a device is running under. Also listed there:
 **علامت‌گذاری روی عکس** — the annotate-before-save step, likewise set in the web panel.
 
+### Fonts: nothing is read off the device
+
+Vazirmatn is a real dependency (`package.json` → `vazirmatn`), imported in `src/main.tsx`, emitted
+into the build as nine `woff2` files and **precached by the service worker** (`globPatterns`
+includes `woff2`), so it is present on the very first offline launch.
+
+That matters because a CSS font stack is resolved **per glyph**, not per element. The stack used to
+end in `"Tahoma", "Arial"` — neither of which exists on Android, so anything Vazirmatn did not cover
+fell through to whatever that vendor ships, and two tablets running identical code showed the same
+screen differently. Identifiers were worse: they used the bare `monospace` keyword, which is
+whatever the *browser* has configured as its fixed-width font.
+
+There are now two stacks, exported from `src/theme/index.ts` and used everywhere:
+
+```ts
+export const FONT_SANS = '"Vazirmatn", sans-serif'
+export const FONT_MONO = '"Vazirmatn", monospace'
+```
+
+Vazirmatn is not monospace, so `fontVariantNumeric: 'tabular-nums'` is applied where identifiers
+are shown, keeping digits in a column. The trailing generic is a last resort, reachable only if the
+bundled font fails to load.
+
+`src/theme/noSystemFonts.test.ts` fails the suite if a named device font reappears, if a stack
+starts at a generic keyword, if the Vazirmatn import or dependency is dropped, if the font package
+ever points at a remote URL, or if the service worker stops precaching `woff2`.
+
 ### Server URL rules (`src/services/api/client.ts`)
 
 1. On first launch, settings are seeded from **`VITE_SERVER_URL`** in the build (`.env.mobile` for `build:mobile`).

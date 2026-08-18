@@ -16,7 +16,10 @@
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: 'Vazirmatn', 'Tahoma', sans-serif;
+        /* No device font here either — see src/theme/index.ts. This inline rule paints the
+           first frame before the bundle loads, so naming Tahoma meant the app opened in a
+           system font and reflowed once Vazirmatn arrived. */
+        font-family: 'Vazirmatn', sans-serif;
         direction: rtl;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;

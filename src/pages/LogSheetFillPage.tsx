@@ -98,6 +98,7 @@ import { useInboxSync } from '@/hooks/useInboxSync'
 import { isLogSheetAccessibleToUser } from '@/services/auth/sessionContext'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData, NfcFaultReport } from '@/types'
+import { FONT_MONO } from '@/theme'
 
 const formatDate = formatJalaliDateTime
 
@@ -263,7 +264,7 @@ function AssetFillDialog({
                 </Typography>
               )}
               {entry.nfcTagId && (
-                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', direction: 'ltr' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontFamily: FONT_MONO, fontVariantNumeric: 'tabular-nums', direction: 'ltr' }}>
                   {t.logSheet.nfcTag}: {entry.nfcTagId}
                 </Typography>
               )}
@@ -1338,7 +1339,7 @@ export function LogSheetFillPage() {
                   onChange={e => setManualTagId(e.target.value)}
                   dir="ltr"
                   sx={{ flex: 1 }}
-                  inputProps={{ style: { fontFamily: 'monospace' }, readOnly: isScanning }}
+                  inputProps={{ style: { fontFamily: FONT_MONO }, readOnly: isScanning }}
                 />
                 <Button
                   type="submit"
@@ -1357,7 +1358,7 @@ export function LogSheetFillPage() {
                     label={`${t.nfc.serialNumber}: ${manualTagId}`}
                     variant="outlined"
                     color="success"
-                    sx={{ mb: 1, fontFamily: 'monospace', direction: 'ltr' }}
+                    sx={{ mb: 1, fontFamily: FONT_MONO, fontVariantNumeric: 'tabular-nums', direction: 'ltr' }}
                   />
                 )}
                 {!isSupported && (
@@ -1461,7 +1462,7 @@ export function LogSheetFillPage() {
                           sx={{
                             fontSize: '0.65rem',
                             height: 18,
-                            fontFamily: 'monospace'
+                            fontFamily: FONT_MONO
                           }}
                         />
                       )}
@@ -1473,7 +1474,7 @@ export function LogSheetFillPage() {
                           sx={{
                             fontSize: '0.65rem',
                             height: 18,
-                            fontFamily: 'monospace',
+                            fontFamily: FONT_MONO,
                             direction: 'ltr'
                           }}
                         />

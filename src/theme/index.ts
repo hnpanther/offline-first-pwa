@@ -1,13 +1,34 @@
 import { createTheme } from '@mui/material/styles'
 
 /**
+ * The only two font stacks in the app, and neither names a font from the device.
+ *
+ * Tahoma and Arial used to sit behind Vazirmatn here. A stack is resolved **per glyph**, so
+ * anything Vazirmatn does not cover was drawn by the tablet — and on Android neither Tahoma nor
+ * Arial exists, so it fell through again to whatever that vendor ships. The same page therefore
+ * looked different on two tablets with identical code. Vazirmatn is bundled from node_modules,
+ * emitted into the build and precached by the service worker, so it is always there.
+ *
+ * `MONO` is for identifiers — tag ids, asset codes, sub-function codes. It was the bare
+ * `monospace` keyword, which resolves to whatever the *browser* names as its fixed-width font;
+ * that is a per-device setting, not a constant. Vazirmatn is not a monospace face, so
+ * `tabular-nums` (applied where these are used) is what keeps digits in a column.
+ *
+ * The generic keyword at the end is a last resort, not a fallback in use: it is reachable only
+ * if the bundled woff2 fails to load. `noSystemFonts.test.ts` fails the suite if a named system
+ * font comes back.
+ */
+export const FONT_SANS = '"Vazirmatn", sans-serif'
+export const FONT_MONO = '"Vazirmatn", monospace'
+
+/**
  * MUI theme configured for RTL Persian language.
  * All spacing, typography, and colors are set here.
  */
 export const theme = createTheme({
   direction: 'rtl',
   typography: {
-    fontFamily: '"Vazirmatn", "Tahoma", "Arial", sans-serif',
+    fontFamily: FONT_SANS,
     fontSize: 14,
     h1: { fontWeight: 700 },
     h2: { fontWeight: 700 },
@@ -16,7 +37,7 @@ export const theme = createTheme({
     h5: { fontWeight: 600 },
     h6: { fontWeight: 600 },
     button: {
-      fontFamily: '"Vazirmatn", "Tahoma", "Arial", sans-serif',
+      fontFamily: FONT_SANS,
       fontWeight: 500
     }
   },
