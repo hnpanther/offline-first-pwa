@@ -243,8 +243,18 @@ function AssetFillDialog({
             <IconButton edge="start" onClick={onClose} size="small">
               <ArrowBackIcon />
             </IconButton>
-            <Box sx={{ flex: 1, overflow: 'hidden' }}>
-              <Typography variant="subtitle1" fontWeight={700} noWrap>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              {/* Wraps rather than truncating. The list card behind this dialog already clips
+                  long names to keep its rows scannable, so this is the one place an operator can
+                  read the whole name — and it was clipping too, which made opening the asset no
+                  help at all. `overflow: hidden` on the parent went with it: it was what turned
+                  a wrapped line into a clipped one. Names run to ~35 characters, so this costs a
+                  second line on a phone and nothing on a tablet. */}
+              <Typography
+                variant="subtitle1"
+                fontWeight={700}
+                sx={{ overflowWrap: 'anywhere', lineHeight: 1.35 }}
+              >
                 {entry.assetName}
               </Typography>
               {entry.subFunctionCode && (

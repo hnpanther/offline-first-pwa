@@ -15,7 +15,7 @@ import { useState } from 'react'
 import { useSettings } from '@/hooks/useSettings'
 import { getSettings } from '@/services/storage'
 import { useAuth } from '@/hooks/useAuth'
-import { hasPlantWideScope } from '@/types/auth'
+import { hasPlantWideScope, isManualTagEntryAllowed } from '@/types/auth'
 import { t } from '@/i18n'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import { isOrientationLockSupported } from '@/services/device/screenOrientation'
@@ -27,6 +27,13 @@ export function SettingsPage() {
   const { settings, updateSettings } = useSettings()
   const { authSession } = useAuth()
   const isAdmin = hasPlantWideScope(authSession ?? null)
+  // The policy is an AND with the viewer's own permission, so the raw switch alone can mislead:
+  // an admin reading «فعال» while their own account lacks the permission would go looking for a
+  // bug in the fill screen. Both answers are shown, the effective one second.
+  const manualEntryEffective = isManualTagEntryAllowed(
+    authSession ?? null,
+    settings.nfcManualEntryEnabled
+  )
   const [saved, setSaved] = useState(false)
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
   const orientationLockSupported = isOrientationLockSupported()
@@ -117,8 +124,9 @@ export function SettingsPage() {
       </Card>
 
       {/* Rules the device follows but does not own — shown, never edited.
-          Manual tag entry used to be a switch here; it is now decided by the signed-in user's
-          own permission, which is why nothing about it appears on this screen at all. */}
+          Manual tag entry is listed but not editable here: it used to be a device switch that
+          *granted* the capability to anyone who could open this screen, and it is now a
+          server-owned restriction ANDed with the user's permission. */}
       {isAdmin && (
         <Card variant="outlined">
           <CardContent>
@@ -144,6 +152,25 @@ export function SettingsPage() {
                 <Typography component="dd" variant="body2" fontWeight={700} sx={{ m: 0 }}>
                   {settings.nfcStrictSerialMatch ? t.settings.policyOn : t.settings.policyOff}
                 </Typography>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.manualTagEntry}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.manualTagEntryHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {settings.nfcManualEntryEnabled ? t.settings.policyOn : t.settings.policyOff}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.manualTagEntryYou}:{' '}
+                    {manualEntryEffective ? t.settings.policyOn : t.settings.policyOff}
+                  </Typography>
+                </Box>
               </Box>
               <Box sx={{ display: 'contents' }}>
                 <Box component="dt">

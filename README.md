@@ -451,7 +451,7 @@ Helpers in `src/types/auth.ts`: `hasPlantWideScope()`, `canManageNfcSerial()`, `
 | `/logsheets/history` | All — completed / failed / archived snapshots (see below) |
 | `/logsheets/:localId` | All — fill page |
 | `/nfc-inspect` | Gated on `POST:/api/asset-entries/{id}/nfc-serial` (`PermissionRoute` + sidebar) — online-only NFC tag inspector |
-| `/settings` | Gated on `CAP:SCOPE_PLANT_WIDE` (`PermissionRoute` + sidebar) — server URL, sync interval, **Allow manual tag entry** and **chip-serial scan check** (both apply to all users on that device) |
+| `/settings` | Gated on `CAP:SCOPE_PLANT_WIDE` (`PermissionRoute` + sidebar) — server URL, sync interval, screen orientation, and a read-only **Server policy** card listing the switches the server owns: chip-serial scan check, manual NFC tag entry, and image annotation |
 
 Operators see Dashboard and Log Sheets only.
 
@@ -903,13 +903,18 @@ No network call. Works offline if entries were pre-provisioned or built when the
 
 Who can type a tag ID instead of scanning (see `canEnterTagManually()` in `src/types/auth.ts`):
 
-| Condition | Effect |
-|-----------|--------|
-| Settings **Allow manual tag entry** = on (admin saves in Settings) | **All** roles, including `OPERATOR` |
-| Role `SUPERVISOR` or `SENIOR_OPERATOR` | Allowed even when the setting is off |
-| Permission `GET:/log-sheets/{id}/fill` in JWT | Allowed (e.g. `ADMIN`, `HIGH_USER`, senior/supervisor roles) |
+Two conditions, and they are **ANDed** — both must hold:
 
-Plain operators on a shared tablet need the admin toggle **or** NFC. iOS has no Web NFC — enable manual entry or use Android for scanning.
+| Condition | Where it comes from |
+|-----------|---------------------|
+| Site policy **ورود دستی شناسه تگ NFC** = on | Server-owned (`nfcManualEntryEnabled`), delivered on every bootstrap. Off means **nobody** may type a tag, however privileged |
+| Permission `GET:/log-sheets/{id}/fill` in JWT | The signed-in user's own account (`ADMIN`, `HIGH_USER`, senior/supervisor roles) |
+
+Both are shown on **Settings → سیاست‌های سرور**: the policy value, and underneath it the effective answer for the signed-in user on that device — because reading «فعال» on a policy while your own account lacks the permission is otherwise indistinguishable from a bug in the fill screen.
+
+The policy restricts and never grants. An earlier device switch of the same name did the opposite — it *granted* manual entry to everyone who could open the Settings screen, so anyone with the tablet could let a whole shift type tags instead of walking to the equipment.
+
+iOS has no Web NFC, so a plant using iPads needs the policy on and the permission granted — or the per-asset fault-report fallback below.
 
 ### NFC fault reports (per-asset unlock)
 
@@ -1692,8 +1697,7 @@ curl -k https://192.168.1.4/api/health
 1. Open `https://192.168.1.4` in Chrome (trusted lock after CA install).
 2. Log in as **admin** once per device (recommended):
    - **Settings** → confirm **Server URL** matches the PWA origin (`https://192.168.1.4`).
-   - Enable **Allow manual tag entry** if operators need typed NFC IDs (iOS or damaged tags).
-   - Optional: enable the **chip-serial scan check** if every asset has its NFC serial recorded.
+   - Check **Settings → سیاست‌های سرور** to see what the server currently allows: chip-serial scan check, manual NFC tag entry, image annotation. These are read-only here; they are changed in the **web** admin panel and reach every tablet on its next reconnect.
 3. Log in as field users; wait for inbox sync (assigned work appears).
 4. Chrome menu → **Install app** (or use the in-app install prompt).
 
