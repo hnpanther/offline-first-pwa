@@ -470,6 +470,47 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 | **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). |
 | **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
 
+#### What these two actually control
+
+**Server URL** is read by exactly one place — `getBaseUrl()` in `src/services/api/client.ts` — and
+it is the prefix of every HTTP call: login, inbox, bootstrap, log-sheet submission, attachment
+upload. It is also printed on the login screen so an operator can see which server they are about
+to hand a password to.
+
+It is **inert in the normal deployment.** When the configured origin equals the page's origin the
+client returns `''` and every request goes out relative, so on a tablet loading the PWA from the
+same host that serves the API, editing this field changes nothing. It matters only when the page
+and the API live on different origins: Vite on `:5173` against the backend on `:8081`, or a PWA
+hosted separately from the API. Two sharp edges: the value is **not validated**, so a typo breaks
+every request and the only way back is this screen (which needs a login), and changing it **does
+not clear the stored session** — sign out and back in, or a token minted by the old server gets
+sent to the new one.
+
+**Sync interval** is the period of the `setInterval` in `SyncManager.scheduleInterval()`. Each tick
+is **outbound only**:
+
+- queued log sheets are submitted
+- queued NFC fault reports are submitted (when the user holds the permission)
+- **attachments are uploaded** — they queue independently of sheets, which is why a tick still has
+  work to do when no sheet is pending
+- expired sheets are marked
+
+Inbox and master data are **not** on this timer; they refresh on their own schedule (bootstrap when
+older than an hour). So lowering this number does not make new work arrive sooner — it only pushes
+finished work up sooner. The timer is not the only trigger either: the browser's `online` event
+fires a pass immediately, so a tablet coming back from offline does not wait for the next tick.
+Passes never overlap (`syncInFlight`), and a pass while offline returns at once.
+
+Range **10 s – 1 hour**, clamped on the way to storage rather than trusted: `min`/`max` on an
+`<input type="number">` are a hint the browser may ignore, and an emptied box yields
+`Number('') === 0` — a zero-delay sync loop against the server.
+
+> **A saved interval takes effect on the next app start, not immediately.** `useSyncManager` reads
+> it once when `AppLayout` mounts and builds the timer from it; saving Settings writes IndexedDB and
+> does not rebuild the running timer. Nothing on the screen says so, so an admin changes the number,
+> sees "saved", and reasonably assumes it is live. Either restart the app or accept the delay. The
+> fix — re-calling `syncManager.start(...)` after a save — is a few lines and has not been made.
+
 | **Screen orientation** (`screenOrientation`, admin-only) | `auto` (default), `portrait` or `landscape`. Stored **on the device** and never synced — it depends on how that particular tablet is mounted, so a shared account must not drag one device's choice onto another. Re-applied on every launch, because an orientation lock does not survive the app closing. Locking generally works only in the **installed** PWA on Android; where the browser cannot lock (desktop, iOS Safari) the app simply rotates freely and the Settings screen says so once. |
 
 > There is no operator-name or location field any more. The signed-in user's own name is used wherever a name is needed (log-sheet operator label, NFC fault-report reporter) — on a shared tablet a device-wide typed name attributed everyone's work to whoever the admin entered once.
@@ -480,7 +521,7 @@ Two switches were removed from it, and neither moved somewhere else on the devic
 
 | Was a device switch | Now |
 |---|---|
-| **Allow manual tag entry** | **A permission.** The manual-entry box appears for whoever holds `GET:/log-sheets/{id}/fill` (supervisor / senior operator) and for nobody else. As a switch it granted the ability to *everyone* on that tablet, so anyone who could open Settings could let a whole shift type tags instead of scanning them — which is the entire point of the NFC step. Who may skip a scan is an access-control question, so access control answers it. Unrelated to the NFC-fault fallback, which unlocks one asset after a report is filed. |
+| **Allow manual tag entry** | **A server-owned policy ANDed with a permission.** The manual-entry box appears only when the site policy `nfcManualEntryEnabled` is on *and* the signed-in user holds `GET:/log-sheets/{id}/fill`. As a device switch it granted the ability to *everyone* on that tablet, so anyone who could open Settings could let a whole shift type tags instead of scanning them — which is the entire point of the NFC step. It only ever restricts now. Both values, and the effective answer for the signed-in user, are listed read-only on this screen. Unrelated to the NFC-fault fallback, which unlocks one asset after a report is filed. |
 | **Chip-serial scan check** (`nfcStrictSerialMatch`) | **A plant-wide rule set in the web panel** (Settings → اسکن NFC, on by default), shipped on `/api/bootstrap` and applied without a restart. Record 1 can be copied onto any blank tag, so the serial is the only part of a scan that means "I stood in front of this equipment" — one plant, one answer, rather than each tablet deciding for itself. |
 
 The Settings screen now **shows** both, read-only and admin-only, alongside the attachment

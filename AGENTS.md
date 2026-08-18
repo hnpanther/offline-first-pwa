@@ -359,6 +359,9 @@ By role, the resulting UI is unchanged:
 | Counting `useLogSheets()` directly for per-user stats | The device's table holds **every** signed-in user's work — scope it with `utils/dashboardStats.ts` |
 | Putting a sign-out reason in router location state | `ProtectedRoute`'s own `<Navigate>` overwrites it; use the `sessionEnded` store flag |
 | Declaring one PNG `purpose: "any maskable"` | Android crops it to its own mask — ship a separate maskable file, see README **App Icon** |
+| Assuming a saved **sync interval** is live | `useSyncManager` reads it once when `AppLayout` mounts and builds the `setInterval` from it. Saving Settings writes IndexedDB and does not rebuild the running timer, and the screen does not say so — the new period starts on the next app launch. Documented, not fixed |
+| Expecting **Server URL** to change anything on a same-origin deployment | `getBaseUrl()` returns `''` when the configured origin equals `window.location.origin`, so requests go out relative and the field is inert. It matters only when page and API are on different origins |
+| Changing **Server URL** without signing out | The stored session is untouched, so a token minted by the old server is sent to the new one |
 
 ---
 
