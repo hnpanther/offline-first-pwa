@@ -20,7 +20,6 @@ import {
   evaluateNumericSeverity,
   severityMessage,
   validationSummaryFa,
-  allowsNegative,
   filterNumericInput,
   formatNumericDisplay,
   normalizeNumericOnBlur,
@@ -67,7 +66,6 @@ interface NumericFieldInputProps {
   error?: string
   rangeSeverity: FieldValidationSeverity
   helper: { text: string; color?: 'warning.main' | 'error.main' } | null
-  allowNegative: boolean
 }
 
 function NumericFieldInput({
@@ -76,15 +74,14 @@ function NumericFieldInput({
   f,
   error,
   rangeSeverity,
-  helper,
-  allowNegative
+  helper
 }: NumericFieldInputProps) {
   return (
     <TextField
       name={f.name}
       inputRef={f.ref}
       onBlur={() => {
-        const normalized = normalizeNumericOnBlur(formatNumericDisplay(f.value), allowNegative)
+        const normalized = normalizeNumericOnBlur(formatNumericDisplay(f.value))
         if (normalized !== formatNumericDisplay(f.value)) {
           f.onChange(normalized)
         }
@@ -92,7 +89,7 @@ function NumericFieldInput({
       }}
       value={formatNumericDisplay(f.value)}
       onChange={e => {
-        f.onChange(filterNumericInput(e.target.value, allowNegative))
+        f.onChange(filterNumericInput(e.target.value))
       }}
       label={label}
       type="text"
@@ -105,31 +102,33 @@ function NumericFieldInput({
       fullWidth
       size="medium"
       inputProps={{
+        // Keeps the on-screen keyboard numeric. `decimal` gives digits and a separator; most
+        // Android keyboards offer no minus key in that layout, which is precisely what the ±
+        // button beside the field is for. Do not "fix" this by widening it to text — that hands
+        // an operator a full QWERTY for a pressure reading.
         inputMode: 'decimal',
         dir: 'ltr',
         autoComplete: 'off'
       }}
-      InputProps={
-        allowNegative
-          ? {
-              endAdornment: (
-                <InputAdornment position="end">
-                  <IconButton
-                    aria-label="تغییر علامت عدد"
-                    edge="end"
-                    size="small"
-                    tabIndex={-1}
-                    onMouseDown={e => e.preventDefault()}
-                    onClick={() => f.onChange(toggleNumericSign(f.value))}
-                    sx={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 36 }}
-                  >
-                    ±
-                  </IconButton>
-                </InputAdornment>
-              )
-            }
-          : undefined
-      }
+      InputProps={{
+        // Every number field, unconditionally — see fieldValidation.ts. The keyboard this field
+        // asks for has no minus key, so without this button a negative reading is unrecordable.
+        endAdornment: (
+          <InputAdornment position="end">
+            <IconButton
+              aria-label="تغییر علامت عدد"
+              edge="end"
+              size="small"
+              tabIndex={-1}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => f.onChange(toggleNumericSign(f.value))}
+              sx={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 36 }}
+            >
+              ±
+            </IconButton>
+          </InputAdornment>
+        )
+      }}
       sx={{
         '& .MuiOutlinedInput-root': { overflow: 'visible' },
         '& input': { textAlign: 'left' },
@@ -148,7 +147,6 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
   const label = field.required ? `${field.label} *` : field.label
   const options = normalizeFieldOptions(field.options)
   const effectiveRangeValidation = resolveRangeValidation(field, rangeValidation)
-  const signedNumeric = field.type === 'number' && allowsNegative(effectiveRangeValidation)
   const watchedValue = useWatch({
     control,
     name: field.name,
@@ -194,7 +192,6 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                 error={error}
                 rangeSeverity={rangeSeverity}
                 helper={helper}
-                allowNegative={signedNumeric}
               />
             </Box>
           )}

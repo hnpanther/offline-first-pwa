@@ -1019,8 +1019,40 @@ On numeric fields in `DynamicFormField`:
 - Static hint under field: `Warning: 20–80 · Danger: 10–90`
 - Live feedback when value is out of range (yellow warning / red danger)
 - Submit is **not** blocked by soft limits (matches backend web UI)
+- **Every number field is signed** — a minus may be typed and a `±` button sits in the field
 
 Logic mirrors backend `FieldValidationSupport` in `src/utils/fieldValidation.ts`.
+
+### Negative readings
+
+A number field accepts a negative value **always**, regardless of its ranges. The ranges decide
+*severity*; they never decide what may be typed.
+
+This used to be conditional, and the condition was wrong: a minus was accepted only when the
+warning or danger range happened to have a negative minimum. A temperature below zero, a vacuum
+pressure or a level under datum therefore could not be recorded at all unless somebody had first
+configured a negative threshold — and the operator standing at the equipment had no way to enter
+the real reading except to type a wrong one. The web panel's fill form, meanwhile, had always
+accepted negatives (a bare `<input type="number">` with no `min`), so the two clients of the same
+system disagreed.
+
+The `validation.allowNegative` flag that was supposed to override this is gone. It could not be
+set: the backend has no such concept, the web panel does not offer it, and
+`FieldValidationSupport.build(...)` rebuilds the validation object from scratch on every field
+save with only `options`, `warning` and `danger` — so a key added by hand to the database was
+erased at the next edit.
+
+The keyboard stays numeric: `inputMode: 'decimal'` gives digits and a decimal separator. Most
+Android keyboards offer no minus key in that layout, which is exactly what the in-field `±` button
+is for — press it before or after typing, on an empty field it primes a lone `-`. Do not widen
+`inputMode` to text to get a minus key; that hands an operator a full QWERTY for a pressure
+reading.
+
+A field that genuinely cannot go below zero is expressed as a danger range with `min: 0`. That
+surfaces the mistake as a breach instead of silently swallowing the keystroke.
+
+`src/utils/fieldValidation.test.ts` covers this end to end — both boundaries of both bands, with
+negative, zero and positive readings, plus the typing, blur and `±` paths.
 
 ---
 

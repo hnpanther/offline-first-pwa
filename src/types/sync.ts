@@ -54,8 +54,13 @@ export interface FieldValidation {
   /** Regex string — converted to RegExp at runtime for react-hook-form */
   pattern?: string
   options?: Array<{ value: string; label: string }>
-  /** When true, numeric field shows ± toggle and accepts negative values. Auto-detected if any min < 0. */
-  allowNegative?: boolean
+  /*
+   * `allowNegative` used to live here. It is gone, and not just unused: the backend never had the
+   * concept, the web panel could not set it, and `FieldValidationSupport.build(...)` rebuilds this
+   * object from scratch on every field save with only `options`, `warning` and `danger` — so a key
+   * added by hand to the database vanished at the next edit. Every number field is signed now; the
+   * ranges below decide severity, never what may be typed. See utils/fieldValidation.ts.
+   */
 }
 
 /**

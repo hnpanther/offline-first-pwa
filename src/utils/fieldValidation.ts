@@ -13,9 +13,17 @@ export const FIELD_VALIDATION_MESSAGES = {
 } as const
 
 function toNumber(value: unknown): number | null {
-  if (value === undefined || value === null || value === '') return null
+  if (value === undefined || value === null) return null
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  const n = Number(String(value).trim())
+  // A string that is only whitespace is *absent*, not zero. `Number('')` is 0 in JavaScript, so
+  // the earlier `value === ''` check let '   ' through as a reading of 0 — which against a band
+  // of 5–25 is a DANGER. The backend's `Double.parseDouble` throws on the same input and yields
+  // null, so the two disagreed: this app would paint a field red that the server's stored
+  // max_severity calls clean. The same correction applies to a blank *bound*, which now means
+  // "no bound" rather than "bounded at zero", again matching the backend.
+  const text = String(value).trim()
+  if (text === '') return null
+  const n = Number(text)
   return Number.isFinite(n) ? n : null
 }
 
@@ -104,36 +112,47 @@ export function severityMessage(severity: FieldValidationSeverity): string | nul
   return null
 }
 
-/** Whether a numeric field should accept negative values (± toggle + signed input). */
-export function allowsNegative(validation?: FieldValidation | Record<string, unknown>): boolean {
-  const v = validation as Record<string, unknown> | undefined
-  if (v?.allowNegative === true) return true
-  if (v?.allowNegative === false) return false
+/**
+ * A number field is signed. Always.
+ *
+ * There used to be an `allowsNegative(validation)` here that decided per field, and it decided
+ * wrongly: a minus sign was accepted only when the warning or danger range happened to have a
+ * negative minimum. Nothing else about the field mattered — not its unit, not its meaning. So a
+ * temperature below zero, a vacuum pressure or a level under datum could not be entered at all
+ * unless somebody had configured a negative threshold first, and the operator standing in front
+ * of the equipment had no way to record the reading except to type a wrong one.
+ *
+ * The explicit `validation.allowNegative` escape hatch was worse than useless. The backend has no
+ * such concept anywhere, the web panel cannot set it, and `FieldValidationSupport.build(...)`
+ * constructs a fresh map holding only `options`, `warning` and `danger` on every save — so a key
+ * added by hand to the database was erased the next time anyone edited that field.
+ *
+ * Ranges decide **severity**, not what may be typed. A negative value below `warning.min` is
+ * flagged as a breach exactly as it should be, by the same code that judges every other reading —
+ * see {@link evaluateNumericSeverity}, which mirrors the backend's `evaluateNumeric`. A field that
+ * genuinely cannot go below zero is expressed as a danger range with `min: 0`, which surfaces the
+ * mistake instead of silently swallowing the keystroke.
+ *
+ * The web panel's fill form has always accepted negatives — a bare `<input type="number">` with no
+ * `min` — so this also ends a disagreement between two clients of the same system.
+ */
+const NUMERIC_INPUT = /^-?\d*\.?\d*$/
 
-  const wr = warningRange(validation)
-  const dr = dangerRange(validation)
-  if (wr.min != null && wr.min < 0) return true
-  if (dr.min != null && dr.min < 0) return true
-  if (v && 'min' in v) {
-    const legacyMin = toNumber(v.min)
-    if (legacyMin != null && legacyMin < 0) return true
-  }
-  return false
-}
-
-const UNSIGNED_NUMERIC_INPUT = /^\d*\.?\d*$/
-const SIGNED_NUMERIC_INPUT = /^-?\d*\.?\d*$/
-
-/** Restrict keystrokes/paste to a valid in-progress decimal literal. */
-export function filterNumericInput(raw: string, allowNegative: boolean): string {
+/**
+ * Restrict keystrokes/paste to a valid in-progress decimal literal.
+ *
+ * Character by character rather than testing the whole string, so a paste of `12x.5` yields
+ * `12.5` instead of being rejected outright, and a partial `-` or `1.` survives while the
+ * operator is still typing. {@link normalizeNumericOnBlur} tidies those up afterwards.
+ */
+export function filterNumericInput(raw: string): string {
   const trimmed = raw.replace(/\s/g, '')
   if (!trimmed) return ''
 
-  const pattern = allowNegative ? SIGNED_NUMERIC_INPUT : UNSIGNED_NUMERIC_INPUT
   let result = ''
   for (const ch of trimmed) {
     const candidate = result + ch
-    if (pattern.test(candidate)) result = candidate
+    if (NUMERIC_INPUT.test(candidate)) result = candidate
   }
   return result
 }
@@ -146,11 +165,16 @@ export function formatNumericDisplay(value: unknown): string {
   return String(value)
 }
 
-/** Normalize partial input on blur — drop lone "-" or trailing "." */
-export function normalizeNumericOnBlur(raw: string, allowNegative: boolean): string {
+/**
+ * Normalize partial input on blur — drop a lone "-" or a trailing ".".
+ *
+ * These are states the operator passes *through* while typing, so they must be legal during
+ * input and gone once the field is left; `-` alone or `1.` would otherwise be submitted as a
+ * value. It no longer strips a leading minus: the sign is the operator's answer, not a mistake.
+ */
+export function normalizeNumericOnBlur(raw: string): string {
   const trimmed = raw.trim()
   if (!trimmed || trimmed === '-' || trimmed === '.' || trimmed === '-.') return ''
-  if (!allowNegative && trimmed.startsWith('-')) return trimmed.replace(/^-/, '')
   if (trimmed.endsWith('.')) return trimmed.slice(0, -1)
   return trimmed
 }
