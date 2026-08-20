@@ -95,20 +95,99 @@ class AppDatabase extends Dexie {
 
 export const db = new AppDatabase()
 
+/** Raised when the database on the device is newer than this build understands. */
+export class DatabaseVersionMismatchError extends Error {
+  constructor(readonly unsyncedCount: number) {
+    super(
+      'نسخه داده‌های ذخیره‌شده روی این دستگاه جدیدتر از نسخه فعلی برنامه است. ' +
+        'برای جلوگیری از حذف اطلاعات ارسال‌نشده، برنامه باز نشد. ' +
+        'لطفاً نسخه به‌روز برنامه را نصب کنید یا با پشتیبانی تماس بگیرید.'
+    )
+    this.name = 'DatabaseVersionMismatchError'
+  }
+}
+
+/** Stores whose rows represent work that exists nowhere else until it syncs. */
+const UNSYNCED_WORK_STORES = ['logSheets', 'outbox', 'nfcFaultReports', 'attachments'] as const
+
 /**
- * Opens the database, recreating it if the on-disk version is newer than this build.
+ * Counts rows that recreating the database would destroy for good.
  *
- * Only reachable on a dev device that ran the app before the version numbers were
- * collapsed to 1. Dexie surfaces that as `VersionError`; the only way forward is to
- * delete and recreate, since IndexedDB cannot open a database at a lower version than
- * it was created with. Any other failure is rethrown untouched — silently wiping a
- * user's database on an unrelated error would be far worse than failing loudly.
+ * **Read through a separate, schema-less Dexie handle, not through `db`.** That is the whole
+ * trick: we are here because `db.open()` failed, so every table on `db` would auto-open and
+ * fail again — and a first attempt at this counted through `db`, hit the catch on all four
+ * stores, and reported "4 unsynced rows" for a database that was in fact empty. It would have
+ * refused to start every tablet it was supposed to protect. A unit test caught it; nothing in
+ * normal use would have, because the refusal looks identical either way.
+ *
+ * `new Dexie(name)` with no declared version opens whatever is actually on disk and exposes its
+ * real stores, which is exactly what is needed to inspect a database this build cannot address
+ * at its own version.
+ *
+ * Tolerant in one direction only: if the contents cannot be established at all, the answer is
+ * "assume there is work". Refusing to start is a support call; guessing "empty" wrongly is a
+ * shift's readings gone.
+ */
+async function countUnsyncedWork(): Promise<number> {
+  const probe = new Dexie(DB_NAME)
+  try {
+    await probe.open()
+    const present = new Set(probe.tables.map(table => table.name))
+    let total = 0
+    for (const store of UNSYNCED_WORK_STORES) {
+      if (!present.has(store)) continue
+      try {
+        total += await probe.table(store).count()
+      } catch {
+        total += 1
+      }
+    }
+    return total
+  } catch {
+    // Cannot even look. Assume the worst rather than delete on a guess.
+    return 1
+  } finally {
+    probe.close()
+  }
+}
+
+/**
+ * Opens the database. **Never deletes data that has not been synced.**
+ *
+ * IndexedDB cannot open a database at a lower version than the one that created it, so a build
+ * older than the data on the device gets a `VersionError` and has only two ways forward: delete
+ * and recreate, or refuse to start.
+ *
+ * This used to delete, unconditionally. The comment justifying it said the case was reachable
+ * "only on a dev device" — and that stopped being true the moment the schema moved to
+ * `version(2)`: from then on, **any rollback to an earlier build wipes every tablet that had
+ * run the newer one**, including completed rounds and captured photos that had not reached the
+ * server yet. That data exists in exactly one place. With `autoUpdate` + `skipWaiting` on the
+ * service worker, a bad deploy reaches the whole fleet in minutes and a rollback would then
+ * destroy the very work the rollback was meant to protect.
+ *
+ * So the rule is now: delete only what is provably disposable.
+ *
+ *  - **Nothing unsynced** — recreate, as before. Everything lost is reference data the next
+ *    sync refetches.
+ *  - **Unsynced work present** — refuse, and say so. A tablet that will not start is a support
+ *    call; a tablet that started by discarding a shift's readings is a plant with no record of
+ *    an inspection, discovered weeks later.
+ *
+ * Any other failure is rethrown untouched, exactly as before.
  */
 export async function openDatabase(): Promise<void> {
   try {
     await db.open()
   } catch (err) {
     if ((err as Error)?.name !== 'VersionError') throw err
+
+    const unsynced = await countUnsyncedWork()
+    if (unsynced > 0) {
+      db.close()
+      throw new DatabaseVersionMismatchError(unsynced)
+    }
+
     db.close()
     await Dexie.delete(DB_NAME)
     await db.open()

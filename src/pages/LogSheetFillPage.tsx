@@ -21,6 +21,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import NfcIcon from '@mui/icons-material/Nfc'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import SendIcon from '@mui/icons-material/Send'
 import SaveIcon from '@mui/icons-material/Save'
@@ -272,6 +273,28 @@ function AssetFillDialog({
                 createdAt={entry.createdAt}
                 updatedAt={entry.updatedAt}
               />
+              {/*
+                Whose readings these are.
+
+                A supervisor can reopen a submitted sheet and hand it to a second operator to
+                redo part of it. That operator opens this form already full of values, and
+                without this line there is nothing to tell them the values are somebody else's
+                — so they either redo work that was fine, or accept readings they never took.
+
+                The server re-attributes an entry only when its value actually changes, so this
+                keeps naming the original operator right up until this operator edits the field,
+                which is exactly when it stops being true.
+              */}
+              {entry.filledByName && (
+                <Typography
+                  variant="caption"
+                  color="warning.main"
+                  sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}
+                >
+                  <PersonOutlineIcon sx={{ fontSize: 14 }} />
+                  ثبت‌شده توسط {entry.filledByName}
+                </Typography>
+              )}
             </Box>
             {assetClass && (
               <Chip label={assetClass.name} size="small" color="secondary" />
@@ -1464,6 +1487,19 @@ export function LogSheetFillPage() {
                             height: 18,
                             fontFamily: FONT_MONO
                           }}
+                        />
+                      )}
+                      {entry.filledByName && (
+                        /* At a glance, before opening anything: which rows are somebody
+                           else's work. Without it the operator has to open every asset to
+                           find out, on a round that can carry forty-seven of them. */
+                        <Chip
+                          icon={<PersonOutlineIcon sx={{ fontSize: 12 }} />}
+                          label={entry.filledByName}
+                          size="small"
+                          variant="outlined"
+                          color="warning"
+                          sx={{ fontSize: '0.65rem', height: 18 }}
                         />
                       )}
                       {entry.nfcTagId && (

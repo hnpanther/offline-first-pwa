@@ -105,6 +105,14 @@ export interface ServerLogSheetEntry {
   formData?: Record<string, unknown> | null
   createdAt?: number | null
   updatedAt?: number | null
+  /**
+   * Display name of whoever last recorded this entry's values.
+   *
+   * Resolved on the server: the device holds no user directory and a round is filled offline
+   * where it could not fetch one. The bundle has always carried `filledByUserId`, which names
+   * nobody — this is the value the fill screen can actually show.
+   */
+  filledByName?: string | null
 }
 
 export interface LogSheetContextDto {

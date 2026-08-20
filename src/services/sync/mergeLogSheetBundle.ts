@@ -162,6 +162,14 @@ export function mapServerEntryToLocal(
     nfcSerial: entry.nfcSerial ?? undefined,
     classId: toIdString(entry.classId),
     formData,
+    // Server-authoritative, like nfcSerial: only the server knows who filled an entry, and it
+    // only re-attributes one when the value actually changed. Taking a local value here would
+    // pin the label to whoever happened to hold the sheet first.
+    //
+    // Deliberately cleared when the local draft wins (`formData` came from `localForm`): those
+    // are this operator's own unsent edits, so labelling them with the previous operator's name
+    // would be a lie in the other direction.
+    filledByName: formData === serverForm ? (entry.filledByName ?? undefined) : undefined,
     createdAt: preserveLocal
       ? (existing?.createdAt ?? entry.createdAt ?? undefined)
       : (entry.createdAt ?? undefined),

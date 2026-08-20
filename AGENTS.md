@@ -544,3 +544,49 @@ action rather than a replay; the submit path mints a fresh one. It also clears `
 
 The other three outcomes stay supervisor territory, and `SUPERSEDED` / `EXPIRED` / `CANCELLED` /
 `REVOKED` / `REASSIGNED` remain non-recoverable exactly as before.
+
+## Recently hardened (do not undo)
+
+### Requests have timeouts; they did not
+`apiClient` wraps every `fetch` — JSON, multipart and blob — in `AbortSignal.any([callerSignal,
+timeout])`. `REQUEST_TIMEOUT_MS` is 20s for JSON, `UPLOAD_TIMEOUT_MS` 120s for media.
+
+This is not tidiness. `SyncManager` keeps the in-flight sync in **one shared promise** and hands
+that same promise to every later caller (`syncInFlight`). With no timeout, a half-open
+connection — an access point that dropped, a NAT that forgot the flow — left `fetch` pending for
+as long as the OS allowed and every subsequent sync attached itself to that dead promise: no
+sheets, no attachments, no error shown. On a plant network that is an ordinary Tuesday.
+
+`isSyncing` and `syncInFlight` both reset in `finally`, so with every network await now
+guaranteed to settle the deadlock is closed at the root. **A watchdog that force-clears
+`syncInFlight` was considered and rejected** — it could let two syncs run at once, which is worse
+than the problem.
+
+### `openDatabase` never deletes unsynced work
+On `VersionError` it used to `Dexie.delete` unconditionally, justified by a comment saying the
+case was reachable "only on a dev device" — which stopped being true when the schema moved to
+`version(2)`. It now counts rows in `logSheets` / `outbox` / `nfcFaultReports` / `attachments`
+first and refuses (`DatabaseVersionMismatchError`) if any exist; `main.tsx` renders a plain-DOM
+Persian screen telling the operator **not** to reinstall.
+
+Two things to know:
+- **Measured, a plain rollback does not reach that branch under Dexie 4** — opening a database
+  created at a higher version succeeds and the rows are readable. The guard is for the cases
+  that do reach it (concurrent version-change transaction, a different Dexie major, a browser
+  unlike fake-indexeddb), where deleting unsynced work is the wrong answer whatever caused it.
+- **The count is read through a separate schema-less `new Dexie(DB_NAME)` handle**, not through
+  `db`. A first attempt counted through `db` — which had just failed to open — hit the catch on
+  every store and reported "4 unsynced rows" for an empty database, i.e. it would have refused to
+  start every tablet it was meant to protect. A unit test caught it; nothing in normal use would
+  have, because the refusal looks identical either way.
+
+### Entries show who filled them
+`LogSheetEntryData.filledByName` comes from the server (`ServerLogSheetEntry.filledByName`) and is
+displayed on the fill dialog and in the asset list. It exists for reopen-and-reassign: operator 2
+opens a form already full of operator 1's readings — intended, they need to see what is there —
+and without a name cannot tell which rows are theirs to redo.
+
+The server re-attributes an entry **only when its value actually changes**, so the label keeps
+naming the original operator until this operator edits that asset. `mergeLogSheetBundle` clears
+it when the local draft wins, because those values are this operator's own unsent edits and
+labelling them with somebody else's name is a lie in the other direction.

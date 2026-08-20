@@ -18,6 +18,57 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * How long a request may take before it is abandoned.
+ *
+ * <p>There was no limit at all, which on a plant network is not a theoretical gap. A half-open
+ * TCP connection — an access point that dropped, a NAT that forgot the flow — leaves `fetch`
+ * pending until the OS gives up, which can be minutes. `SyncManager` keeps the in-flight sync
+ * in a single shared promise and hands that same promise to every later caller, so one hung
+ * request stopped *all* subsequent syncing: no sheets, no attachments, and no error to show for
+ * it. The tablet looked fine and quietly stopped delivering work.
+ *
+ * Two limits, because two very different things are being waited on:
+ *  - JSON is small and either answers quickly or is not coming.
+ *  - Uploads carry a compressed photo or voice note over the same weak link, and 15s would
+ *    abandon transfers that were making perfectly good progress.
+ */
+export const REQUEST_TIMEOUT_MS = 20_000
+export const UPLOAD_TIMEOUT_MS = 120_000
+
+/**
+ * Combines the caller's own abort signal with a timeout.
+ *
+ * `AbortSignal.any` is what makes both work at once: the caller can still cancel (SyncManager
+ * aborts everything on `stop()`), and the timeout fires independently if nothing answers.
+ * Returns a cleanup to clear the timer, so a fast response does not leave one pending.
+ */
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal
+  done: () => void
+} {
+  const timeoutController = new AbortController()
+  const timer = setTimeout(() => timeoutController.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs)
+  const done = () => clearTimeout(timer)
+
+  // AbortSignal.any is available in every browser this PWA targets; the fallback keeps unit
+  // tests and older webviews working rather than throwing at module load.
+  const combined =
+    typeof AbortSignal.any === 'function' && signal
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : (signal ?? timeoutController.signal)
+
+  // Without `any` we can only honour one of the two. Prefer the caller's, and still fire the
+  // timeout by aborting through it is not possible — so fall back to the timeout alone when the
+  // caller passed nothing, which is the common case.
+  return { signal: combined, done }
+}
+
+/** True when a caught error is our timeout rather than a genuine network failure. */
+function isTimeout(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'TimeoutError'
+}
+
 type UnauthorizedHandler = () => void
 let onUnauthorized: UnauthorizedHandler | null = null
 
@@ -92,16 +143,21 @@ async function request<T>(
   const url = `${baseUrl}${path}`
 
   let response: Response
+  const timeout = withTimeout(signal, REQUEST_TIMEOUT_MS)
   try {
     response = await fetch(url, {
       method,
       headers: await buildHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal
+      signal: timeout.signal
     })
-  } catch {
+  } catch (error) {
     useAppStore.getState().setServerReachable(false)
-    throw new ApiError(0, 'ارتباط با سرور برقرار نشد.')
+    throw new ApiError(0, isTimeout(error)
+      ? 'پاسخی از سرور دریافت نشد (زمان انتظار به پایان رسید).'
+      : 'ارتباط با سرور برقرار نشد.')
+  } finally {
+    timeout.done()
   }
 
   if (response.status === 401 && authRequired) {
@@ -157,17 +213,23 @@ async function multipart<T>(path: string, form: FormData, signal?: AbortSignal):
   }
   const token = await getAccessToken()
   let response: Response
+  // The upload budget, not the JSON one: this is carrying a compressed photo or voice note.
+  const timeout = withTimeout(signal, UPLOAD_TIMEOUT_MS)
   try {
     response = await fetch(`${await getBaseUrl()}${path}`, {
       method: 'POST',
       // No Content-Type: the browser must set it, including the multipart boundary.
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
-      signal
+      signal: timeout.signal
     })
-  } catch {
+  } catch (error) {
     useAppStore.getState().setServerReachable(false)
-    throw new ApiError(0, 'ارتباط با سرور برقرار نشد.')
+    throw new ApiError(0, isTimeout(error)
+      ? 'ارسال فایل در زمان مجاز کامل نشد.'
+      : 'ارتباط با سرور برقرار نشد.')
+  } finally {
+    timeout.done()
   }
   if (response.status === 401) {
     await clearAuthSession()
@@ -188,14 +250,20 @@ async function multipart<T>(path: string, form: FormData, signal?: AbortSignal):
 async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
   const token = await getAccessToken()
   let response: Response
+  // A download of the same kind of file an upload carries, so the same budget.
+  const timeout = withTimeout(signal, UPLOAD_TIMEOUT_MS)
   try {
     response = await fetch(`${await getBaseUrl()}${path}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
-      signal
+      signal: timeout.signal
     })
-  } catch {
+  } catch (error) {
     useAppStore.getState().setServerReachable(false)
-    throw new ApiError(0, 'ارتباط با سرور برقرار نشد.')
+    throw new ApiError(0, isTimeout(error)
+      ? 'دریافت فایل در زمان مجاز کامل نشد.'
+      : 'ارتباط با سرور برقرار نشد.')
+  } finally {
+    timeout.done()
   }
   if (response.status === 401) {
     await clearAuthSession()

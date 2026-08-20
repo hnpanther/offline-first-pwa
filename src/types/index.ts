@@ -247,6 +247,20 @@ export interface LogSheetEntryData {
   updatedAt?: number
   /** How this entry's current form data was captured. Unset means not yet filled. */
   filledVia?: 'nfc' | 'manual'
+  /**
+   * Who recorded the values currently stored for this asset, as a display name.
+   *
+   * Server-resolved and server-authoritative. It exists for the reopen-and-reassign case: a
+   * supervisor reopens a submitted sheet and hands it to a second operator to redo part of it,
+   * and that operator opens a form already full of readings. Without a name they cannot tell
+   * which rows are their own work and which are the previous operator's — so they either redo
+   * everything or trust values they have never seen taken.
+   *
+   * The server only re-attributes an entry when its value actually changes, so this keeps
+   * naming the original operator until somebody edits that asset. Unset means nobody has
+   * filled it yet.
+   */
+  filledByName?: string
 }
 
 /** What an image/audio field stores in formData — ids only, never bytes. */
