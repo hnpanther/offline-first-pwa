@@ -275,6 +275,20 @@ server {
     root  /var/www/offline-first-pwa/dist;
     index index.html;
 
+    # ── First load and every service-worker update go over plant Wi-Fi ──────────────────
+    #
+    # The precache is ~1.3 MB, almost all of it JavaScript, and it is fetched in full on a
+    # fresh install and again on every deploy. Text compresses 3-4x, so this is the difference
+    # between a tablet that is usable in seconds and one an operator gives up on. Already
+    # compressed formats (woff2, png, jpeg, webm) are deliberately absent from the list —
+    # re-compressing them costs CPU and grows the payload.
+    gzip              on;
+    gzip_vary         on;
+    gzip_min_length   1024;
+    gzip_proxied      any;
+    gzip_types        text/plain text/css application/javascript application/json
+                      image/svg+xml application/manifest+json;
+
     # A single attachment may be up to 25 MB (app.attachments.max-file-size-bytes). nginx's
     # default is 1 MB, and it rejects the rest with a 413 that the operator reads as "upload
     # failed" and nobody reads as a proxy limit. Only /api/ passes through here — the admin
@@ -283,6 +297,15 @@ server {
 
     location / {
         try_files $uri $uri/ /index.html;
+    }
+
+    # Vite writes a content hash into every filename under /assets/, so a given URL can
+    # never change meaning — cache it for a year and let the hash do the invalidation.
+    # This is why sw.js below must be the opposite: it is the one file whose URL stays the
+    # same while its content changes, and a cached copy of it freezes the whole fleet on
+    # the previous build.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
     }
 
     location /api/ {
@@ -505,11 +528,34 @@ http {
         root  D:/MyApp/nginx/html/offline-first-pwa/dist;
         index index.html;
 
+        # ── First load and every service-worker update go over plant Wi-Fi ──────────────────
+        #
+        # The precache is ~1.3 MB, almost all of it JavaScript, and it is fetched in full on a
+        # fresh install and again on every deploy. Text compresses 3-4x, so this is the difference
+        # between a tablet that is usable in seconds and one an operator gives up on. Already
+        # compressed formats (woff2, png, jpeg, webm) are deliberately absent from the list —
+        # re-compressing them costs CPU and grows the payload.
+        gzip              on;
+        gzip_vary         on;
+        gzip_min_length   1024;
+        gzip_proxied      any;
+        gzip_types        text/plain text/css application/javascript application/json
+                          image/svg+xml application/manifest+json;
+
         # See the Linux block above: 25 MB attachments against nginx's 1 MB default.
         client_max_body_size 32m;
 
         location / {
             try_files $uri $uri/ /index.html;
+        }
+
+        # Vite writes a content hash into every filename under /assets/, so a given URL can
+        # never change meaning — cache it for a year and let the hash do the invalidation.
+        # This is why sw.js below must be the opposite: it is the one file whose URL stays the
+        # same while its content changes, and a cached copy of it freezes the whole fleet on
+        # the previous build.
+        location /assets/ {
+            add_header Cache-Control "public, max-age=31536000, immutable";
         }
 
         location /api/ {
@@ -622,6 +668,11 @@ From a tablet, not from the server — the server can reach things the tablet ca
 5. Scan a tag. Web NFC only exists in a secure context, so this failing while everything else
    works points straight back at TLS.
 6. Come back online and confirm the queue drains.
+7. Confirm compression is on — a first install over plant Wi-Fi is where this is felt:
+
+   ```bash
+   curl -ks -H "Accept-Encoding: gzip" -o /dev/null -D - https://192.168.1.4/assets/index.js | grep -i content-encoding
+   ```
 
 ```bash
 # From the server, the two things worth checking directly

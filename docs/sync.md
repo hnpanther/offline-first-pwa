@@ -53,6 +53,16 @@ twice, and idempotency should be the safety net, not the mechanism.
 > side. See [`services/settings/syncInterval.ts`](../src/services/settings/syncInterval.ts) —
 > converting twice silently multiplied the stored value by 1000 on every save.
 
+> **Lowering the interval costs the server, not the tablet.** Every tick calls
+> `GET /api/log-sheets/inbox`, and the server rebuilds a **full bundle per assigned sheet** on
+> each call — roughly a dozen queries each, with no conditional GET, because the inbox is what
+> pre-provisions a tablet to work offline rather than a listing. So the load is
+> `tablets × assigned sheets × ~12 queries ÷ interval`, and halving the interval doubles it
+> across the whole fleet. Comfortable at this deployment's size; the arithmetic and the three
+> ways out are written down in the backend's
+> [`docs/roadmap.md`](../../../JavaProject/backend-offline-first/docs/roadmap.md) § 3. Check it
+> before making the app "feel more responsive" this way.
+
 ---
 
 ## The push sequence

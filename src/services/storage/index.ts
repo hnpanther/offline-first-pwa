@@ -111,10 +111,27 @@ export async function updateLogSheet(
   const existing = await db.logSheets.where('localId').equals(localId).first()
   if (!existing?.id) throw new Error(`LogSheet not found: ${localId}`)
 
+  // Clearing `syncError` needs a whole-row `put`, because Dexie's `update` cannot remove a
+  // property — assigning `undefined` leaves the key in place with an undefined value, which the
+  // status helpers then read as "there is still an error".
+  //
+  // A `put` rebuilt from a row read earlier is a read-modify-write, and this row is written from
+  // two directions: the fill page saving an entry, and a sync tick clearing a stale error on the
+  // same sheet. Outside a transaction, a save landing between the read and the put is silently
+  // discarded — a reading the operator watched being saved, gone, with nothing to show for it.
+  //
+  // So the read and the write happen in one `rw` transaction: the row is re-read inside it and
+  // the put is built from that, which is the only version guaranteed not to have moved. The
+  // ordinary path below needs none of this — `update` is a field-level patch that IndexedDB
+  // applies atomically, so two writers touching different fields both survive.
   if ('syncError' in updates && updates.syncError === undefined) {
-    const next: LogSheet = { ...existing, ...updates, updatedAt: Date.now() }
-    delete next.syncError
-    await db.logSheets.put(next)
+    await db.transaction('rw', db.logSheets, async () => {
+      const current = await db.logSheets.get(existing.id!)
+      if (!current) throw new Error(`LogSheet not found: ${localId}`)
+      const next: LogSheet = { ...current, ...updates, updatedAt: Date.now() }
+      delete next.syncError
+      await db.logSheets.put(next)
+    })
     return
   }
 
