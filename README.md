@@ -467,7 +467,7 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 
 | Field | Purpose |
 |-------|---------|
-| **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). |
+| **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). **Validated on save, stored normalised, and changing its origin logs you out** — see [Server URL rules](#server-url-rules-srcservicesapiclientts). |
 | **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
 
 #### What these two actually control
@@ -560,6 +560,21 @@ ever points at a remote URL, or if the service worker stops precaching `woff2`.
 1. On first launch, settings are seeded from **`VITE_SERVER_URL`** in the build (`.env.mobile` for `build:mobile`).
 2. At request time, if `new URL(serverUrl).origin === window.location.origin`, the client uses **relative** paths (`/api/...`).
 3. Otherwise the client calls the configured absolute URL (e.g. direct `http://192.168.1.2:8081` — rare; bypasses nginx same-origin).
+
+**Saving this setting is not a plain field edit.** The API client attaches the current JWT to
+whatever URL the setting holds, so pointing it at another host would hand this plant's bearer
+token to that host on the very next request. Three rules apply on save:
+
+1. **Validated.** `http`/`https` only, a real host, and **no path, query or fragment** — every
+   request appends its own path, so `https://host/api` would produce `/api/api/…`.
+2. **Stored normalised** to scheme + host + port (`URL.origin`), so a trailing slash, a stray
+   space or an odd case never reaches a request URL.
+3. **Changing the origin ends the session.** The page asks for confirmation, then stops the sync
+   manager, clears the stored session, writes the new address, and reloads.
+
+That order is load-bearing, not cosmetic: writing the address first leaves a window in which a
+background sync reads the **new** server and the **old** token together. A trailing slash or a
+change of letter case normalises to the same origin and logs nobody out.
 
 | Deployment | Set `VITE_SERVER_URL` / Settings to |
 |------------|--------------------------------------|
@@ -1724,17 +1739,72 @@ Two caveats: mkcert leaf certificates are valid for **825 days**, so re-issue an
 
 ### Step 3 — nginx site config
 
-File: `/etc/nginx/sites-available/default` (or a dedicated site under `sites-available/offline-pwa`).
+**Two files, and it matters which.** `sites-available/*` is included from inside the main
+`http { … }` block, so a `server { … }` is all that may go there — `worker_processes`, `events`
+and `http` are top-level directives and nginx refuses to load them from an included file. On
+Windows there are no `sites-available`/`sites-enabled` directories at all, so everything goes in
+`nginx.conf`. The two forms are given separately below; use one.
+
+> **Watch the semicolons.** Every directive ends in `;`. Do not put a `#` comment on the same
+> line before it — `#` starts a comment that runs to the end of the line, so it swallows the
+> semicolon and `nginx -t` fails with an unhelpful "unexpected end of file". Windows paths are
+> therefore shown as comments on their **own** lines.
+
+#### Linux — `/etc/nginx/sites-available/offline-pwa`
+
+Only `server` blocks. The surrounding `http { … }` is already there.
 
 ```nginx
-worker_processes  1;
+server {
+    listen 80;
+    server_name 192.168.1.4;
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name 192.168.1.4;
+
+    ssl_certificate     /etc/nginx/ssl/local/nginx.crt;
+    ssl_certificate_key /etc/nginx/ssl/local/nginx.key;
+
+    root  /var/www/html/offline-first-pwa/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://192.168.1.4:8081/api/;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # The service worker and its manifest must never be served from cache, or a tablet keeps
+    # running the previous build for as long as its cached copy is considered fresh.
+    location ~* (sw\.js|workbox-.*\.js)$ {
+        add_header Cache-Control "no-cache";
+    }
+}
+```
+
+#### Windows — the whole of `nginx.conf`
+
+Here the top-level directives are required, because this *is* the main file.
+
+```nginx
+worker_processes 1;
 
 events {
     worker_connections 1024;
 }
 
 http {
-
     include       mime.types;
     default_type  application/octet-stream;
 
@@ -1749,10 +1819,11 @@ http {
         listen 443 ssl;
         server_name 192.168.1.4;
 
-        ssl_certificate     /etc/nginx/ssl/local/nginx.crt #D:/MyApp/nginx/ssl/192.168.1.101.pem;
-        ssl_certificate_key /etc/nginx/ssl/local/nginx.key #D:/MyApp/nginx/ssl/192.168.1.101-key.pem;
+        # Windows paths use forward slashes in nginx.conf.
+        ssl_certificate     D:/MyApp/nginx/ssl/192.168.1.101.pem;
+        ssl_certificate_key D:/MyApp/nginx/ssl/192.168.1.101-key.pem;
 
-        root /var/www/html/offline-first-pwa/dist #D:/MyApp/nginx/html/offline-first-pwa/dist;
+        root  D:/MyApp/nginx/html/offline-first-pwa/dist;
         index index.html;
 
         location / {
@@ -1762,9 +1833,9 @@ http {
         location /api/ {
             proxy_pass http://192.168.1.4:8081/api/;
 
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
         }
 
@@ -1775,13 +1846,24 @@ http {
 }
 ```
 
-Enable and reload:
+Enable and reload (Linux):
 
 ```bash
-sudo ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/offline-pwa /etc/nginx/sites-enabled/offline-pwa
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+On Windows, from the nginx directory:
+
+```bash
+nginx -t
+nginx -s reload
+```
+
+**`nginx -t` must pass before reloading.** It is the only step that catches a missing semicolon
+or a directive in the wrong file, and a reload with a broken config leaves the previous one
+running — so the change appears to have done nothing at all.
 
 Verify from a PC on the LAN:
 

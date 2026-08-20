@@ -146,8 +146,14 @@ class SyncManager {
           this.abortController.signal
         )
 
+        // Indexed once rather than scanned per result: the batch cap is 500
+        // (app.sync.batch-max-items), so a linear find inside the loop is 250,000 comparisons
+        // in the worst case, on the main thread of a tablet that is also rendering. Cheap to
+        // do correctly and it removes the cap as something anyone has to think about.
+        const pendingByLocalId = new Map(pendingLogSheets.map(l => [l.localId, l]))
+
         for (const result of lsResults) {
-          const ls = pendingLogSheets.find((l: LogSheet) => l.localId === result.localId)
+          const ls = pendingByLocalId.get(result.localId)
           if (!ls) continue
 
           const archivedRef = parseArchivedLogSheetViewId(ls.localId)
@@ -249,8 +255,11 @@ class SyncManager {
           this.abortController.signal
         )
 
+        // Same reasoning as the log-sheet batch above.
+        const pendingReportsById = new Map(pendingFaultReports.map(r => [r.id, r]))
+
         for (const result of reportResults) {
-          const report = pendingFaultReports.find((r: NfcFaultReport) => r.id === result.localId)
+          const report = pendingReportsById.get(result.localId)
           if (!report) continue
 
           if (result.outcome === 'CREATED' || result.outcome === 'DUPLICATE') {

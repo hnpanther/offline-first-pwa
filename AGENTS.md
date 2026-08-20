@@ -617,14 +617,40 @@ first version of that test reconstructed the behaviour instead — it asserted t
 `AbortSignal.any` composes two controllers, which was true while the function under test was not
 reaching that branch.
 
-### Changing the server URL logs you out
+### Changing the server URL logs you out — and the order of the two writes is the point
 `apiClient` attaches the current JWT to whatever URL settings hold, so pointing it elsewhere hands
 this plant's bearer token to that host on the next request. `services/settings/serverUrl.ts`
 validates the address (scheme, host, no path/query/fragment) and `requiresReauthentication`
 decides from the **origin** — scheme, host and port, so a trailing slash or a case change is not a
-re-login. On a real origin change the Settings page confirms, saves, then `clearAuthSession()` and
-reloads: a token issued by server A can never reach server B, because by the time B is configured
-there is no token.
+re-login.
+
+**Clear the session first, then write the address.** The original version saved the new URL and
+*then* called `clearAuthSession()`, which left a window — short, but real, and widest on the slow
+tablet where it matters — in which the new server and the old token were both live. `SyncManager`
+runs on its own timers and does not wait for a settings save, so a push landing inside that window
+sends this plant's bearer token to whatever host was just typed in. The sequence now lives in
+`services/settings/applyServerUrlChange.ts` — `stopSync()` → `clearSession()` → `save()` →
+`reload()` — extracted from the page for one reason: **an order that is a security property and
+that nothing tests is only a comment.** `applyServerUrlChange.test.ts` asserts the *sequence*, not
+merely that each step ran, plus the two failure paths (a save that throws must not reload; a
+clear that throws must not write the address).
+
+`checkServerUrl()` also returns the address **normalised** to `URL.origin`, and it is the
+normalised value that gets stored — a trailing slash, surrounding whitespace or odd casing is
+resolved once at the boundary rather than being carried into every request URL. Keep the
+normalised value: storing the raw input re-opens the string-comparison bugs `origin` exists to
+end.
+
+### Push matches by `Map`, not by `.find()` in a loop
+`services/sync/index.ts` resolves pending sheets and reports against the server's response. Both
+lookups were `array.find()` **inside** the loop over the response, so the work grew with pending ×
+returned — quadratic in exactly the case that matters, a tablet coming back after a shift offline
+with a large backlog, on the slowest hardware in the deployment. Both are now a `Map` built once
+before the loop (`pendingByLocalId`, `pendingReportsById`). The keys are the **exact values the
+old `===` compared** — `logSheet.localId` and `report.id` against `result.localId`, no coercion
+added — because a `Map` key is compared by `SameValueZero`, so keying on anything else turns a
+speed-up into a silently wrong match. `app.sync.batch-max-items` is 500, so the worst case was
+250,000 comparisons on the main thread of a tablet that is also rendering.
 
 ### Lint
 `eslint.config.js` is flat config (ESLint 9); the `lint` script no longer passes `--ext`, which

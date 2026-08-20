@@ -20,8 +20,10 @@ import { t } from '@/i18n'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import { isOrientationLockSupported } from '@/services/device/screenOrientation'
 import { clampSyncInterval, fromSeconds, toSeconds } from '@/services/settings/syncInterval'
-import { requiresReauthentication, validateServerUrl } from '@/services/settings/serverUrl'
+import { checkServerUrl, requiresReauthentication } from '@/services/settings/serverUrl'
+import { applyServerUrlChange } from '@/services/settings/applyServerUrlChange'
 import { clearAuthSession } from '@/services/auth'
+import { syncManager } from '@/services/sync'
 import { useScreenOrientation } from '@/hooks/useScreenOrientation'
 import type { AppSettings } from '@/types'
 
@@ -60,43 +62,50 @@ export function SettingsPage() {
     // does not belong: the API client attaches the current JWT to whatever URL is stored here,
     // so a typo, a stale address or a plain-HTTP host would hand this plant's bearer token to
     // it on the very next request.
-    const urlError = validateServerUrl(data.serverUrl)
-    if (urlError) {
-      setServerUrlError(urlError)
+    const urlCheck = checkServerUrl(data.serverUrl)
+    if (urlCheck.error || !urlCheck.normalized) {
+      setServerUrlError(urlCheck.error)
       return
     }
     setServerUrlError(null)
+    // The normalised value, not the raw field. Storing what was typed let a stray space through
+    // validation and into every subsequent request URL.
+    const serverUrl = urlCheck.normalized
 
     // Changing origin ends the session. A token issued by one server is never sent to another,
     // because by the time the other one is configured there is no token left to send. Confirmed
     // first, since it logs the operator out and they may be mid-round.
-    const reauth = requiresReauthentication(stored.serverUrl, data.serverUrl)
+    const reauth = requiresReauthentication(stored.serverUrl, serverUrl)
     if (reauth && !window.confirm(
       'با تغییر آدرس سرور، از حساب خود خارج می‌شوید و باید دوباره وارد شوید.\n\n' +
-      `آدرس فعلی: ${stored.serverUrl}\nآدرس جدید: ${data.serverUrl.trim()}\n\n` +
+      `آدرس فعلی: ${stored.serverUrl}\nآدرس جدید: ${serverUrl}\n\n` +
       'ادامه می‌دهید؟'
     )) {
       return
     }
 
-    await updateSettings({
-      ...data,
-      // Already milliseconds: the field converts on the way in and out (see below). Converting
-      // again here multiplied the interval by 1000 on every save — including a save where
-      // nobody touched the field — so 30 seconds silently became 30,000 and grew from there.
-      syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
-      // None of these are written from this screen; the device is not their owner.
-      attachmentLimits: stored.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits,
-      nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
-      imageAnnotationEnabled: stored.imageAnnotationEnabled
+    // ORDER IS THE WHOLE POINT, and it used to be the other way round — see
+    // `applyServerUrlChange`, which owns the sequence so that it can be tested without
+    // rendering this page.
+    const reloading = await applyServerUrlChange(reauth, {
+      stopSync: () => syncManager.stop(),
+      clearSession: clearAuthSession,
+      save: () => updateSettings({
+        ...data,
+        serverUrl,
+        // Already milliseconds: the field converts on the way in and out (see below). Converting
+        // again here multiplied the interval by 1000 on every save — including a save where
+        // nobody touched the field — so 30 seconds silently became 30,000 and grew from there.
+        syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
+        // None of these are written from this screen; the device is not their owner.
+        attachmentLimits: stored.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits,
+        nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
+        imageAnnotationEnabled: stored.imageAnnotationEnabled
+      }),
+      reload: () => window.location.reload()
     })
-    if (reauth) {
-      // After the write, so the new address survives the logout and the login screen points at
-      // the server the operator just chose.
-      await clearAuthSession()
-      window.location.reload()
-      return
-    }
+    // The page is going away; a "saved" tick on it would only be seen as a flicker.
+    if (reloading) return
 
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)

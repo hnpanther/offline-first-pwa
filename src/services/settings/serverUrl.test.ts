@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { originOf, requiresReauthentication, validateServerUrl } from './serverUrl'
+import { checkServerUrl, originOf, requiresReauthentication, validateServerUrl } from './serverUrl'
 
 /**
  * The server address decides where this device sends its bearer token.
@@ -111,5 +111,67 @@ describe('originOf', () => {
 
   it('is null for something that is not a URL', () => {
     expect(originOf('nonsense')).toBeNull()
+  })
+})
+
+describe('checkServerUrl normalisation', () => {
+  /**
+   * The value that gets stored, not just the verdict.
+   *
+   * Validation used to trim only for its own checks while the raw field was written to
+   * IndexedDB. `"https://host "` therefore passed and was saved *with the space*, and because
+   * `originOf` also trims, a whitespace-only edit did not count as an origin change either — so
+   * it was stored with no warning and no logout, and every later request built
+   * `"https://host /api/..."`. The device went quiet from the one screen an operator cannot
+   * reach once logged out.
+   */
+  it('strips surrounding whitespace from the stored value', () => {
+    expect(checkServerUrl('  https://server.example.com  ').normalized)
+      .toBe('https://server.example.com')
+  })
+
+  it('strips a trailing slash', () => {
+    expect(checkServerUrl('https://server.example.com/').normalized)
+      .toBe('https://server.example.com')
+  })
+
+  it('lower-cases the host', () => {
+    expect(checkServerUrl('https://Server.Example.COM').normalized)
+      .toBe('https://server.example.com')
+  })
+
+  it('keeps a non-default port', () => {
+    expect(checkServerUrl('http://192.168.1.100:8081').normalized)
+      .toBe('http://192.168.1.100:8081')
+  })
+
+  it('drops a default port, because the origin does', () => {
+    expect(checkServerUrl('https://server.example.com:443').normalized)
+      .toBe('https://server.example.com')
+  })
+
+  it('returns no value to store when the address is rejected', () => {
+    for (const bad of ['', 'nonsense', 'ftp://h', 'https://h/api']) {
+      const check = checkServerUrl(bad)
+      expect(check.error).not.toBeNull()
+      expect(check.normalized).toBeNull()
+    }
+  })
+
+  /**
+   * The stored value and the compared value can never disagree, because both are the origin.
+   * That is what stops a "change" that is invisible to the origin comparison from being written.
+   */
+  it('stores exactly what requiresReauthentication compares', () => {
+    const normalized = checkServerUrl('  https://Server.Example.com/  ').normalized!
+
+    expect(originOf(normalized)).toBe(normalized)
+    expect(requiresReauthentication(normalized, '  https://server.example.com  ')).toBe(false)
+  })
+
+  it('agrees with validateServerUrl on every verdict', () => {
+    for (const value of ['https://a.example.com', 'http://10.0.0.5:8081', '', 'nonsense', 'https://h/api']) {
+      expect(checkServerUrl(value).error).toBe(validateServerUrl(value))
+    }
   })
 })
