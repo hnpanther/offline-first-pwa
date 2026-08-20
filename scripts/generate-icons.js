@@ -6,7 +6,6 @@
  * Run this once after cloning the project.
  */
 
-import { createReadStream, createWriteStream } from 'fs'
 import { fileURLToPath } from 'url'
 import { join, dirname } from 'path'
 

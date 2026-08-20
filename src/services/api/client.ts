@@ -36,31 +36,66 @@ export class ApiError extends Error {
 export const REQUEST_TIMEOUT_MS = 20_000
 export const UPLOAD_TIMEOUT_MS = 120_000
 
+/** The abort reason a timeout raises, so callers can tell it from a network failure. */
+export function timeoutReason(): DOMException {
+  return new DOMException('timeout', 'TimeoutError')
+}
+
+/**
+ * Merges abort signals without `AbortSignal.any`.
+ *
+ * Exists because the fallback that replaced `any` was worse than no fallback: it returned the
+ * caller's signal alone, which silently detached the timeout — and `SyncManager` passes a
+ * caller signal on essentially every request, so on any runtime lacking `AbortSignal.any` the
+ * timeout did nothing at all and the shared-promise deadlock came straight back. A feature
+ * detection that quietly disables the feature it is detecting for is not a fallback.
+ *
+ * Listeners are registered `once`, and an already-aborted input is honoured immediately rather
+ * than waited on.
+ */
+function mergeAbortSignals(signals: readonly AbortSignal[]): AbortSignal {
+  const controller = new AbortController()
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort(signal.reason)
+      return controller.signal
+    }
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+  }
+  return controller.signal
+}
+
 /**
  * Combines the caller's own abort signal with a timeout.
  *
- * `AbortSignal.any` is what makes both work at once: the caller can still cancel (SyncManager
- * aborts everything on `stop()`), and the timeout fires independently if nothing answers.
- * Returns a cleanup to clear the timer, so a fast response does not leave one pending.
+ * The caller can still cancel — `SyncManager` aborts everything on `stop()` — and the timeout
+ * fires independently if nothing answers. `done()` clears the timer so a fast response does not
+ * leave one pending.
+ *
+ * Exported so it can be tested directly. The first version of this was only tested by
+ * reconstructing its behaviour in the test file, which is how the fallback bug above survived:
+ * the test asserted that `AbortSignal.any` composes two controllers, which was true, while the
+ * function under test was not using it.
  */
-function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): {
+export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): {
   signal: AbortSignal
   done: () => void
 } {
   const timeoutController = new AbortController()
-  const timer = setTimeout(() => timeoutController.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs)
+  const timer = setTimeout(() => timeoutController.abort(timeoutReason()), timeoutMs)
   const done = () => clearTimeout(timer)
 
-  // AbortSignal.any is available in every browser this PWA targets; the fallback keeps unit
-  // tests and older webviews working rather than throwing at module load.
-  const combined =
-    typeof AbortSignal.any === 'function' && signal
-      ? AbortSignal.any([signal, timeoutController.signal])
-      : (signal ?? timeoutController.signal)
+  if (!signal) {
+    return { signal: timeoutController.signal, done }
+  }
 
-  // Without `any` we can only honour one of the two. Prefer the caller's, and still fire the
-  // timeout by aborting through it is not possible — so fall back to the timeout alone when the
-  // caller passed nothing, which is the common case.
+  // Native where available; the merge above is behaviourally identical, so the timeout is
+  // attached either way.
+  const combined =
+    typeof AbortSignal.any === 'function'
+      ? AbortSignal.any([signal, timeoutController.signal])
+      : mergeAbortSignals([signal, timeoutController.signal])
+
   return { signal: combined, done }
 }
 

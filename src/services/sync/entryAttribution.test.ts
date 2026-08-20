@@ -60,20 +60,72 @@ describe('entry attribution through the bundle merge', () => {
     expect(local.filledByName).toBe('اپراتور اول')
   })
 
-  it("drops the name once the operator's own unsent edit is what is displayed", () => {
-    // The local draft wins here, so the values on screen are this operator's. Carrying the
-    // previous operator's name onto them would be a lie in the other direction — and would make
-    // an operator think their own reading had already been recorded by somebody else.
+  /**
+   * The regression that mattered most: a plain refresh used to erase the label.
+   *
+   * After the first sync the local row holds the server's own values. The old code decided
+   * "did the server win?" with `formData === serverForm`, and on the second sync the local
+   * object is a different instance holding identical data — so identity failed, the local side
+   * "won", and the name was dropped. Nobody had edited anything.
+   */
+  it('keeps the name across a second sync when nothing was edited', () => {
+    const first = mapServerEntryToLocal(serverEntry())
+    expect(first.filledByName).toBe('اپراتور اول')
+
+    // Exactly what happens on the next bundle refresh: the stored row is passed back in.
+    const second = mapServerEntryToLocal(serverEntry(), first, true)
+
+    expect(second.formData).toEqual({ temp: '10' })
+    expect(second.filledByName)
+      .toBe('اپراتور اول')
+  })
+
+  it('keeps the name across many syncs, not just the second', () => {
+    let local = mapServerEntryToLocal(serverEntry())
+    for (let i = 0; i < 5; i++) {
+      local = mapServerEntryToLocal(serverEntry(), local, true)
+    }
+    expect(local.filledByName).toBe('اپراتور اول')
+  })
+
+  /**
+   * An unsent local draft on an entry that is still the previous operator's work keeps naming
+   * them. It is the *save* that clears the label — at the moment the values become this
+   * operator's — not the mere existence of a local row.
+   */
+  it("keeps the stored name while a local draft is what is displayed", () => {
     const existing: LogSheetEntryData = {
       assetId: '1',
       assetName: 'Pump A',
       subFunctionCode: 'PK-01',
       subFunctionTag: 'PK-01',
       classId: '7',
-      formData: { temp: '99' }
+      formData: { temp: '99' },
+      filledByName: 'اپراتور اول'
     }
 
     const local = mapServerEntryToLocal(serverEntry(), existing, true)
+
+    expect(local.formData).toEqual({ temp: '99' })
+    expect(local.filledByName).toBe('اپراتور اول')
+  })
+
+  /**
+   * And once the save path has cleared it, a later sync must not resurrect it from the server
+   * copy while the local values are still the unsent ones.
+   */
+  it('does not resurrect a name the save path cleared', () => {
+    const savedByThisOperator: LogSheetEntryData = {
+      assetId: '1',
+      assetName: 'Pump A',
+      subFunctionCode: 'PK-01',
+      subFunctionTag: 'PK-01',
+      classId: '7',
+      formData: { temp: '99' },
+      filledByName: undefined
+    }
+
+    const local = mapServerEntryToLocal(serverEntry(), savedByThisOperator, true)
 
     expect(local.formData).toEqual({ temp: '99' })
     expect(local.filledByName).toBeUndefined()

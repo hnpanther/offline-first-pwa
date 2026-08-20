@@ -20,6 +20,8 @@ import { t } from '@/i18n'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import { isOrientationLockSupported } from '@/services/device/screenOrientation'
 import { clampSyncInterval, fromSeconds, toSeconds } from '@/services/settings/syncInterval'
+import { requiresReauthentication, validateServerUrl } from '@/services/settings/serverUrl'
+import { clearAuthSession } from '@/services/auth'
 import { useScreenOrientation } from '@/hooks/useScreenOrientation'
 import type { AppSettings } from '@/types'
 
@@ -35,6 +37,7 @@ export function SettingsPage() {
     settings.nfcManualEntryEnabled
   )
   const [saved, setSaved] = useState(false)
+  const [serverUrlError, setServerUrlError] = useState<string | null>(null)
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
   const orientationLockSupported = isOrientationLockSupported()
   // Calling the hook here re-applies the lock and reports back, so the alert below reflects
@@ -52,6 +55,30 @@ export function SettingsPage() {
     // remembers back over the one the server has since sent. That is not a cosmetic race: for
     // `nfcStrictSerialMatch` it would silently restore a scan rule an administrator changed.
     const stored = await getSettings()
+
+    // The server address is the one field on this page that can send a credential somewhere it
+    // does not belong: the API client attaches the current JWT to whatever URL is stored here,
+    // so a typo, a stale address or a plain-HTTP host would hand this plant's bearer token to
+    // it on the very next request.
+    const urlError = validateServerUrl(data.serverUrl)
+    if (urlError) {
+      setServerUrlError(urlError)
+      return
+    }
+    setServerUrlError(null)
+
+    // Changing origin ends the session. A token issued by one server is never sent to another,
+    // because by the time the other one is configured there is no token left to send. Confirmed
+    // first, since it logs the operator out and they may be mid-round.
+    const reauth = requiresReauthentication(stored.serverUrl, data.serverUrl)
+    if (reauth && !window.confirm(
+      'با تغییر آدرس سرور، از حساب خود خارج می‌شوید و باید دوباره وارد شوید.\n\n' +
+      `آدرس فعلی: ${stored.serverUrl}\nآدرس جدید: ${data.serverUrl.trim()}\n\n` +
+      'ادامه می‌دهید؟'
+    )) {
+      return
+    }
+
     await updateSettings({
       ...data,
       // Already milliseconds: the field converts on the way in and out (see below). Converting
@@ -63,6 +90,14 @@ export function SettingsPage() {
       nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
       imageAnnotationEnabled: stored.imageAnnotationEnabled
     })
+    if (reauth) {
+      // After the write, so the new address survives the logout and the login screen points at
+      // the server the operator just chose.
+      await clearAuthSession()
+      window.location.reload()
+      return
+    }
+
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
   }
@@ -96,7 +131,15 @@ export function SettingsPage() {
                 label={t.settings.serverUrl}
                 fullWidth
                 dir="ltr"
-                helperText="مثال: http://192.168.1.100:8081"
+                error={serverUrlError != null}
+                // The rejection reason where the mistake is, and — when the address is fine —
+                // a standing note that changing it logs you out. Said before the operator
+                // commits, not only in the confirmation that follows.
+                helperText={serverUrlError ?? 'مثال: http://192.168.1.100:8081 — تغییر آدرس سرور باعث خروج از حساب می‌شود.'}
+                onChange={event => {
+                  setServerUrlError(null)
+                  field.onChange(event)
+                }}
                 inputProps={{ style: { textAlign: 'left', direction: 'ltr' } }}
               />
             )}

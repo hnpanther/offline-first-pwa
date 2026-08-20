@@ -94,6 +94,12 @@ export function useInboxSync(): {
         if (showLoading || isFirstLoad) setInboxLoading(false)
       }
     },
+    // `isOnline` and `serverReachable` are listed on purpose even though the body reads them
+    // through the store rather than the closure. They are what should make this callback new
+    // when connectivity changes, and the effects downstream key off its identity. Trimming them
+    // is the kind of "unnecessary dependency" cleanup that silently stops an inbox refreshing
+    // on reconnect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       isAuthenticated,
       isOnline,

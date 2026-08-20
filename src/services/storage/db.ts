@@ -107,8 +107,40 @@ export class DatabaseVersionMismatchError extends Error {
   }
 }
 
-/** Stores whose rows represent work that exists nowhere else until it syncs. */
-const UNSYNCED_WORK_STORES = ['logSheets', 'outbox', 'nfcFaultReports', 'attachments'] as const
+/**
+ * Stores that can hold work existing nowhere else, and how to tell an unsent row from a sent one.
+ *
+ * Two things this list got wrong the first time, both fixed here:
+ *
+ *  - **`logSheetUserArchives` was missing.** An archived submission can still be waiting for a
+ *    server outcome — `getArchivedSubmissionsPendingServerOutcome` exists precisely to queue
+ *    them — and the live row it came from is pruned after seven days by `cleanupLogSheets`. So
+ *    the archive can be the only surviving copy of a completed round.
+ *  - **The count ignored status**, so a tablet holding 200 perfectly synced sheets reported 200
+ *    "unsynced" rows and would have refused to start. Not data loss, but a lockout of exactly
+ *    the devices this guard exists to protect.
+ *
+ * Each predicate is written to answer "**not** provably synced", so an unexpected row shape
+ * counts as work rather than as nothing. That is the safe direction: refusing to start is a
+ * support call, and deleting a shift's readings is not recoverable.
+ */
+interface UnsyncedWorkProbe {
+  readonly store: string
+  readonly isUnsynced: (row: Record<string, unknown>) => boolean
+}
+
+const UNSYNCED_WORK_STORES: readonly UnsyncedWorkProbe[] = [
+  { store: 'logSheets', isUnsynced: row => row?.syncStatus !== 'synced' },
+  {
+    store: 'logSheetUserArchives',
+    // The sheet is nested inside the archive row.
+    isUnsynced: row => (row?.sheet as { syncStatus?: string } | undefined)?.syncStatus !== 'synced'
+  },
+  // The outbox marks sent entries with synced = true and never deletes them.
+  { store: 'outbox', isUnsynced: row => row?.synced !== true },
+  { store: 'nfcFaultReports', isUnsynced: row => row?.syncStatus !== 'synced' },
+  { store: 'attachments', isUnsynced: row => row?.syncStatus !== 'synced' }
+]
 
 /**
  * Counts rows that recreating the database would destroy for good.
@@ -134,11 +166,20 @@ async function countUnsyncedWork(): Promise<number> {
     await probe.open()
     const present = new Set(probe.tables.map(table => table.name))
     let total = 0
-    for (const store of UNSYNCED_WORK_STORES) {
+    for (const { store, isUnsynced } of UNSYNCED_WORK_STORES) {
       if (!present.has(store)) continue
       try {
-        total += await probe.table(store).count()
+        // `filter(...).count()` streams rows rather than materialising them, and this runs once,
+        // on a startup path that has already failed. An index-per-store fast path was considered
+        // and rejected: `logSheets` and `logSheetUserArchives` have no index on their status
+        // (the latter's is nested inside `sheet`), so it would have to fall back for exactly the
+        // two stores that matter most — complexity that buys nothing on a path taken once.
+        total += await probe
+          .table(store)
+          .filter(row => isUnsynced(row as Record<string, unknown>))
+          .count()
       } catch {
+        // Unreadable store: assume it holds work rather than assume it is empty.
         total += 1
       }
     }

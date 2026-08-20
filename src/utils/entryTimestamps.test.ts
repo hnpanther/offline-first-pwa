@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyEntrySaveTimestamps, hasEntryFormData } from '@/utils/entryTimestamps'
+import { applyEntrySaveTimestamps, applyOperatorEntrySave, hasEntryFormData } from '@/utils/entryTimestamps'
 import type { LogSheetEntryData } from '@/types'
 
 const baseEntry: LogSheetEntryData = {
@@ -60,5 +60,62 @@ describe('applyEntrySaveTimestamps', () => {
     expect(result.createdAt).toBe(100)
     expect(result.updatedAt).toBe(200)
     expect(result.formData).toEqual({})
+  })
+})
+
+describe('applyOperatorEntrySave', () => {
+  const previousOperatorsEntry: LogSheetEntryData = {
+    assetId: '1',
+    assetName: 'Pump A',
+    subFunctionCode: 'PK-01',
+    subFunctionTag: 'PK-01',
+    classId: '7',
+    formData: { temp: '10' },
+    filledByName: 'اپراتور اول',
+    createdAt: 1_000,
+    updatedAt: 1_000
+  }
+
+  /**
+   * The bug this function exists to prevent.
+   *
+   * The save used to spread the previous entry and set only `filledVia`, so `filledByName`
+   * survived: operator 2 rewrote the reading and the screen went on crediting operator 1 —
+   * worse than showing no name at all, because it is confidently wrong.
+   */
+  it("clears the previous operator's name once this operator saves", () => {
+    const saved = applyOperatorEntrySave(previousOperatorsEntry, { temp: '99' }, 'nfc', 2_000)
+
+    expect(saved.filledByName).toBeUndefined()
+    expect(saved.formData).toEqual({ temp: '99' })
+  })
+
+  it('records how this operator captured it', () => {
+    expect(applyOperatorEntrySave(previousOperatorsEntry, { temp: '99' }, 'manual', 2_000).filledVia)
+      .toBe('manual')
+  })
+
+  it('still applies the timestamp rules it wraps', () => {
+    const saved = applyOperatorEntrySave(previousOperatorsEntry, { temp: '99' }, 'nfc', 2_000)
+
+    expect(saved.createdAt).toBe(1_000)
+    expect(saved.updatedAt).toBe(2_000)
+  })
+
+  it('leaves the identifying fields untouched', () => {
+    const saved = applyOperatorEntrySave(previousOperatorsEntry, { temp: '99' }, 'nfc', 2_000)
+
+    expect(saved.assetId).toBe('1')
+    expect(saved.assetName).toBe('Pump A')
+    expect(saved.subFunctionCode).toBe('PK-01')
+    expect(saved.classId).toBe('7')
+  })
+
+  it('clears the name even when the operator saves an empty form', () => {
+    // Clearing a reading is still this operator's decision about this asset.
+    const saved = applyOperatorEntrySave(previousOperatorsEntry, {}, 'nfc', 2_000)
+
+    expect(saved.filledByName).toBeUndefined()
+    expect(saved.formData).toEqual({})
   })
 })

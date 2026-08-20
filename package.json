@@ -15,7 +15,7 @@
     "setup:mkcert": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-mkcert.ps1",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
     "test": "vitest run"
   },
   "dependencies": {
@@ -33,7 +33,7 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.53.2",
     "react-i18next": "^15.1.0",
-    "react-router-dom": "^6.27.0",
+    "react-router-dom": "^6.30.6",
     "stylis-plugin-rtl": "^2.1.1",
     "uuid": "^11.0.3",
     "vazirmatn": "^33.0.3",

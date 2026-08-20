@@ -137,6 +137,139 @@ describe('openDatabase version guard', () => {
     await expect(db.assetClasses.count()).resolves.toBe(0)
   })
 
+  // ── Status awareness: a synced row is not "work at stake" ────────────────
+
+  /**
+   * The lockout this prevents.
+   *
+   * The count used to be a plain `count()` per store, so a tablet holding a shift's worth of
+   * *already synced* sheets reported them all as unsynced and would have refused to start —
+   * bricking exactly the devices the guard exists to protect. Nothing is at risk here: every
+   * row below has reached the server.
+   */
+  it('recreates the database when every row is already synced', async () => {
+    await db.open()
+    await db.logSheets.bulkAdd(
+      Array.from({ length: 25 }, (_, i) => ({
+        id: `ls-${i}`, localId: `l-${i}`, status: 'submitted', syncStatus: 'synced'
+      })) as never[]
+    )
+    await db.attachments.bulkAdd(
+      Array.from({ length: 10 }, (_, i) => ({
+        id: `att-${i}`, logSheetLocalId: 'l-0', assetId: 1, fieldKey: 'photo',
+        syncStatus: 'synced', createdAt: 1
+      })) as never[]
+    )
+    await db.outbox.add({ id: 'o-1', entityType: 'logSheet', synced: true, createdAt: 1 } as never)
+    db.close()
+
+    failNextOpenWithVersionError()
+
+    await expect(openDatabase()).resolves.toBeUndefined()
+    expect(db.isOpen()).toBe(true)
+    await expect(db.logSheets.count()).resolves.toBe(0)
+  })
+
+  it('counts only the rows that have not reached the server', async () => {
+    await db.open()
+    await db.logSheets.bulkAdd([
+      { id: 'ls-1', localId: 'l-1', status: 'submitted', syncStatus: 'synced' },
+      { id: 'ls-2', localId: 'l-2', status: 'submitted', syncStatus: 'pending' },
+      { id: 'ls-3', localId: 'l-3', status: 'submitted', syncStatus: 'failed' }
+    ] as never[])
+    db.close()
+
+    failNextOpenWithVersionError()
+
+    const error = await openDatabase().catch(e => e as DatabaseVersionMismatchError)
+    expect(error).toBeInstanceOf(DatabaseVersionMismatchError)
+    // pending + failed, not the synced one.
+    expect(error.unsyncedCount).toBe(2)
+  })
+
+  it("treats a 'syncing' row as unsent, because it has not been confirmed", async () => {
+    await db.open()
+    await db.logSheets.add({
+      id: 'ls-1', localId: 'l-1', status: 'submitted', syncStatus: 'syncing'
+    } as never)
+    db.close()
+
+    failNextOpenWithVersionError()
+
+    await expect(openDatabase()).rejects.toBeInstanceOf(DatabaseVersionMismatchError)
+  })
+
+  it('treats a row with no recognisable status as unsent', async () => {
+    // The safe direction: an unexpected shape must never be read as "nothing to lose".
+    await db.open()
+    await db.logSheets.add({ id: 'ls-1', localId: 'l-1', status: 'submitted' } as never)
+    db.close()
+
+    failNextOpenWithVersionError()
+
+    await expect(openDatabase()).rejects.toBeInstanceOf(DatabaseVersionMismatchError)
+  })
+
+  it('counts an unsent outbox entry, and ignores a sent one', async () => {
+    await db.open()
+    await db.outbox.add({ id: 'o-1', entityType: 'logSheet', synced: true, createdAt: 1 } as never)
+    db.close()
+    failNextOpenWithVersionError()
+    await expect(openDatabase()).resolves.toBeUndefined()
+
+    db.close()
+    await db.open()
+    await db.outbox.add({ id: 'o-2', entityType: 'logSheet', synced: false, createdAt: 1 } as never)
+    db.close()
+    failNextOpenWithVersionError()
+    await expect(openDatabase()).rejects.toBeInstanceOf(DatabaseVersionMismatchError)
+  })
+
+  // ── The archive store, which was missing from the list entirely ──────────
+
+  /**
+   * An archived submission can be the only surviving copy of a completed round.
+   *
+   * `getArchivedSubmissionsPendingServerOutcome` queues archives that are still waiting for a
+   * server answer, and `cleanupLogSheets` prunes the live row after seven days — so the
+   * sequence "submit fails, archive keeps it, live row is pruned" leaves the archive alone with
+   * the data. It was not in the guarded list.
+   */
+  it('refuses when an archived submission is still awaiting a server outcome', async () => {
+    await db.open()
+    await db.logSheetUserArchives.add({
+      id: 'arc-1',
+      serverId: '77',
+      userId: 'u-1',
+      archivedAt: 1,
+      sheet: { id: 'ls-1', localId: 'l-1', status: 'submitted', syncStatus: 'pending' }
+    } as never)
+    db.close()
+
+    failNextOpenWithVersionError()
+
+    await expect(openDatabase()).rejects.toBeInstanceOf(DatabaseVersionMismatchError)
+    // And it is still there.
+    await db.open()
+    await expect(db.logSheetUserArchives.count()).resolves.toBe(1)
+  })
+
+  it('does not count an archive whose sheet already synced', async () => {
+    await db.open()
+    await db.logSheetUserArchives.add({
+      id: 'arc-1',
+      serverId: '77',
+      userId: 'u-1',
+      archivedAt: 1,
+      sheet: { id: 'ls-1', localId: 'l-1', status: 'submitted', syncStatus: 'synced' }
+    } as never)
+    db.close()
+
+    failNextOpenWithVersionError()
+
+    await expect(openDatabase()).resolves.toBeUndefined()
+  })
+
   it('rethrows an unrelated open failure untouched', async () => {
     // Only VersionError may lead anywhere near a delete. Anything else must surface as itself,
     // so a transient fault is never mistaken for a reason to recreate the database.

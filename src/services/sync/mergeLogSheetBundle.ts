@@ -148,8 +148,11 @@ export function mapServerEntryToLocal(
 ): LogSheetEntryData {
   const localForm = existing?.formData ?? {}
   const serverForm = entry.formData ?? {}
-  const formData =
-    preserveLocal && Object.keys(localForm).length > 0 ? localForm : serverForm
+  // Named, because two fields below need to know which side won and an `===` on the resulting
+  // object cannot tell them: after the first sync the local copy holds the server's own values,
+  // so it compares unequal by identity while being the same data.
+  const localWins = preserveLocal && Object.keys(localForm).length > 0
+  const formData = localWins ? localForm : serverForm
 
   return {
     assetId: toIdString(entry.assetId),
@@ -162,14 +165,22 @@ export function mapServerEntryToLocal(
     nfcSerial: entry.nfcSerial ?? undefined,
     classId: toIdString(entry.classId),
     formData,
-    // Server-authoritative, like nfcSerial: only the server knows who filled an entry, and it
-    // only re-attributes one when the value actually changed. Taking a local value here would
-    // pin the label to whoever happened to hold the sheet first.
+    // Who recorded the values that are actually on screen.
     //
-    // Deliberately cleared when the local draft wins (`formData` came from `localForm`): those
-    // are this operator's own unsent edits, so labelling them with the previous operator's name
-    // would be a lie in the other direction.
-    filledByName: formData === serverForm ? (entry.filledByName ?? undefined) : undefined,
+    // Whichever side won `formData` above owns the attribution too, which is why this reads
+    // `localWins` rather than comparing objects. An earlier version wrote
+    // `formData === serverForm ? … : undefined` and was wrong in both directions: on the second
+    // sync the local row already holds the server's values, so identity failed and the label
+    // vanished without anyone editing anything; and when the operator genuinely did edit, the
+    // save path carried the old name straight through.
+    //
+    // When the local draft wins, the name kept is the one already stored locally — not
+    // `undefined`. An unsent draft on an entry that is still the previous operator's work must
+    // keep naming them; it is the *save* that clears it, at the moment the values become this
+    // operator's.
+    filledByName: localWins
+      ? (existing?.filledByName ?? undefined)
+      : (entry.filledByName ?? undefined),
     createdAt: preserveLocal
       ? (existing?.createdAt ?? entry.createdAt ?? undefined)
       : (entry.createdAt ?? undefined),

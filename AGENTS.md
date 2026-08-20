@@ -587,6 +587,52 @@ opens a form already full of operator 1's readings — intended, they need to se
 and without a name cannot tell which rows are theirs to redo.
 
 The server re-attributes an entry **only when its value actually changes**, so the label keeps
-naming the original operator until this operator edits that asset. `mergeLogSheetBundle` clears
-it when the local draft wins, because those values are this operator's own unsent edits and
-labelling them with somebody else's name is a lie in the other direction.
+naming the original operator until this operator edits that asset.
+
+Two things about this were wrong at first and are worth not repeating:
+
+- **Do not decide "did the server win?" with `formData === serverForm`.** After the first sync the
+  local row already holds the server's values, so identity fails on every later refresh and the
+  label vanished with nobody having edited anything. `mergeLogSheetBundle` names the condition
+  (`localWins`) and both `formData` and `filledByName` read it.
+- **The save path must clear the label.** It spread the previous entry and set only `filledVia`,
+  so `filledByName` survived and the screen went on crediting operator 1 after operator 2 had
+  rewritten the reading. That rule now lives in `applyOperatorEntrySave` (`utils/entryTimestamps`)
+  — lifted out of the component precisely so it could be tested; it was three lines inside a
+  `.map()` in a page with no test harness.
+
+An unsent local draft keeps the stored name: it is the *save* that clears it, at the moment the
+values become this operator's.
+
+### Timeouts must survive a missing `AbortSignal.any`
+`withTimeout` merges the caller's signal with the timeout, falling back to a hand-rolled
+`mergeAbortSignals` when `AbortSignal.any` is absent. The first fallback returned the caller's
+signal *alone*, which detached the timeout entirely — and `SyncManager` passes a caller signal on
+essentially every request, so on any runtime without `AbortSignal.any` the timeout did nothing and
+the shared-promise deadlock came straight back. A feature detection that disables the feature it
+is detecting is not a fallback.
+
+`withTimeout` is exported and tested directly, including with `AbortSignal.any` stubbed out. The
+first version of that test reconstructed the behaviour instead — it asserted that
+`AbortSignal.any` composes two controllers, which was true while the function under test was not
+reaching that branch.
+
+### Changing the server URL logs you out
+`apiClient` attaches the current JWT to whatever URL settings hold, so pointing it elsewhere hands
+this plant's bearer token to that host on the next request. `services/settings/serverUrl.ts`
+validates the address (scheme, host, no path/query/fragment) and `requiresReauthentication`
+decides from the **origin** — scheme, host and port, so a trailing slash or a case change is not a
+re-login. On a real origin change the Settings page confirms, saves, then `clearAuthSession()` and
+reloads: a token issued by server A can never reach server B, because by the time B is configured
+there is no token.
+
+### Lint
+`eslint.config.js` is flat config (ESLint 9); the `lint` script no longer passes `--ext`, which
+flat config rejects. The gate was previously failing to start at all, so it contributed nothing.
+
+Three findings are silenced with a targeted `eslint-disable-next-line` and a written reason
+rather than by weakening a rule — and note the placement trap: the directive must sit on the line
+*immediately* before the reported line, so put the explanation above it, not after it on
+continuation lines. The three are two `exhaustive-deps` cases where following the rule would
+change behaviour (re-fetching field definitions mid-edit; dropping the deps that make the inbox
+callback new on reconnect) and one reserved empty interface in the store.

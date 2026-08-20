@@ -54,6 +54,10 @@ interface SyncSlice {
 // ---------------------------------------------------------------------------
 // Records slice
 // ---------------------------------------------------------------------------
+// A reserved placeholder, kept so the slice list in `AppStore` stays a complete map of the
+// store's intended shape. Intersecting with an empty interface is a no-op, so it costs nothing
+// at runtime or in types; `object` or `unknown` would not be a no-op and would change `AppStore`.
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface RecordsSlice {
 }
 

@@ -85,7 +85,7 @@ import {
 } from '@/utils/logSheetStatus'
 import { canContinueReopenedLogSheet } from '@/utils/logSheetWorkflow'
 import { evaluateEntryCompletion } from '@/utils/entryCompletion'
-import { applyEntrySaveTimestamps } from '@/utils/entryTimestamps'
+import { applyOperatorEntrySave } from '@/utils/entryTimestamps'
 import { formatJalaliDateTime } from '@/utils/formatDate'
 import { EntryTimestampsMeta } from '@/components/logsheet/EntryTimestampsMeta'
 import { getFieldsForClass } from '@/services/storage/fieldDefinitions'
@@ -187,8 +187,13 @@ function AssetFillDialog({
     formState: { errors, isSubmitting }
   } = useForm<Record<string, unknown>>({ defaultValues: {} })
 
+  // Deliberately keyed on the asset's identity, not on the `entry` object. `entry` is replaced
+  // on every save, so depending on it would re-fetch the field definitions mid-round and reset
+  // the form the operator is typing into. The asset and its class are what actually decide
+  // which fields to load, and that is exactly what is listed.
   useEffect(() => {
     if (open && entry) void refreshFields()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, entry?.assetId, entry?.classId, refreshFields])
 
   /** What the form is currently showing: one asset while open, nothing while closed. */
@@ -825,7 +830,7 @@ export function LogSheetFillPage() {
       draftCache.forget(assetId)
       const filledVia = activeEntryFilledVia ?? 'nfc'
       const updatedEntries = logSheet.entries.map(e =>
-        e.assetId === assetId ? { ...applyEntrySaveTimestamps(e, formData), filledVia } : e
+        e.assetId === assetId ? applyOperatorEntrySave(e, formData, filledVia) : e
       )
       await updateLogSheet(localId, {
         entries: updatedEntries,
