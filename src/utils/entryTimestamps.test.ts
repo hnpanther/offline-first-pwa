@@ -21,6 +21,41 @@ describe('hasEntryFormData', () => {
     expect(hasEntryFormData({ temp: 22 })).toBe(true)
     expect(hasEntryFormData({ tags: ['a'] })).toBe(true)
   })
+
+  // This function is the device's definition of "the operator answered this field", and it has
+  // to mean the same thing as the server's `FormDataValidationSupport.isAnswered`. The bundle
+  // merge once asked a looser question instead — key presence — and an entry holding
+  // {"Bar": "", "Status": ""} then beat the server's real readings forever (log sheet 85).
+
+  it('ignores whitespace-only text', () => {
+    // A space bar pressed in a text field is not a reading.
+    expect(hasEntryFormData({ temp: '   ' })).toBe(false)
+    expect(hasEntryFormData({ temp: String.fromCharCode(10, 9) })).toBe(false)
+  })
+
+  it('ignores an attachment field with no ids', () => {
+    // `{ type: 'attachment', ids: [] }` is a non-empty object that means *nothing attached* —
+    // the case a plain truthiness check gets wrong in the opposite direction from a blank string.
+    expect(hasEntryFormData({ pic: { type: 'attachment', ids: [] } })).toBe(false)
+    expect(hasEntryFormData({ pic: { type: 'attachment', ids: ['a7f3'] } })).toBe(true)
+  })
+
+  it('counts zero and false as answers', () => {
+    // In a plant, zero is usually the interesting reading.
+    expect(hasEntryFormData({ temp: 0 })).toBe(true)
+    expect(hasEntryFormData({ running: false })).toBe(true)
+    expect(hasEntryFormData({ temp: '0' })).toBe(true)
+  })
+
+  it('counts a non-attachment object as an answer', () => {
+    // A location coordinate has no `ids` and is an answer. Only the attachment wrapper is
+    // judged by its contents.
+    expect(hasEntryFormData({ where: { lat: 35.7, lng: 51.4 } })).toBe(true)
+  })
+
+  it('is true when any one field is answered', () => {
+    expect(hasEntryFormData({ Bar: '', Status: 'ON' })).toBe(true)
+  })
 })
 
 describe('applyEntrySaveTimestamps', () => {
@@ -60,6 +95,38 @@ describe('applyEntrySaveTimestamps', () => {
     expect(result.createdAt).toBe(100)
     expect(result.updatedAt).toBe(200)
     expect(result.formData).toEqual({})
+  })
+})
+
+describe('locallyEditedAt', () => {
+  // The only record that the operator had an opinion about an asset. Without it, "untouched"
+  // and "emptied on purpose" are the same thing to the merge — and one of them has to win.
+
+  it('is stamped when the operator saves a value', () => {
+    const saved = applyOperatorEntrySave(baseEntry, { temp: 22 }, 'manual', 5_000)
+
+    expect(saved.locallyEditedAt).toBe(5_000)
+  })
+
+  it('is stamped when the operator empties the last value', () => {
+    const filled = { ...baseEntry, formData: { temp: 22 }, createdAt: 1_000, updatedAt: 2_000 }
+
+    const cleared = applyOperatorEntrySave(filled, { temp: '' }, 'manual', 5_000)
+
+    expect(cleared.locallyEditedAt).toBe(5_000)
+  })
+
+  it('does NOT move createdAt or updatedAt on a clearing save', () => {
+    // Load-bearing, and the reason a separate marker exists at all. These two are echoed back to
+    // the server as "the version this device last saw", and `wouldBlankUnseenAnswer` compares
+    // them for equality. Bumping them on a clear would make the server refuse every deliberate
+    // clear — trading a client-side bug for a server-side one.
+    const filled = { ...baseEntry, formData: { temp: 22 }, createdAt: 1_000, updatedAt: 2_000 }
+
+    const cleared = applyOperatorEntrySave(filled, { temp: '' }, 'manual', 5_000)
+
+    expect(cleared.createdAt).toBe(1_000)
+    expect(cleared.updatedAt).toBe(2_000)
   })
 })
 

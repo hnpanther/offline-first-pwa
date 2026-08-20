@@ -35,6 +35,7 @@ import {
 } from '@/utils/logSheetStatus'
 import type { LogSheet, NfcFaultReport } from '@/types'
 import { toIdString } from '@/utils/ids'
+import { clearLocalEditMarkers } from '@/utils/logSheetLocalData'
 import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
 
 export type SyncEventType = 'start' | 'progress' | 'complete' | 'error'
@@ -176,7 +177,11 @@ class SyncManager {
               serverId: toIdString(result.serverId ?? ls.serverId),
               serverStatus: 'SUBMITTED',
               syncError: undefined,
-              lastSubmitOutcome: undefined
+              lastSubmitOutcome: undefined,
+              // The work is the server's now, so this device stops claiming an opinion of its
+              // own about these entries. Leaving the markers would make it win every later
+              // merge for them — including after a supervisor reopens the sheet and edits it.
+              entries: clearLocalEditMarkers(ls.entries)
             })
             const ownerId = await getSessionUserId()
             const serverId = toIdString(result.serverId ?? ls.serverId)
@@ -196,6 +201,8 @@ class SyncManager {
             await updateLogSheet(ls.localId, {
               syncStatus: 'synced',
               syncedAt: Date.now(),
+              // Same as SUBMITTED: the server already holds this work.
+              entries: clearLocalEditMarkers(ls.entries),
               serverId: toIdString(result.serverId),
               serverStatus: 'SUBMITTED',
               syncError: undefined,

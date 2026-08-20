@@ -50,7 +50,6 @@ This is the data that matters. Losing it loses field readings.
 | Store | Key + indexes | Holds |
 |---|---|---|
 | `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts |
-| `outbox` | `id, entityType, synced, createdAt` | The outbound queue |
 | `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
@@ -97,10 +96,16 @@ nowhere to send it.
 
 ## Changing the schema
 
+**`version(1)` is the operational baseline and is closed.** It holds every store, it is on
+tablets in the field, and editing it strands them: IndexedDB refuses to open a database at a
+version below the one that created it, `openDatabase()` then refuses to start rather than delete,
+and the unsynced readings on those devices are unreachable until a build ships that can open the
+database again.
+
 **Add a new `version(n)` block. Never edit an existing one.**
 
 ```ts
-this.version(3).stores({
+this.version(2).stores({
   // every existing store, repeated verbatim — Dexie requires the full list
   assetClasses: 'id, createdAt',
   // …
@@ -112,7 +117,12 @@ Rewriting an applied version makes a device's on-disk database un-openable, beca
 refuses to open a database at a lower version than it was created with.
 
 If a change **reshapes** existing data rather than only adding stores, an `.upgrade()` callback
-is required. Version 2 has none, which is safe precisely because it is purely additive.
+is required; a purely additive version needs none.
+
+`dbSchema.test.ts` pins the current store list, the indexes the sync loops select on, and each
+store's primary key. With a single version there is no second declaration to disagree with, so a
+store added as a typed `Table` but forgotten in `stores()` would otherwise surface as "Table X
+does not exist" on a device, inside whichever feature happened to touch it first.
 
 ### The recovery path in `openDatabase()`
 

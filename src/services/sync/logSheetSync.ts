@@ -73,8 +73,21 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const preserveLocal =
     workflow !== 'reset-draft' &&
     shouldPreserveLocalFormData(existing, serverSheet, sessionUserId)
+  // Whether this device's own edits still stand for something.
+  //
+  // Once the row is `submitted` + `synced` the work has been delivered and reconciled: what the
+  // device holds came from the server, so a `locallyEditedAt` marker still sitting on an entry
+  // describes an opinion that no longer exists. Honouring it would hand the device that entry on
+  // every future merge — and this is exactly the state a sheet is in when a supervisor reopens
+  // it, edits it and hands it back, so the cost would be the supervisor's readings going
+  // invisible all over again.
+  //
+  // Markers are also cleared outright when a submission is accepted; this gate is the second
+  // lock on the same door, because the failure it prevents is silent.
+  const localEditsPending = !(existing?.status === 'submitted' && existing?.syncStatus === 'synced')
   const entries = mergeEntriesPreservingFormData(bundle.entries ?? [], existing?.entries, {
-    preserveLocal
+    preserveLocal,
+    localEditsPending
   })
   const scopeDisplayLabel = bundleScopeDisplayLabel(bundle)
   // Freeze this bundle's schema onto the sheet. The shared per-class table cannot express

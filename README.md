@@ -24,6 +24,7 @@ same commit.
 |---|---|
 | **[docs/sync.md](docs/sync.md)** | How data moves to and from the server: the push sequence, every submission outcome, the separate attachment queue, and the conflict rules. |
 | **[docs/storage.md](docs/storage.md)** | The Dexie/IndexedDB schema, every store and index, what survives what, and the rules for changing it. |
+| **[docs/deployment.md](docs/deployment.md)** | Putting it on a plant network: the build, nginx as a service (WinSW on Windows, systemd on Linux), certificates with mkcert or openssl, and getting the CA onto every tablet. |
 | **[docs/device-features.md](docs/device-features.md)** | NFC, camera/microphone, GPS and screen orientation — what each requires, and how each degrades. |
 | **[AGENTS.md](AGENTS.md)** | Conventions and the traps found the hard way. |
 | **[CLAUDE.md](CLAUDE.md)** | Entry point for AI agents working in this repository. |
@@ -1444,12 +1445,11 @@ Dexie version **2** — main tables:
 | `logSheetTemplates` | Log sheet template slices carried by bundles |
 | `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only; never auto-purged) |
-| `attachments` | Captured photos / voice notes as native `Blob`s + upload state (added in version 2) |
+| `attachments` | Captured photos / voice notes as native `Blob`s + upload state |
 | `nfcFaultReports` | Locally-filed NFC fault reports (unlock manual entry per asset; `createdByUserId` scopes outbound sync) |
 | `operationalUnits` | From bootstrap |
 | `settings` | App settings (server URL, operator name, manual-entry and chip-serial policies, …) |
 | `syncMeta` | Key/value store (see below) |
-| `outbox` | Future bidirectional sync infrastructure |
 
 **`syncMeta` keys:**
 
@@ -1460,19 +1460,26 @@ Dexie version **2** — main tables:
 | `lastSessionUsername` | Previous login username (user switch detection) |
 | `lastBootstrapAt` | Timestamp of last successful bootstrap pull |
 | `inboxSnapshot` | Cached assigned / available / teamOpen lists |
-| `lastSeq` | Reserved for future incremental sync engine |
 
-`db.ts` declared a **single** `this.version(1)` block: the app has never shipped, so the
-historical versions that only ever built up to that shape were collapsed into it — there was
-no upgrade path to keep because there was no production data to upgrade. `this.version(2)`
-was then added on top for the `attachments` table, repeating every version-1 store verbatim,
-which is the pattern to follow from here on.
+`db.ts` declares `this.version(1)` with every store, and **that block is closed.** It is the
+operational baseline: it is on tablets in the field, IndexedDB cannot open a database at a
+version below the one that created it, and Dexie compares the declared stores against what is on
+disk. Editing a line in it does not migrate those devices — it makes their database unopenable,
+`openDatabase()` then refuses to start rather than delete, and every tablet holding unsynced
+readings is stranded until a build ships that can open it again.
 
-A development device that ran the app **before** the collapse holds an IndexedDB at version
-110, and IndexedDB refuses to open a database at a lower version than it was created with.
-`openDatabase()` catches exactly that `VersionError`, deletes the database and recreates it;
-this is safe here because every table is either server-owned reference data that the next
-sync refetches, or local work a pre-production device can afford to lose. Any other failure
+**Every schema change from here is a new `this.version(2).stores({...})`**, repeating the full
+store list verbatim (Dexie requires it, and a store omitted from a later version is dropped).
+A version that only adds stores or indexes needs no `.upgrade()` callback; one that reshapes
+existing rows does, and it will run on a device holding real work. Adding a plain non-indexed
+property to a stored object needs no version bump at all — only new stores and new indexes do.
+
+`dbSchema.test.ts` pins the store list, the indexes the sync loops select on, each store's
+primary key, and the expected version number — so adding a version is a deliberate edit rather
+than a silent side effect.
+
+`openDatabase()` catches a `VersionError`, and **refuses to start** rather than delete when the
+device holds unsynced work; only a database with nothing at stake is recreated. Any other failure
 is rethrown untouched.
 
 When the schema next changes, **add** `this.version(3).stores({...})` with the full store

@@ -1,6 +1,6 @@
 import Dexie, { type Table } from 'dexie'
 import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment } from '@/types'
-import type { FieldDefinition, OutboxEntry, SyncMeta } from '@/types/sync'
+import type { FieldDefinition, SyncMeta } from '@/types/sync'
 
 const DB_NAME = 'offline-pwa-db'
 
@@ -16,7 +16,6 @@ class AppDatabase extends Dexie {
   logSheets!: Table<LogSheet>
   operationalUnits!: Table<OperationalUnit>
   fieldDefinitions!: Table<FieldDefinition>
-  outbox!: Table<OutboxEntry>
   syncMeta!: Table<SyncMeta>
   logSheetUserArchives!: Table<LogSheetUserArchive>
   nfcFaultReports!: Table<NfcFaultReport>
@@ -26,22 +25,47 @@ class AppDatabase extends Dexie {
     super(DB_NAME)
 
     /**
-     * The one and only schema version.
+     * Schema version 1 — **the operational baseline. Closed.**
      *
-     * The app has never shipped, so the eleven historical versions that only ever
-     * built up to this shape were collapsed into a single `version(1)` — the same
-     * reasoning as folding the backend's Flyway migrations into V1. There is no
-     * upgrade path to preserve because there is no production data to upgrade.
+     * <h2>Do not edit this block</h2>
      *
-     * A device that still holds the pre-collapse database is on IndexedDB version
-     * 110 and cannot be opened by a version(1) declaration — IndexedDB refuses to
-     * "downgrade". `openDatabase()` below catches exactly that and recreates the
-     * database from scratch, which is safe here: every table is either server-owned
-     * reference data that the next sync refetches, or local work that a pre-production
-     * dev device can afford to lose.
+     * This version is on tablets in the field. IndexedDB cannot open a database at a version
+     * below the one that created it, and Dexie compares the declared stores against what is on
+     * disk — so changing a line here does not migrate those devices, it makes the database
+     * unopenable on them. `openDatabase()` then refuses to start rather than delete (correctly),
+     * and every tablet holding unsynced readings is stranded until a build is shipped that can
+     * open it again.
      *
-     * When the schema next changes, add `this.version(2).stores({...})` below with the
-     * full store list rather than editing this block.
+     * <h2>How to change the schema from now on</h2>
+     *
+     * Add a new block below, repeating **every** store verbatim — Dexie requires the full list,
+     * and a store omitted from a later version is dropped from the database:
+     *
+     * <pre>
+     * this.version(2).stores({
+     *   ...every store from version 1, unchanged...,
+     *   newStore: 'id, someIndex'
+     * })
+     * </pre>
+     *
+     * A version that only **adds** stores or indexes needs no `.upgrade()` callback. One that
+     * **reshapes** existing rows does, and it runs on a device holding real work — write it so
+     * that failing halfway leaves the rows readable.
+     *
+     * Adding a plain, non-indexed property to a stored object needs no version at all: Dexie
+     * stores whole objects and only the declared indexes are part of the schema.
+     *
+     * Then bump the expected version in `dbSchema.test.ts`, which exists so that a schema change
+     * is something somebody decided rather than something that happened.
+     *
+     * <h2>Index choices</h2>
+     *
+     * `id` is the primary key everywhere except `settings` and `syncMeta`, which are keyed by
+     * `key`. The rest are the columns something selects on every sync tick — `syncStatus` for the
+     * two upload queues, `serverId`/`localId` for the lookups the merge does per bundle, the NFC
+     * columns for a scan that has to resolve while a tag is held against the device. Nothing
+     * indexes a Blob (IndexedDB cannot) and nothing indexes a field only ever read through its
+     * own row.
      */
     this.version(1).stores({
       assetClasses: 'id, createdAt',
@@ -54,36 +78,6 @@ class AppDatabase extends Dexie {
       logSheets: 'id, localId, serverId, templateId, status, createdAt',
       settings: 'key',
       fieldDefinitions: 'id, classId, order',
-      outbox: 'id, entityType, synced, createdAt',
-      syncMeta: 'key',
-      operationalUnits: 'id, code, parentId',
-      logSheetUserArchives: 'id, serverId, userId',
-      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt'
-    })
-
-    /**
-     * v2 — attachments (photos / voice notes).
-     *
-     * Added as a new version rather than by editing v1, per the rule above: v1 has shipped to
-     * dev devices, and rewriting it would make their on-disk version un-openable. This is a
-     * pure additive store with no `.upgrade()` callback, which is safe precisely because no
-     * existing data is reshaped — every v1 store is repeated verbatim, as Dexie requires.
-     *
-     * `syncStatus` is indexed because the upload queue selects on it every tick; `blob` is not
-     * indexed (IndexedDB cannot index a Blob, and nothing queries by content).
-     */
-    this.version(2).stores({
-      assetClasses: 'id, createdAt',
-      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
-      locations: 'id, code, parentId',
-      plantSystems: 'id, code, locationId',
-      mainFunctions: 'id, code, systemId, locationId',
-      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
-      logSheetTemplates: 'id, scopeType, scopeId',
-      logSheets: 'id, localId, serverId, templateId, status, createdAt',
-      settings: 'key',
-      fieldDefinitions: 'id, classId, order',
-      outbox: 'id, entityType, synced, createdAt',
       syncMeta: 'key',
       operationalUnits: 'id, code, parentId',
       logSheetUserArchives: 'id, serverId, userId',
@@ -136,8 +130,6 @@ const UNSYNCED_WORK_STORES: readonly UnsyncedWorkProbe[] = [
     // The sheet is nested inside the archive row.
     isUnsynced: row => (row?.sheet as { syncStatus?: string } | undefined)?.syncStatus !== 'synced'
   },
-  // The outbox marks sent entries with synced = true and never deletes them.
-  { store: 'outbox', isUnsynced: row => row?.synced !== true },
   { store: 'nfcFaultReports', isUnsynced: row => row?.syncStatus !== 'synced' },
   { store: 'attachments', isUnsynced: row => row?.syncStatus !== 'synced' }
 ]
@@ -200,10 +192,12 @@ async function countUnsyncedWork(): Promise<number> {
  * and recreate, or refuse to start.
  *
  * This used to delete, unconditionally. The comment justifying it said the case was reachable
- * "only on a dev device" — and that stopped being true the moment the schema moved to
- * `version(2)`: from then on, **any rollback to an earlier build wipes every tablet that had
- * run the newer one**, including completed rounds and captured photos that had not reached the
- * server yet. That data exists in exactly one place. With `autoUpdate` + `skipWaiting` on the
+ * "only on a dev device" — which stops being true the moment a second schema version ships:
+ * from then on, **any rollback to an earlier build would wipe every tablet that had run the
+ * newer one**, including completed rounds and captured photos that had not reached the server
+ * yet. The schema is back to a single version today, so that particular rollback is not live —
+ * but the branch is reachable for other reasons (a concurrent version-change transaction, a
+ * different Dexie major), and deleting unsynced work is the wrong answer whatever caused it. That data exists in exactly one place. With `autoUpdate` + `skipWaiting` on the
  * service worker, a bad deploy reaches the whole fleet in minutes and a rollback would then
  * destroy the very work the rollback was meant to protect.
  *

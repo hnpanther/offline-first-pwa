@@ -1,5 +1,5 @@
 import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
-import type { LogSheet, LogSheetEntryData } from '@/types'
+import type { LogSheet } from '@/types'
 import type { FieldDefinition } from '@/types/sync'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 
@@ -143,16 +143,4 @@ export function describeSubmitBlockingIssues(issues: SubmitBlockingIssue[]): str
   const parts = shown.map(i => `${i.assetName ?? i.assetId}: ${i.fieldLabel}`)
   const more = issues.length > shown.length ? ` و ${issues.length - shown.length} مورد دیگر` : ''
   return `فیلدهای الزامی تکمیل نشده‌اند — ${parts.join('، ')}${more}.`
-}
-
-/** Entry helper for the fill page, so an asset card can flag itself before submit. */
-export function entryHasBlockingIssues(
-  entry: LogSheetEntryData,
-  defs: FieldDefinition[]
-): boolean {
-  if (!hasMeaningfulFormData(entry.formData)) return false
-  if (defs.length === 0) return false
-  return defs.some(
-    def => !def.deleted && def.required && isFieldValueBlank(entry.formData?.[def.key], def.dataType)
-  )
 }

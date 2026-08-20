@@ -1,8 +1,27 @@
 import type { LogSheetEntryData } from '@/types'
 
+/**
+ * Whether one stored value counts as an **answer**.
+ *
+ * This is the single definition of "the operator answered this field" on the device, and it has
+ * to agree with the server's `FormDataValidationSupport.isAnswered`. A second, looser definition
+ * living elsewhere is exactly what cost real readings once: the bundle merge asked
+ * `Object.keys(formData).length > 0` instead, so an entry holding `{"Bar": "", "Status": ""}`
+ * counted as filled forever and the device's blanks beat the server's values.
+ *
+ * An emptied attachment field is the case a naive check gets wrong in the other direction:
+ * `{ type: 'attachment', ids: [] }` is a non-empty object that means *nothing attached*.
+ *
+ * `0` and `false` are answers. A reading of zero is a reading.
+ */
 function isValueFilled(value: unknown): boolean {
   if (value === undefined || value === null || value === '') return false
+  if (typeof value === 'string') return value.trim() !== ''
   if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'object') {
+    const ids = (value as { ids?: unknown }).ids
+    if (Array.isArray(ids)) return ids.length > 0
+  }
   return true
 }
 
@@ -59,6 +78,12 @@ export function applyOperatorEntrySave(
   return {
     ...applyEntrySaveTimestamps(entry, formData, now),
     filledVia,
-    filledByName: undefined
+    filledByName: undefined,
+    // Stamped on EVERY operator save, including one that leaves the entry empty. This is the
+    // only record that the operator had an opinion here, and `applyEntrySaveTimestamps`
+    // deliberately does not touch `createdAt`/`updatedAt` on an empty save — those two are the
+    // base this device echoes back to the server, and moving them would make the server refuse
+    // the very clear this marker exists to preserve. See `LogSheetEntryData.locallyEditedAt`.
+    locallyEditedAt: now
   }
 }

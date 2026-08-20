@@ -1,22 +1,15 @@
 import { useState, useCallback, useEffect } from 'react'
-import {
-  getFieldsForClass,
-  saveFieldDefinition,
-  updateFieldDefinition,
-  deleteFieldDefinition,
-  reorderFieldDefinitions,
-} from '@/services/storage/fieldDefinitions'
+import { getFieldsForClass } from '@/services/storage/fieldDefinitions'
 import type { FieldDefinition } from '@/types/sync'
 import { toIdString } from '@/utils/ids'
 
 /**
- * Hook for managing field definitions of a single AssetClass.
+ * A single asset class's field definitions, as this device currently holds them.
  *
- * Usage in AdminPage (class editor):
- *   const { fields, addField, editField, removeField } = useFieldDefinitions(cls.id)
- *
- * Usage in LogSheetFillPage (read-only):
- *   const { fields, loading } = useFieldDefinitions(entry.classId)
+ * Read-only: field definitions are server-owned and arrive inside a log-sheet bundle. The hook
+ * used to expose `addField`/`editField`/`removeField`/`reorderFields` for a class editor that
+ * this app does not have and should not have — no screen ever called them, and the writes they
+ * wrapped queued outbox rows for a push endpoint that was never built.
  */
 export function useFieldDefinitions(classId: string | undefined) {
   const [fields, setFields] = useState<FieldDefinition[]>([])
@@ -40,40 +33,5 @@ export function useFieldDefinitions(classId: string | undefined) {
     void refresh()
   }, [refresh])
 
-  const addField = useCallback(
-    async (data: Omit<FieldDefinition, 'id' | 'createdAt' | 'updatedAt' | 'version' | 'deleted' | 'synced'>) => {
-      if (!classId) throw new Error('classId is required')
-      const result = await saveFieldDefinition({ ...data, classId })
-      await refresh()
-      return result
-    },
-    [classId, refresh]
-  )
-
-  const editField = useCallback(
-    async (id: string, updates: Partial<Omit<FieldDefinition, 'id' | 'createdAt' | 'version' | 'synced'>>) => {
-      await updateFieldDefinition(id, updates)
-      await refresh()
-    },
-    [refresh]
-  )
-
-  const removeField = useCallback(
-    async (id: string) => {
-      await deleteFieldDefinition(id)
-      await refresh()
-    },
-    [refresh]
-  )
-
-  const reorderFields = useCallback(
-    async (orderedIds: string[]) => {
-      if (!classId) return
-      await reorderFieldDefinitions(classId, orderedIds)
-      await refresh()
-    },
-    [classId, refresh]
-  )
-
-  return { fields, loading, refresh, addField, editField, removeField, reorderFields }
+  return { fields, loading, refresh }
 }

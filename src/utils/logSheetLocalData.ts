@@ -23,8 +23,29 @@ export function stripEntryFormData(
     formData: {},
     createdAt: undefined,
     updatedAt: undefined,
-    filledVia: undefined
+    filledVia: undefined,
+    locallyEditedAt: undefined
   }))
+}
+
+/**
+ * Forgets that this device had an opinion about these entries.
+ *
+ * <p>Called wherever the device's work stops being its own: the server accepted it, or the row
+ * is being reset for a fresh editing session. **This is the half of `locallyEditedAt` that keeps
+ * it safe.** A marker that outlives its submission makes the device win that entry on every
+ * future merge, so a supervisor who edits the sheet afterwards becomes invisible — which is the
+ * log sheet 85 bug again, arrived at from the other direction.
+ *
+ * <p>Returns the same array identity-wise only when nothing had a marker, so an unnecessary
+ * IndexedDB write is easy for a caller to skip.
+ */
+export function clearLocalEditMarkers(
+  entries: LogSheetEntryData[] | undefined
+): LogSheetEntryData[] {
+  const list = entries ?? []
+  if (!list.some(e => e.locallyEditedAt != null)) return list
+  return list.map(e => (e.locallyEditedAt == null ? e : { ...e, locallyEditedAt: undefined }))
 }
 
 export function serverAssigneeId(

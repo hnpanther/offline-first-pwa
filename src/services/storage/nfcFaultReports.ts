@@ -33,15 +33,6 @@ export async function getNfcFaultReportsForSheet(
   return db.nfcFaultReports.where('logSheetServerId').equals(logSheetServerId).toArray()
 }
 
-/** Whether manual entry should be unlocked for this asset within this log sheet. */
-export async function hasNfcFaultReport(
-  logSheetServerId: string,
-  assetId: string
-): Promise<boolean> {
-  const reports = await getNfcFaultReportsForSheet(logSheetServerId)
-  return reports.some(r => r.assetId === assetId)
-}
-
 /**
  * Whether a locally-stored report may be pushed under the given logged-in user's
  * session. A shared device may hold a still-pending report filed by a previous

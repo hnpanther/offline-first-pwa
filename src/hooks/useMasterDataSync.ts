@@ -55,6 +55,3 @@ export function useForceBootstrapPull(): () => Promise<{ success: boolean; error
     return { success: result.success, error: result.error }
   }, [])
 }
-
-/** @deprecated Use useForceBootstrapPull */
-export const useForceMasterDataPull = useForceBootstrapPull

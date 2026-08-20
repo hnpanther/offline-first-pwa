@@ -9,7 +9,6 @@
  *   - Log sheet bundles (per-sheet reference data)
  *   - Asset lookup (NFC scan → asset info)
  *   - Log sheets (push submitted log sheets)
- *   - Sync engine (outbox push / incremental pull)
  */
 
 import { apiClient, ApiError } from './client'
@@ -24,31 +23,11 @@ import type {
   LogSheetAssignmentType,
   OperationalUnit
 } from '@/types'
-import type { FieldDefinition, OutboxEntry } from '@/types/sync'
+import type { FieldDefinition } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
 
 // ===========================================================================
 // Health
-// ===========================================================================
-
-export interface HealthResponse {
-  status: 'ok'
-  version?: string
-  serverTime?: number
-}
-
-/** Lightweight ping — used by SyncManager and the Settings page. */
-export async function checkServerHealth(signal?: AbortSignal): Promise<boolean> {
-  try {
-    await apiClient.get<HealthResponse>('/api/health', signal, false)
-    return true
-  } catch {
-    return false
-  }
-}
-
-// ===========================================================================
-// Auth
 // ===========================================================================
 
 export async function login(
@@ -259,7 +238,6 @@ export interface BootstrapResponse {
   }
 }
 
-/** @deprecated Use BootstrapResponse */
 export type MasterDataResponse = BootstrapResponse
 
 export async function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
@@ -489,65 +467,4 @@ export async function submitNfcFaultReportsBatch(
     { reports },
     signal
   )
-}
-
-// ===========================================================================
-// Sync engine — outbox push / incremental pull
-// (infrastructure for the future push.ts / pull.ts engines)
-// ===========================================================================
-
-/**
- * POST /api/sync/push
- *
- * Batch-push outbox entries (created by Repository) to the server.
- * entityType values: 'asset_class' | 'field_definition' | 'asset_entry' |
- *   'location' | 'plant_system' | 'main_function' | 'sub_function' |
- *   'log_sheet_template'
- *
- * // SYNC ENGINE HOOK — called from src/services/sync/push.ts (future)
- */
-export interface OutboxPushResult {
-  id: string          // OutboxEntry.id
-  accepted: boolean
-  error?: string
-}
-
-export async function pushOutboxBatch(
-  entries: OutboxEntry[],
-  signal?: AbortSignal
-): Promise<OutboxPushResult[]> {
-  return apiClient.post<OutboxPushResult[]>(
-    '/api/sync/push',
-    { entries },
-    signal
-  )
-}
-
-/**
- * GET /api/sync/changes?since=<seq>
- *
- * Incremental pull: server returns all entity changes since the last
- * sequence number the device acknowledged.
- * `seq` is stored in syncMeta { key: 'lastSeq', value: <seq> }.
- *
- * // SYNC ENGINE HOOK — called from src/services/sync/pull.ts (future)
- */
-export interface SyncChange {
-  seq: number
-  entityType: string
-  entityId: string
-  operation: 'create' | 'update' | 'delete'
-  payload: Record<string, unknown>
-}
-
-export interface SyncChangesResponse {
-  changes: SyncChange[]
-  latestSeq: number
-}
-
-export async function fetchSyncChanges(
-  since: number,
-  signal?: AbortSignal
-): Promise<SyncChangesResponse> {
-  return apiClient.get<SyncChangesResponse>(`/api/sync/changes?since=${since}`, signal)
 }

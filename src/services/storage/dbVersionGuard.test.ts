@@ -112,7 +112,7 @@ describe('openDatabase version guard', () => {
   it('reports how much is at stake, for the failure screen', async () => {
     await db.open()
     await db.logSheets.add({ id: 'ls-1', localId: 'l-1', status: 'IN_PROGRESS', syncStatus: 'PENDING' } as never)
-    await db.outbox.add({ id: 'o-1', entityType: 'logSheet', synced: 0, createdAt: 1 } as never)
+    await db.nfcFaultReports.add({ id: 'fr-1', logSheetServerId: '9', assetId: 1, syncStatus: 'pending', createdAt: 1 } as never)
     db.close()
 
     failNextOpenWithVersionError()
@@ -160,7 +160,7 @@ describe('openDatabase version guard', () => {
         syncStatus: 'synced', createdAt: 1
       })) as never[]
     )
-    await db.outbox.add({ id: 'o-1', entityType: 'logSheet', synced: true, createdAt: 1 } as never)
+    await db.nfcFaultReports.add({ id: 'fr-1', logSheetServerId: '9', assetId: 1, syncStatus: 'synced', createdAt: 1 } as never)
     db.close()
 
     failNextOpenWithVersionError()
@@ -207,21 +207,6 @@ describe('openDatabase version guard', () => {
 
     failNextOpenWithVersionError()
 
-    await expect(openDatabase()).rejects.toBeInstanceOf(DatabaseVersionMismatchError)
-  })
-
-  it('counts an unsent outbox entry, and ignores a sent one', async () => {
-    await db.open()
-    await db.outbox.add({ id: 'o-1', entityType: 'logSheet', synced: true, createdAt: 1 } as never)
-    db.close()
-    failNextOpenWithVersionError()
-    await expect(openDatabase()).resolves.toBeUndefined()
-
-    db.close()
-    await db.open()
-    await db.outbox.add({ id: 'o-2', entityType: 'logSheet', synced: false, createdAt: 1 } as never)
-    db.close()
-    failNextOpenWithVersionError()
     await expect(openDatabase()).rejects.toBeInstanceOf(DatabaseVersionMismatchError)
   })
 

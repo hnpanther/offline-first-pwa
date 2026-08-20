@@ -1,20 +1,22 @@
 /**
- * Sync-ready base for every entity in the system.
+ * The shape every synced-down reference record carries.
  *
- * Rules:
- *  - id       : client-generated UUID. Immutable after creation.
- *  - version  : incremented on every local mutation. Sent to server so it can
- *               detect conflicts ("you're modifying v2, but we already have v4").
- *  - deleted  : soft-delete tombstone. Records are NEVER physically removed.
- *               The sync engine propagates deleted=true to the server so other
- *               clients learn about the deletion.
- *  - synced   : false means "at least one outbox entry for this record is still
- *               pending". The sync engine sets it back to true after ACK.
+ * <p><b>These fields are the server's, not the device's.</b> They arrive filled in and are read,
+ * never written locally — the only record type still using this base is `FieldDefinition`, which
+ * reaches the device inside a log-sheet bundle and is never edited here.
  *
- * // SYNC ENGINE HOOK — src/services/sync/push.ts
- *   Reads outbox entries where synced=false, sends them, marks synced=true.
- * // SYNC ENGINE HOOK — src/services/sync/pull.ts
- *   Receives server changes and calls Repository.applyServerRecord().
+ * <p>They are kept because the server sends them and the device reads two of them:
+ *
+ *  - `id`       — the row's identity, and the tie-breaker in `dedupeByKey` (a numeric server id
+ *                 beats a UUID left over from an older build).
+ *  - `deleted`  — a soft-delete tombstone. `getFieldsForClass` filters on it, so a field the
+ *                 server retired stops appearing on forms without the row having to vanish.
+ *  - `version`, `synced`, `createdAt`, `updatedAt` — carried through, not acted on.
+ *
+ * <p>They used to mean more: a generic `Repository` stamped them on local mutations and queued
+ * an outbox row for a push engine (`POST /api/sync/push`) that was never built and whose endpoint
+ * does not exist server-side. That machinery has been removed; sync is the log-sheet batch and
+ * the bundles, and nothing else.
  */
 export interface SyncableRecord {
   id: string
@@ -64,12 +66,11 @@ export interface FieldValidation {
 }
 
 /**
- * A single parameter slot in an AssetClass.
- * Replaces the embedded FormField[] that used to live inside AssetClass.
+ * A single parameter slot on an asset class — one column of the form an operator fills.
  *
- * Each FieldDefinition is independently sync-ready: adding, removing, or
- * reordering a single field produces exactly one outbox entry, not a full
- * class re-upload.
+ * <p>Server-owned. Each sheet carries its own frozen snapshot of the fields it was generated
+ * with, so two sheets of the same class can legitimately disagree; the shared table here is the
+ * fallback for sheets saved before that snapshot existed.
  */
 export interface FieldDefinition extends SyncableRecord {
   classId: string
@@ -97,25 +98,6 @@ export type AttributeMap = Record<string, unknown>
 // Outbox
 // ---------------------------------------------------------------------------
 
-/**
- * Every local mutation (create / update / soft-delete) is recorded here.
- * The sync engine reads this table in order and pushes entries to the server.
- * No entry is ever deleted from the outbox — only marked synced=true.
- *
- * // SYNC ENGINE HOOK — src/services/sync/push.ts will:
- *   1. Query outbox where synced=false, ordered by createdAt.
- *   2. POST each entry to /api/sync/push.
- *   3. On ACK, set synced=true and update the entity's synced=true flag.
- */
-export interface OutboxEntry {
-  id: string
-  entityType: string      // e.g. 'asset_class' | 'field_definition' | 'log_sheet'
-  entityId: string
-  operation: 'create' | 'update' | 'delete'
-  payload: Record<string, unknown>
-  createdAt: number
-  synced: boolean
-}
 
 // ---------------------------------------------------------------------------
 // Sync metadata

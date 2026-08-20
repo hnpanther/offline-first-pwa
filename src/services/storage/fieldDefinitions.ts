@@ -1,21 +1,31 @@
 /**
- * FieldDefinition CRUD — backed by Repository<FieldDefinition>.
+ * Reading a class's field definitions.
  *
- * All sync bookkeeping (UUID, version, outbox) is handled by the Repository.
- * Nothing here touches uuid() or the outbox directly.
+ * <h2>Read-only, on purpose</h2>
+ *
+ * Field definitions are **server-owned**. They reach the device inside a log-sheet bundle, as
+ * that sheet's frozen `field_definitions_snapshot`, and `mergeLogSheetBundle` writes them with
+ * `bulkPut`. Nothing on a tablet may create, edit, delete or reorder one — there is no field
+ * editor in this app, and a device that invented a field would be describing a form the server
+ * has never heard of.
+ *
+ * <p>This file used to expose the whole CRUD set through a generic `Repository` that also wrote
+ * an outbox row per mutation, for a push engine that was never built against an endpoint that
+ * does not exist (`POST /api/sync/push`). None of it was reachable from any screen; all of it
+ * has been removed. What is left is the two reads the fill page actually performs.
  */
 
 import { db } from './db'
-import { Repository } from './repository'
 import type { FieldDefinition } from '@/types/sync'
 import { toIdString } from '@/utils/ids'
 
-const repo = new Repository<FieldDefinition>(db.fieldDefinitions, 'field_definition')
-
 /**
- * Server embeds fields as FieldDefinition-shaped maps ({ key, dataType }).
- * Local admin UI uses FormField ({ name, type }). Accept both.
- *//** Prefer server/numeric ids and newer rows when the same key appears twice. */
+ * Prefer server/numeric ids and newer rows when the same key appears twice.
+ *
+ * <p>Two sheets of the same class can legitimately carry different snapshots of a field, and the
+ * shared table keeps whichever arrived — so the same `key` can exist under two ids. A row whose
+ * id looks like a UUID came from a device-era build; a numeric one is the server's.
+ */
 function dedupeByKey(fields: FieldDefinition[]): FieldDefinition[] {
   const byKey = new Map<string, FieldDefinition>()
   for (const field of fields) {
@@ -38,74 +48,21 @@ function dedupeByKey(fields: FieldDefinition[]): FieldDefinition[] {
   return [...byKey.values()]
 }
 
-/** Sorted by order, excludes soft-deleted entries. */
+/**
+ * A class's live fields, sorted by `order`, soft-deleted rows excluded.
+ *
+ * <p>Filtered in memory rather than by the `classId` index: the table holds one row per field of
+ * every class the device has ever seen — tens of rows, not thousands — and the `deleted` filter
+ * has no index to ride anyway. The sheet's own `fieldDefinitions` copy is what the fill page
+ * prefers; this is the fallback for sheets saved before that existed.
+ */
 export async function getFieldsForClass(classId: string | undefined): Promise<FieldDefinition[]> {
   const normalizedClassId = toIdString(classId)
   if (!normalizedClassId) return []
 
-  // fieldDefinitions rows from the log-sheet bundle are the only source of truth.
+  const rows = await db.fieldDefinitions.toArray()
   const fields = dedupeByKey(
-    (await repo.findAll()).filter(f => toIdString(f.classId) === normalizedClassId)
+    rows.filter(f => !f.deleted && toIdString(f.classId) === normalizedClassId)
   )
   return fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-}
-
-export async function getFieldDefinition(id: string): Promise<FieldDefinition | undefined> {
-  return repo.findById(id)
-}
-
-export async function saveFieldDefinition(
-  data: Omit<FieldDefinition, 'id' | 'createdAt' | 'updatedAt' | 'version' | 'deleted' | 'synced'>
-): Promise<FieldDefinition> {
-  return repo.create(data)
-}
-
-export async function updateFieldDefinition(
-  id: string,
-  updates: Partial<Omit<FieldDefinition, 'id' | 'createdAt' | 'version' | 'synced'>>
-): Promise<FieldDefinition> {
-  return repo.update(id, updates)
-}
-
-export async function deleteFieldDefinition(id: string): Promise<void> {
-  return repo.softDelete(id)
-}
-
-/**
- * Batch-reorder fields within a class.
- * orderedIds is the new desired sequence (index 0 = first displayed).
- */
-export async function reorderFieldDefinitions(
-  classId: string,
-  orderedIds: string[]
-): Promise<void> {
-  await Promise.all(
-    orderedIds.map((id, index) => repo.update(id, { classId, order: index }))
-  )
-}/** Soft-delete all field definitions belonging to a class. */
-export async function deleteFieldsForClass(classId: string): Promise<void> {
-  const existing = await repo.findWhere('classId', classId)
-  await Promise.all(existing.map(f => repo.softDelete(f.id)))
-}
-
-/** Clone all field definitions from one class to a new class. */
-export async function cloneFieldsToClass(
-  sourceClassId: string,
-  targetClassId: string
-): Promise<FieldDefinition[]> {
-  const source = await getFieldsForClass(sourceClassId)
-  return Promise.all(
-    source.map(f =>
-      repo.create({
-        classId: targetClassId,
-        key: f.key,
-        label: f.label,
-        dataType: f.dataType,
-        unit: f.unit,
-        required: f.required,
-        validation: f.validation,
-        order: f.order,
-      })
-    )
-  )
 }

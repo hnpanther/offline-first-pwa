@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { stripEntryFormData, sheetHasLocalEntryData, isAssigneeMismatch } from '@/utils/logSheetLocalData'
+import { stripEntryFormData, sheetHasLocalEntryData, isAssigneeMismatch,
+  clearLocalEditMarkers
+} from '@/utils/logSheetLocalData'
 import type { LogSheetEntryData } from '@/types'
 
 describe('stripEntryFormData', () => {
@@ -68,5 +70,72 @@ describe('isAssigneeMismatch', () => {
 
   it('is false when both local fields align with the server assignee', () => {
     expect(isAssigneeMismatch({ assigneeUserId: '9', localOwnerUserId: '9' }, '9')).toBe(false)
+  })
+})
+
+describe('clearLocalEditMarkers', () => {
+  const entry = (overrides: Partial<LogSheetEntryData> = {}): LogSheetEntryData => ({
+    assetId: '1',
+    assetName: 'Pump',
+    subFunctionCode: 'SF',
+    subFunctionTag: 'T',
+    classId: '7',
+    formData: { temp: 22 },
+    ...overrides
+  })
+
+  it('forgets the opinion but keeps everything else', () => {
+    const [cleared] = clearLocalEditMarkers([
+      entry({ locallyEditedAt: 5_000, createdAt: 1_000, updatedAt: 2_000, filledVia: 'manual' })
+    ])
+
+    expect(cleared.locallyEditedAt).toBeUndefined()
+    // The work itself is untouched — this says "the server has it now", not "throw it away".
+    expect(cleared.formData).toEqual({ temp: 22 })
+    expect(cleared.createdAt).toBe(1_000)
+    expect(cleared.updatedAt).toBe(2_000)
+    expect(cleared.filledVia).toBe('manual')
+  })
+
+  it('returns the same array when there is nothing to forget', () => {
+    // So a caller can skip a pointless IndexedDB write on every accepted submission.
+    const entries = [entry(), entry({ assetId: '2' })]
+
+    expect(clearLocalEditMarkers(entries)).toBe(entries)
+  })
+
+  it('clears only the entries that carry a marker', () => {
+    const cleared = clearLocalEditMarkers([
+      entry({ assetId: '1', locallyEditedAt: 5_000 }),
+      entry({ assetId: '2' })
+    ])
+
+    expect(cleared.map(e => e.locallyEditedAt)).toEqual([undefined, undefined])
+  })
+
+  it('copes with an undefined entry list', () => {
+    expect(clearLocalEditMarkers(undefined)).toEqual([])
+  })
+})
+
+describe('stripEntryFormData clears the marker too', () => {
+  it('leaves nothing behind that could win a later merge', () => {
+    const [stripped] = stripEntryFormData([
+      {
+        assetId: '1',
+        assetName: 'Pump',
+        subFunctionCode: 'SF',
+        subFunctionTag: 'T',
+        classId: '7',
+        formData: { temp: 22 },
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        filledVia: 'manual',
+        locallyEditedAt: 5_000
+      }
+    ])
+
+    expect(stripped.formData).toEqual({})
+    expect(stripped.locallyEditedAt).toBeUndefined()
   })
 })

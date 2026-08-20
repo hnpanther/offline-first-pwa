@@ -9,6 +9,7 @@ import type {
   LogSheetTemplate,
   LogSheet
 } from '@/types'
+import { clearLocalEditMarkers } from '@/utils/logSheetLocalData'
 
 // ---------------------------------------------------------------------------
 // Asset Classes (was Asset Types)
@@ -138,15 +139,24 @@ export async function resetLogSheetToOpenDraft(
     status: 'draft',
     syncStatus: 'pending',
     updatedAt: Date.now(),
+    // Markers go in BOTH branches, including the one that keeps the operator's readings.
+    //
+    // The reopen-and-continue path resets without `clearEntryFormData` — deliberately, because
+    // that is the same operator carrying on with their own work. But it turns a delivered row
+    // back into a draft, which re-arms `localEditsPending`; any marker left standing would then
+    // win every entry against the server for the rest of the sheet's life, hiding whatever a
+    // supervisor changed while it was reopened. Nothing is lost by clearing them here: the work
+    // they described has already reached the server, and the operator's next save re-stamps.
     entries: options?.clearEntryFormData
       ? existing.entries.map(e => ({
           ...e,
           formData: {},
           createdAt: undefined,
           updatedAt: undefined,
-          filledVia: undefined
+          filledVia: undefined,
+          locallyEditedAt: undefined
         }))
-      : existing.entries
+      : clearLocalEditMarkers(existing.entries)
   }
   delete next.submittedAt
   delete next.completedAt

@@ -224,6 +224,49 @@ The operator's sheets: assigned plus claimable pool.
 local edits**. A sheet the operator has been filling must not be overwritten by the server's
 older copy of it. This is the most delicate code in the sync layer and has the most tests.
 
+The merge is **per entry**, keyed on `assetId`, and per entry it is all-or-nothing — there is no
+field-level merging, so two people editing different fields of the same asset is last-writer-wins
+by design.
+
+Per entry, one question decides everything: **does this device have an opinion about this
+asset?** — which is not the same as "does it hold a value".
+
+```ts
+const localWins = preserveLocal
+  && (hasEntryFormData(localForm) || (localEditsPending && existing?.locallyEditedAt != null))
+```
+
+`locallyEditedAt` is stamped by every operator save, including one that **empties** the entry —
+because emptying it is an opinion too, and reading that as absence let the next sync restore the
+value the operator had just deleted. `hasEntryFormData` remains as the OR arm so entries written
+by builds older than the marker keep behaving.
+
+`localEditsPending` is false once the row is `submitted` + `synced`: everything it holds then came
+from the server, so a marker still standing describes an opinion that no longer exists. Markers
+are also cleared outright when the server accepts the work. Both, not one — the reopen-and-continue
+path turns a delivered row back into a draft, which re-arms the gate for anything left behind.
+
+`hasEntryFormData` asks about **values**, not keys. That distinction is not pedantic — it is the
+whole rule. The predicate is `isValueFilled` in [`entryTimestamps.ts`](../src/utils/entryTimestamps.ts),
+and it must keep meaning exactly what the server's `FormDataValidationSupport.isAnswered` means:
+
+| Value | Answer? |
+|---|---|
+| `undefined`, `null`, `''`, `'   '` | no |
+| `[]` | no |
+| `{ type: 'attachment', ids: [] }` | **no** — a non-empty object meaning *nothing attached* |
+| `0`, `false`, `'0'` | **yes** — a reading of zero is a reading |
+| any other object (a location coordinate) | yes |
+
+Asking the looser question — `Object.keys(localForm).length > 0` — is what once cost real
+readings: the server's web fill form posts every field of every entry on every save, so one
+supervisor save wrote `{"Bar": "", "Status": ""}` onto assets nobody had opened. After that the
+device counted every asset in that sheet as its own work and never accepted a server value for it
+again; an operator handed a reopened sheet could not see what a supervisor had just entered, and
+their next submit sent the blanks back. See AGENTS.md § Log sheet merge, and the server's
+`docs/log-sheets.md` § Who wins when two people have touched the same sheet for the other two
+halves of the fix.
+
 ---
 
 ## Attachment upload

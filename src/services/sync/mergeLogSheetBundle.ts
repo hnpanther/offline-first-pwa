@@ -20,6 +20,7 @@ import type {
 } from '@/types'
 import type { FieldDefinition } from '@/types/sync'
 import { toIdString } from '@/utils/ids'
+import { hasEntryFormData } from '@/utils/entryTimestamps'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
 import type { LogSheetEntryData } from '@/types'
 
@@ -144,14 +145,41 @@ export async function mergeBundleContextToDb(
 export function mapServerEntryToLocal(
   entry: ServerLogSheetEntry,
   existing?: LogSheetEntryData,
-  preserveLocal = true
+  preserveLocal = true,
+  localEditsPending = true
 ): LogSheetEntryData {
   const localForm = existing?.formData ?? {}
   const serverForm = entry.formData ?? {}
   // Named, because two fields below need to know which side won and an `===` on the resulting
   // object cannot tell them: after the first sync the local copy holds the server's own values,
   // so it compares unequal by identity while being the same data.
-  const localWins = preserveLocal && Object.keys(localForm).length > 0
+  //
+  // TWO CONDITIONS, BECAUSE NEITHER ALONE IS "does this device have an opinion here?", AND
+  // EACH OF THEM ALONE HAS ALREADY LOST REAL DATA.
+  //
+  //   `Object.keys(localForm).length > 0` — key presence — was the first attempt. The web fill
+  //   form writes every field of every entry on every save, so an asset nobody had touched
+  //   arrived here as `{"Bar": "", "Status": ""}` and counted as work. Key presence was then
+  //   permanently true for every asset in that sheet, `localWins` collapsed into
+  //   `preserveLocal`, and the server side of this merge stopped existing: an operator handed a
+  //   reopened sheet could not see the readings a supervisor had just entered, and their next
+  //   submit sent the blanks back and destroyed them. Log sheet 85.
+  //
+  //   `hasEntryFormData` alone — value presence — was the second. It reads a *deliberate clear*
+  //   as no opinion, so the next periodic sync restored the old server value and the operator's
+  //   deletion vanished before they ever reached submit.
+  //
+  // So the opinion is recorded explicitly, at the moment it is formed, by the save itself:
+  // `locallyEditedAt`. Value presence stays as the OR arm so entries filled by builds older
+  // than the marker keep behaving correctly.
+  //
+  // `localEditsPending` is the second gate, and it is what stops the marker becoming immortal.
+  // Once this device's work is delivered and reconciled, the device has no opinion of its own
+  // any more — everything it holds came from the server — and a marker still standing there
+  // would hand it every future merge for that entry, which is log sheet 85 again by another
+  // route. The caller decides; see `applyLogSheetBundle`.
+  const localWins = preserveLocal
+    && (hasEntryFormData(localForm) || (localEditsPending && existing?.locallyEditedAt != null))
   const formData = localWins ? localForm : serverForm
 
   return {
@@ -181,10 +209,20 @@ export function mapServerEntryToLocal(
     filledByName: localWins
       ? (existing?.filledByName ?? undefined)
       : (entry.filledByName ?? undefined),
-    createdAt: preserveLocal
+    // The winner of `formData` owns its timestamps too — `localWins`, not `preserveLocal`.
+    //
+    // These two are not decoration: the device echoes them back on submit, and the server's
+    // `wouldBlankUnseenAnswer` reads them as "the version this device last saw". Keeping local
+    // timestamps while displaying the server's values told the server the device was working
+    // from a base it had actually never held, which then refused a legitimate clear. When the
+    // server wins the values, the server's timestamps are the honest base.
+    //
+    // The `??` fallbacks stay: a local row that never held data has neither, and inheriting the
+    // server's is exactly right.
+    createdAt: localWins
       ? (existing?.createdAt ?? entry.createdAt ?? undefined)
       : (entry.createdAt ?? undefined),
-    updatedAt: preserveLocal
+    updatedAt: localWins
       ? (existing?.updatedAt ?? entry.updatedAt ?? undefined)
       : (entry.updatedAt ?? undefined),
     // The server never reports how an entry was captured (no such column round-trips
@@ -192,7 +230,12 @@ export function mapServerEntryToLocal(
     // relabel a manually-completed entry as NFC-scanned on the next bundle refresh
     // (e.g. simply reopening a draft sheet while online, which runs this merge again
     // before the operator ever hits final submit).
-    filledVia: preserveLocal ? existing?.filledVia : undefined
+    filledVia: preserveLocal ? existing?.filledVia : undefined,
+    // Local-only, like `filledVia`, and this function rebuilds from an explicit field list —
+    // omit it and every bundle refresh silently erases the operator's clear.
+    //
+    // Dropped when the server wins, because the opinion it records is the one that just lost.
+    locallyEditedAt: localWins ? existing?.locallyEditedAt : undefined
   }
 }
 
@@ -200,9 +243,10 @@ export function mapServerEntryToLocal(
 export function mergeEntriesPreservingFormData(
   serverEntries: ServerLogSheetEntry[],
   existingEntries?: LogSheetEntryData[],
-  options?: { preserveLocal?: boolean }
+  options?: { preserveLocal?: boolean; localEditsPending?: boolean }
 ): LogSheetEntryData[] {
   const preserveLocal = options?.preserveLocal !== false
+  const localEditsPending = options?.localEditsPending !== false
   const existingByAsset = new Map(
     (existingEntries ?? []).map(e => [toIdString(e.assetId), e])
   )
@@ -210,7 +254,8 @@ export function mergeEntriesPreservingFormData(
     mapServerEntryToLocal(
       entry,
       existingByAsset.get(toIdString(entry.assetId)),
-      preserveLocal
+      preserveLocal,
+      localEditsPending
     )
   )
 }

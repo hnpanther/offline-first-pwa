@@ -248,6 +248,29 @@ export interface LogSheetEntryData {
   /** How this entry's current form data was captured. Unset means not yet filled. */
   filledVia?: 'nfc' | 'manual'
   /**
+   * Device time of the last save an operator made to this entry **on this device**, whether
+   * they entered a value or removed the last one. Local-only: never sent to the server, never
+   * returned by it.
+   *
+   * It exists because "this device has an opinion about this asset" cannot be inferred from
+   * `formData`, and both attempts to infer it failed in production. Key presence
+   * (`Object.keys(formData).length > 0`) counted a blank the web form had written as work, which
+   * is how a supervisor's readings became invisible on log sheet 85. Value presence
+   * (`hasEntryFormData`) counts a *deliberate clear* as no opinion, so the next bundle refresh
+   * put the old server value back and the operator's deletion vanished before they could submit.
+   * Only an explicit marker distinguishes "untouched" from "emptied on purpose".
+   *
+   * **It must be cleared once the work has been delivered** — see `clearLocalEditMarkers`. A
+   * marker that outlives its submission makes the device win that entry forever, which is the
+   * log sheet 85 bug again by another route.
+   *
+   * Deliberately *not* expressed by bumping `updatedAt` on a clearing save: `createdAt` and
+   * `updatedAt` are echoed to the server as the base this device last saw, and the server's
+   * `wouldBlankUnseenAnswer` compares them for equality. Moving them on a clear would make the
+   * server refuse every deliberate clear.
+   */
+  locallyEditedAt?: number
+  /**
    * Who recorded the values currently stored for this asset, as a display name.
    *
    * Server-resolved and server-authoritative. It exists for the reopen-and-reassign case: a
