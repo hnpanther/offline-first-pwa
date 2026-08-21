@@ -1468,11 +1468,20 @@ disk. Editing a line in it does not migrate those devices — it makes their dat
 `openDatabase()` then refuses to start rather than delete, and every tablet holding unsynced
 readings is stranded until a build ships that can open it again.
 
-**Every schema change from here is a new `this.version(2).stores({...})`**, repeating the full
-store list verbatim (Dexie requires it, and a store omitted from a later version is dropped).
-A version that only adds stores or indexes needs no `.upgrade()` callback; one that reshapes
-existing rows does, and it will run on a device holding real work. Adding a plain non-indexed
-property to a stored object needs no version bump at all — only new stores and new indexes do.
+**Every schema change from here is a new version block**, repeating the full store list
+verbatim (Dexie requires it, and a store omitted from a later version is dropped). A version that
+only adds stores or indexes needs no `.upgrade()` callback; one that reshapes existing rows does,
+and it will run on a device holding real work. Adding a plain non-indexed property to a stored
+object needs no version bump at all — only new stores and new indexes do.
+
+**`version(2)` is the only one above the baseline, and it changes no schema.** It repeats the
+identical store list and exists for a single data migration: stamping `locallyEditedAt` on entries
+that hold work but were written before that marker existed. The sync merge now decides ownership
+from the marker alone — no question about `formData` can separate a reading the operator typed
+from one the server sent — so those entries would otherwise lose to the server on the next sync.
+It stamps only entries that hold real values, only in sheets that are not already delivered, and
+never over a marker already present; it is idempotent, so an interrupted upgrade can just run
+again. See `docs/storage.md` § Changing the schema and `docs/sync.md` § Bundle merge.
 
 `dbSchema.test.ts` pins the store list, the indexes the sync loops select on, each store's
 primary key, and the expected version number — so adding a version is a deliberate edit rather
@@ -1483,8 +1492,8 @@ device holds unsynced work; only a database with nothing at stake is recreated. 
 is rethrown untouched.
 
 When the schema next changes, **add** `this.version(3).stores({...})` with the full store
-list rather than editing an existing version block. Note that adding a plain, non-indexed
-property to a stored object needs no version bump at all — only new stores and new indexes do.
+list rather than editing either existing block. Note that adding a plain, non-indexed property to
+a stored object needs no version bump at all — only new stores and new indexes do.
 
 ---
 

@@ -101,6 +101,8 @@ describe('entry attribution through the bundle merge', () => {
       subFunctionTag: 'PK-01',
       classId: '7',
       formData: { temp: '99' },
+      // The unsent draft is a local edit, and the merge only knows that because the save said so.
+      locallyEditedAt: 1650000000000,
       filledByName: 'اپراتور اول'
     }
 
@@ -122,6 +124,7 @@ describe('entry attribution through the bundle merge', () => {
       subFunctionTag: 'PK-01',
       classId: '7',
       formData: { temp: '99' },
+      locallyEditedAt: 1650000000000,
       filledByName: undefined
     }
 

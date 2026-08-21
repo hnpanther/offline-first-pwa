@@ -20,7 +20,6 @@ import type {
 } from '@/types'
 import type { FieldDefinition } from '@/types/sync'
 import { toIdString } from '@/utils/ids'
-import { hasEntryFormData } from '@/utils/entryTimestamps'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
 import type { LogSheetEntryData } from '@/types'
 
@@ -150,36 +149,49 @@ export function mapServerEntryToLocal(
 ): LogSheetEntryData {
   const localForm = existing?.formData ?? {}
   const serverForm = entry.formData ?? {}
-  // Named, because two fields below need to know which side won and an `===` on the resulting
+  // Named, because three fields below need to know which side won and an `===` on the resulting
   // object cannot tell them: after the first sync the local copy holds the server's own values,
   // so it compares unequal by identity while being the same data.
   //
-  // TWO CONDITIONS, BECAUSE NEITHER ALONE IS "does this device have an opinion here?", AND
-  // EACH OF THEM ALONE HAS ALREADY LOST REAL DATA.
+  // THE QUESTION IS "DID SOMEBODY EDIT THIS **ON THIS DEVICE**?", AND ONLY ONE THING ANSWERS IT.
   //
-  //   `Object.keys(localForm).length > 0` — key presence — was the first attempt. The web fill
-  //   form writes every field of every entry on every save, so an asset nobody had touched
-  //   arrived here as `{"Bar": "", "Status": ""}` and counted as work. Key presence was then
-  //   permanently true for every asset in that sheet, `localWins` collapsed into
-  //   `preserveLocal`, and the server side of this merge stopped existing: an operator handed a
-  //   reopened sheet could not see the readings a supervisor had just entered, and their next
-  //   submit sent the blanks back and destroyed them. Log sheet 85.
+  // Three predicates have been tried here. The first two inferred the answer from the data, and
+  // each of them lost real readings in a different direction:
   //
-  //   `hasEntryFormData` alone — value presence — was the second. It reads a *deliberate clear*
-  //   as no opinion, so the next periodic sync restored the old server value and the operator's
-  //   deletion vanished before they ever reached submit.
+  //   `Object.keys(localForm).length > 0` — key presence. The web fill form writes every field
+  //   of every entry on every save, so an asset nobody had touched arrived here as
+  //   `{"Bar": "", "Status": ""}` and counted as work. Key presence was then permanently true
+  //   for every asset in that sheet, `localWins` collapsed into `preserveLocal`, and the server
+  //   side of this merge stopped existing: an operator handed a reopened sheet could not see the
+  //   readings a supervisor had just entered, and their next submit sent the blanks back and
+  //   destroyed them. Log sheet 85.
   //
-  // So the opinion is recorded explicitly, at the moment it is formed, by the save itself:
-  // `locallyEditedAt`. Value presence stays as the OR arm so entries filled by builds older
-  // than the marker keep behaving correctly.
+  //   `hasEntryFormData(localForm)` — value presence. Two failures, and the second is why it is
+  //   gone from this expression entirely. It reads a *deliberate clear* as no opinion, so the
+  //   next periodic sync restored the value the operator had just removed. And — the one that
+  //   matters most — **it cannot tell a value this device entered from a value this device was
+  //   sent.** After any sync the local copy holds the server's own readings, so value presence
+  //   is true for every filled entry on the device forever after. A supervisor correcting a
+  //   reading on the web then reached a device that had already decided it knew better: the new
+  //   value never arrived, and the next submit sent the stale one back over it.
+  //
+  // No predicate over the data can answer this, because the data looks identical whichever way
+  // it got there. So the opinion is recorded when it is formed, by the save itself:
+  // `locallyEditedAt`, stamped by `applyOperatorEntrySave` on every operator save including one
+  // that empties the entry. It is never set by anything that receives from the server — that is
+  // the whole property, and it is what makes this expression a single condition.
+  //
+  // Entries written by builds older than the marker are handled once, at upgrade, by the
+  // `version(2)` migration in `db.ts` — deliberately a bounded migration and not a permanent
+  // `|| hasEntryFormData(...)`, because an OR arm that only matters for old rows still runs on
+  // every merge forever and takes the failure above with it.
   //
   // `localEditsPending` is the second gate, and it is what stops the marker becoming immortal.
   // Once this device's work is delivered and reconciled, the device has no opinion of its own
   // any more — everything it holds came from the server — and a marker still standing there
   // would hand it every future merge for that entry, which is log sheet 85 again by another
   // route. The caller decides; see `applyLogSheetBundle`.
-  const localWins = preserveLocal
-    && (hasEntryFormData(localForm) || (localEditsPending && existing?.locallyEditedAt != null))
+  const localWins = preserveLocal && localEditsPending && existing?.locallyEditedAt != null
   const formData = localWins ? localForm : serverForm
 
   return {

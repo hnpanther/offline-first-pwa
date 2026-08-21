@@ -238,27 +238,49 @@ The merge is **per entry**, keyed on `assetId`, and per entry it is all-or-nothi
 field-level merging, so two people editing different fields of the same asset is last-writer-wins
 by design.
 
-Per entry, one question decides everything: **does this device have an opinion about this
-asset?** — which is not the same as "does it hold a value".
+Per entry, one question decides everything: **did somebody edit this asset on this device?** —
+which is not the same as "does this device hold a value for it".
 
 ```ts
-const localWins = preserveLocal
-  && (hasEntryFormData(localForm) || (localEditsPending && existing?.locallyEditedAt != null))
+const localWins = preserveLocal && localEditsPending && existing?.locallyEditedAt != null
 ```
 
-`locallyEditedAt` is stamped by every operator save, including one that **empties** the entry —
-because emptying it is an opinion too, and reading that as absence let the next sync restore the
-value the operator had just deleted. `hasEntryFormData` remains as the OR arm so entries written
-by builds older than the marker keep behaving.
+`locallyEditedAt` is stamped by `applyOperatorEntrySave` on every operator save, including one
+that **empties** the entry — emptying it is an opinion too. Nothing that receives from the server
+ever sets it. That is the entire property the rule rests on, and it is why the expression is a
+single condition rather than a disjunction.
 
 `localEditsPending` is false once the row is `submitted` + `synced`: everything it holds then came
 from the server, so a marker still standing describes an opinion that no longer exists. Markers
 are also cleared outright when the server accepts the work. Both, not one — the reopen-and-continue
 path turns a delivered row back into a draft, which re-arms the gate for anything left behind.
 
-`hasEntryFormData` asks about **values**, not keys. That distinction is not pedantic — it is the
-whole rule. The predicate is `isValueFilled` in [`entryTimestamps.ts`](../src/utils/entryTimestamps.ts),
-and it must keep meaning exactly what the server's `FormDataValidationSupport.isAnswered` means:
+#### Why nothing about `formData` can answer this
+
+Three predicates have stood here, and the two that read the data both lost real readings.
+
+**Key presence** — `Object.keys(localForm).length > 0`. The server's web fill form posts every
+field of every entry on every save, so one supervisor save wrote `{"Bar": "", "Status": ""}` onto
+assets nobody had opened. The device then counted every asset in that sheet as its own work and
+never accepted a server value for it again; an operator handed a reopened sheet could not see what
+a supervisor had just entered, and their next submit sent the blanks back. Log sheet 85.
+
+**Value presence** — `hasEntryFormData(localForm)`. It fixed the blanks and failed twice more. It
+reads a *deliberate clear* as no opinion, so the next periodic sync restored the value the
+operator had just removed. And — the failure that removed it from this expression entirely — **it
+cannot tell a value this device entered from a value this device was sent.** After any sync the
+local copy holds the server's own readings, so value presence is true for every filled entry on
+the device from then on, whoever filled it. A supervisor correcting a reading in the browser
+reached a device that had already decided it owned the entry: the correction never appeared, and
+the device's next submit wrote the stale value back over it.
+
+Both predicates are sound; both are the wrong question. The data looks identical whichever way it
+arrived, so the answer has to be recorded when it is formed rather than inferred afterwards.
+
+`hasEntryFormData` is still used — by the submit path, the progress UI and the `version(2)`
+migration — and still asks about **values**, not keys. The predicate is `isValueFilled` in
+[`entryTimestamps.ts`](../src/utils/entryTimestamps.ts), and it must keep meaning exactly what the
+server's `FormDataValidationSupport.isAnswered` means:
 
 | Value | Answer? |
 |---|---|
@@ -268,14 +290,46 @@ and it must keep meaning exactly what the server's `FormDataValidationSupport.is
 | `0`, `false`, `'0'` | **yes** — a reading of zero is a reading |
 | any other object (a location coordinate) | yes |
 
-Asking the looser question — `Object.keys(localForm).length > 0` — is what once cost real
-readings: the server's web fill form posts every field of every entry on every save, so one
-supervisor save wrote `{"Bar": "", "Status": ""}` onto assets nobody had opened. After that the
-device counted every asset in that sheet as its own work and never accepted a server value for it
-again; an operator handed a reopened sheet could not see what a supervisor had just entered, and
-their next submit sent the blanks back. See AGENTS.md § Log sheet merge, and the server's
-`docs/log-sheets.md` § Who wins when two people have touched the same sheet for the other two
-halves of the fix.
+#### Entries written before the marker existed
+
+They hold real work and carry no proof of it, so under the rule above the server would win them.
+The `version(2)` migration in [`db.ts`](../src/services/storage/db.ts) stamps them once, at
+upgrade — every entry that holds data, in a sheet that is not already `submitted` + `synced` — so
+they keep the old behaviour for exactly as long as they exist, which is until each sheet is
+submitted and its markers are cleared.
+
+Deliberately a bounded migration and **not** a permanent `|| hasEntryFormData(...)` in the merge:
+an OR arm that only matters for old rows still runs on every merge, on every device, forever, and
+carries the correction-losing failure with it — to protect rows that stop existing after the first
+submit.
+
+See AGENTS.md § Log sheet merge, and the server's `docs/log-sheets.md` § Who wins when two people
+have touched the same sheet for the other halves of the fix. Regression coverage:
+[`serverCorrectionWins.test.ts`](../src/services/sync/serverCorrectionWins.test.ts) drives the
+whole sequence — sync, edit elsewhere, sync, submit — end to end.
+
+#### Checking the merge against a real server
+
+Every other test here builds its bundle by hand, which is the right way to cover behaviour and
+shares one blind spot with the code under test: if the DTO the server actually sends has drifted
+from the shape the fixtures assume, all of them stay green and none is about production any more.
+
+[`liveBundleMerge.test.ts`](../src/services/sync/liveBundleMerge.test.ts) closes that. It runs the
+shipping path — `applyLogSheetBundle`, a real Dexie database — over two bundles captured from a
+running backend, and **skips itself** unless pointed at them, so it can never be mistaken for
+coverage it did not provide.
+
+To use it: fetch `GET /api/log-sheets/{id}/bundle` for an **open** sheet (`IN_PROGRESS`, assigned
+to the user you authenticate as) into one file, change one entry from the web panel, fetch it
+again into a second, then:
+
+```bash
+LIVE_BUNDLE_BEFORE=before.json LIVE_BUNDLE_AFTER=after.json LIVE_BUNDLE_ASSET=48   npx vitest run src/services/sync/liveBundleMerge.test.ts
+```
+
+The sheet has to be open. On a `SUBMITTED` one the device correctly gives up its local copy
+entirely (`alignLocalWorkflowWithServer` returns `reset-draft`), so the "operator's edit survives"
+case does not apply and will fail — which is the merge being right, not the test.
 
 ---
 

@@ -623,6 +623,92 @@ New-NetFirewallRule -DisplayName "PWA HTTP redirect 80" -Direction Inbound -Loca
 
 ---
 
+## Why installing on a tablet is slow, and what to do about it
+
+The service worker precaches **everything** before it reports the install complete. That is the
+right design for an app whose whole value is working without a network — but it means the install
+time is exactly the time to download the entire precache over plant Wi-Fi, in one go, before the
+operator can use anything.
+
+Measured on the current build:
+
+```
+1299.8 KB  TOTAL (27 files)
+────────────────────────────────
+  286.6 KB  assets/vendor-mui-*.js
+  218.1 KB  assets/index-*.js
+  156.9 KB  assets/vendor-react-*.js
+   94.8 KB  assets/vendor-storage-*.js
+  ~450   KB  9 × Vazirmatn-*.woff2   ← 35% of the install
+```
+
+Two things dominate, and both are fixable without touching a line of application code.
+
+### 1. Nine font weights ship; four are used
+
+`src/main.tsx` imports `vazirmatn/Vazirmatn-font-face.css`, which declares **nine** `@font-face`
+rules — weights 100 through 900. Vite emits all nine `.woff2` files and the service worker
+precaches every one.
+
+The interface asks for four of them. Counted across the source: `600` (10 uses), `700` (4),
+`500` (2), plus `400` as MUI's body default. **Weights 100, 200, 300, 800 and 900 — about
+250 KB — are downloaded on every install and never drawn.**
+
+Importing only the four that are used removes a fifth of the install. Two things to know before
+doing it:
+
+- `src/theme/noSystemFonts.test.ts` asserts on that exact import line. It is there deliberately,
+  so that the bundled font cannot be dropped or replaced by a device font without a test failing
+  — see [README § Fonts](../README.md#fonts-nothing-is-read-off-the-device). Update the assertion in the same change; do not delete it.
+- Weights are **not** interpolated. If a component later asks for `fontWeight: 300` and 300 is no
+  longer bundled, the browser synthesises it from the nearest weight, which on Persian text looks
+  wrong rather than merely different.
+
+### 2. The JavaScript is served uncompressed
+
+756 KB of the payload is JavaScript, and nothing in the nginx configuration turns on `gzip`. Text
+compresses three to four times; the fonts are already compressed and gain nothing, which is why
+the `gzip_types` list in the configurations above names only text formats.
+
+Turning it on takes roughly **550 KB** off the install. Confirm it is actually on — this is the
+single most valuable check on this page:
+
+```bash
+curl -ks -H "Accept-Encoding: gzip" -o /dev/null -D - \
+  https://pwa.hnp.com/assets/index-B6VeUlTD.js | grep -i content-encoding
+```
+
+`content-encoding: gzip` means it is working. No such header means every tablet is downloading
+the uncompressed bundle, on every install and every update.
+
+### What the two changes are worth
+
+| | Install payload |
+|---|---|
+| Today | ~1300 KB |
+| With gzip | ~750 KB |
+| With gzip **and** four font weights | **~450 KB** |
+
+### What not to do
+
+**Do not move the fonts out of the precache into a runtime cache.** It makes the install number
+look better and breaks the thing the app exists for: a tablet that installs indoors and is first
+opened in a plant with no signal would render Persian text in a fallback face, or not at all.
+The install is a one-time cost paid where there is a network; the offline render is not.
+
+**Do not lower `maximumFileSizeToCacheInBytes` to trim the precache.** Anything it excludes is
+simply missing offline, silently — the app installs successfully and then fails somewhere else.
+
+### If it is still slow after both
+
+Then it is not the payload. Check, in this order:
+
+1. **The certificate.** A tablet that does not trust the CA shows an interstitial, and a service
+   worker will not install behind one — the install appears to hang rather than fail.
+2. **`nginx -t` and the access log.** A 404 on one precached asset makes the whole install retry.
+3. **Wi-Fi signal at the point of install.** Installing at the far edge of coverage and then
+   blaming the app is common; install once near the access point to compare.
+
 ## Publishing a new build
 
 ```bash

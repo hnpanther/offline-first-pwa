@@ -61,11 +61,15 @@ describe('IndexedDB schema', () => {
     // Version 1 is the operational baseline and is closed: it is on tablets in the field, and a
     // device cannot open a database at a version below the one that created it.
     //
-    // This assertion is deliberately a hard-coded number rather than a range. Adding a
-    // `version(2)` block is a decision with consequences on every tablet — a forced upgrade that
-    // cannot be rolled back — so it should take a deliberate edit here, in a file whose whole
-    // subject is the schema, rather than passing silently because the check said "1 or more".
-    expect(db.verno).toBe(1)
+    // Version 2 adds no store and no index. It exists for one data migration — stamping
+    // `locallyEditedAt` on entries that hold work but predate the marker — which needed a
+    // version because Dexie has no other place to run one. See the block in `db.ts`.
+    //
+    // This assertion is deliberately a hard-coded number rather than a range. Adding a version
+    // block is a decision with consequences on every tablet — a forced upgrade that cannot be
+    // rolled back — so it should take a deliberate edit here, in a file whose whole subject is
+    // the schema, rather than passing silently because the check said "1 or more".
+    expect(db.verno).toBe(2)
   })
 
   it('declares exactly the stores the app uses', () => {

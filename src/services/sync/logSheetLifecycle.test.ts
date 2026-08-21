@@ -60,6 +60,11 @@ function localSheet(overrides: Partial<LogSheet> = {}): LogSheet {
         classId: '2',
         formData: { ...READINGS },
         filledVia: 'nfc',
+        // Entered on this device, offline — which is a thing the merge cannot infer from the
+        // values themselves and therefore has to be told. `applyOperatorEntrySave` stamps this
+        // on every save; a fixture that means "the operator typed this" has to carry it too, or
+        // it is describing a reading the device merely received.
+        locallyEditedAt: PAST,
         createdAt: PAST,
         updatedAt: PAST
       }

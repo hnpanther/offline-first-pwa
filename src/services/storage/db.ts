@@ -1,6 +1,8 @@
 import Dexie, { type Table } from 'dexie'
 import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment } from '@/types'
 import type { FieldDefinition, SyncMeta } from '@/types/sync'
+import type { LogSheetEntryData } from '@/types'
+import { hasEntryFormData } from '@/utils/entryTimestamps'
 
 const DB_NAME = 'offline-pwa-db'
 
@@ -84,6 +86,87 @@ class AppDatabase extends Dexie {
       nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
       attachments: 'id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt'
     })
+
+    /**
+     * Schema version 2 — **no schema change. One bounded data migration.**
+     *
+     * <h2>What it does, and why it has to happen once rather than forever</h2>
+     *
+     * The sync merge decides whether the device or the server owns an entry. It used to answer
+     * that by looking at the data — "does this entry hold a value?" — and that question cannot
+     * distinguish a reading the operator typed from one the server sent, because after any sync
+     * the device holds the server's own values. Every filled entry therefore counted as local
+     * work forever after, and a supervisor correcting a reading on the web reached a device that
+     * had already decided it knew better: the correction never arrived, and the device's next
+     * submit sent the stale value back over it.
+     *
+     * `locallyEditedAt` answers it properly — it is written by `applyOperatorEntrySave` and by
+     * nothing that receives from the server — and the merge now reads only that. Which leaves
+     * entries written by builds that predate the marker: they hold real work and carry no proof
+     * of it, so under the new rule the server would win them and an operator's unsent reading
+     * would be replaced on the next sync.
+     *
+     * This stamps those entries once, at upgrade, so they keep the old behaviour for exactly as
+     * long as they exist — until each sheet is submitted and the markers are cleared. After that
+     * every marker on the device was written by a real save.
+     *
+     * <p><b>Why not leave `|| hasEntryFormData(...)` in the merge instead.</b> It is the smaller
+     * diff and the worse answer: an OR arm that exists only for old rows still runs on every
+     * merge, on every device, forever — and it carries the failure above with it, permanently,
+     * to protect rows that stop existing after the first submit.
+     *
+     * <h2>Scope, deliberately narrow</h2>
+     *
+     * Only entries that <b>hold data</b>, in sheets that are <b>not already delivered</b>
+     * (`submitted` + `synced`). A delivered sheet holds what the server sent back, so marking it
+     * would assert local ownership that does not exist — and would hand the device every future
+     * merge for those entries, which is the log sheet 85 failure by another route. Entries that
+     * already carry a marker are left alone rather than re-stamped: the original timestamp is
+     * the honest one.
+     *
+     * <p>Writes are per sheet and idempotent — a sheet with nothing to stamp is not rewritten —
+     * so an upgrade interrupted halfway leaves every row readable and can simply run again.
+     */
+    this.version(2).stores({
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
+      attachments: 'id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt'
+    }).upgrade(tx => tx.table('logSheets').toCollection().modify(markPreMarkerEntriesAsLocal))
+  }
+}
+
+/**
+ * Stamps `locallyEditedAt` on entries that hold work but predate the marker.
+ *
+ * <p>Exported for the migration test, which runs it against rows rather than against a Dexie
+ * upgrade — the behaviour worth pinning is which entries get a marker, not that Dexie calls it.
+ *
+ * <p>Mutates in place: Dexie's `modify` writes back the object it hands you.
+ */
+export function markPreMarkerEntriesAsLocal(
+  sheet: { status?: string; syncStatus?: string; entries?: LogSheetEntryData[] },
+  stampedAt: number = Date.now()
+): void {
+  if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') return
+  const entries = sheet.entries
+  if (!Array.isArray(entries)) return
+
+  for (const entry of entries) {
+    if (entry.locallyEditedAt != null) continue
+    if (!hasEntryFormData(entry.formData)) continue
+    entry.locallyEditedAt = stampedAt
   }
 }
 

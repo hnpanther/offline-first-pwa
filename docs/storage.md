@@ -119,10 +119,30 @@ refuses to open a database at a lower version than it was created with.
 If a change **reshapes** existing data rather than only adding stores, an `.upgrade()` callback
 is required; a purely additive version needs none.
 
-`dbSchema.test.ts` pins the current store list, the indexes the sync loops select on, and each
-store's primary key. With a single version there is no second declaration to disagree with, so a
-store added as a typed `Table` but forgotten in `stores()` would otherwise surface as "Table X
-does not exist" on a device, inside whichever feature happened to touch it first.
+`dbSchema.test.ts` pins the current store list, the indexes the sync loops select on, each
+store's primary key, **and the version number** — the last as a hard-coded value rather than a
+range, so that adding a version block is a deliberate edit in the file whose subject is the schema
+rather than something that ships as a side effect.
+
+### `version(2)` — no schema change, one data migration
+
+The only version above the baseline so far. It declares the identical store list and exists for
+its `.upgrade()`: stamping `locallyEditedAt` on entries that hold work but predate that marker.
+
+The sync merge decides per entry whether the device or the server owns the values, and it now
+reads only that marker — because no question about `formData` can separate a reading the operator
+typed from one the server sent (after any sync the device is holding the server's own values; see
+[sync.md](sync.md#bundle-merge)). Entries written by earlier builds hold real unsent work and
+carry no proof of it, so without this they would lose to the server on the next sync.
+
+Its scope is deliberately narrow, and `preMarkerEntryMigration.test.ts` pins each part: only
+entries that **hold data** (by `hasEntryFormData`, so blanks and emptied attachment fields are
+skipped), only in sheets that are **not** already `submitted` + `synced`, and never over a marker
+that is already there. A wrong marker is not a harmless over-approximation — it hands the device
+that entry on every future merge, which is how a supervisor's later edits go invisible.
+
+It is idempotent and writes per sheet, so an upgrade interrupted halfway leaves every row readable
+and can simply run again.
 
 ### The recovery path in `openDatabase()`
 

@@ -37,7 +37,8 @@ describe('nfcSerial (physical chip UID)', () => {
       subFunctionTag: 'T1',
       nfcSerial: '00:stale:value',
       classId: '7',
-      formData: { temp: 25 }
+      formData: { temp: 25 },
+      locallyEditedAt: 1650000000000
     }
 
     const local = mapServerEntryToLocal({ ...serverEntry, nfcSerial: '00:fresh:value' }, existing)
@@ -80,6 +81,10 @@ describe('mapServerEntryToLocal', () => {
       subFunctionTag: 'T1',
       classId: '7',
       formData: { temp: 25 },
+      // What makes this "local form data" rather than a value the device was sent. Without it
+      // the entry is indistinguishable from one the server filled, and the server wins — which
+      // is the whole point of the marker.
+      locallyEditedAt: 1650000000000,
       createdAt: 1_600_000_000_000,
       updatedAt: 1_600_000_100_000
     }
@@ -142,6 +147,7 @@ describe('mergeEntriesPreservingFormData', () => {
         subFunctionTag: 'T1',
         classId: '7',
         formData: { temp: 30 },
+        locallyEditedAt: 1650000000000,
         createdAt: 1_600_000_000_000,
         updatedAt: 1_600_000_200_000
       }
@@ -197,15 +203,21 @@ describe('mergeEntriesPreservingFormData', () => {
   })
 })
 
-describe('blank local formData must not beat the server', () => {
-  // The defect this whole block exists for. The web fill form used to post every field of every
-  // entry on every save, so an asset nobody had opened arrived as {"Bar": "", "Status": ""}.
+describe('local data only beats the server when this device actually edited it', () => {
+  // The defect this block exists for. The web fill form used to post every field of every entry
+  // on every save, so an asset nobody had opened arrived as {"Bar": "", "Status": ""}.
   // `mapServerEntryToLocal` then asked `Object.keys(localForm).length > 0` — key presence, not
   // value presence — which was true forever after. `localWins` collapsed into `preserveLocal`,
   // the server side of the merge stopped existing, and an operator handed a reopened sheet could
   // not see the readings a supervisor had just entered. Their next submit sent the blanks back.
   // Log sheet 85.
-  const base = (formData: Record<string, unknown>): LogSheetEntryData => ({
+  //
+  // Value presence replaced it and had the same shape of flaw one level down: after any sync the
+  // device holds the server's own values, so "this entry holds data" is true for every filled
+  // entry forever after, whoever filled it. The marker is the only thing that separates typed
+  // from received, so `edited()` and `received()` below are the two fixtures — and which one a
+  // test uses is the test's real subject.
+  const untouched = (formData: Record<string, unknown>): LogSheetEntryData => ({
     assetId: '42',
     assetName: 'Pump A',
     subFunctionCode: 'SF-01',
@@ -213,6 +225,12 @@ describe('blank local formData must not beat the server', () => {
     classId: '7',
     formData
   })
+
+  /** Values this device's operator typed. */
+  const edited = (formData: Record<string, unknown>): LogSheetEntryData =>
+    ({ ...untouched(formData), locallyEditedAt: 1650000000000 })
+
+  const base = untouched
 
   it('takes the server values when the local copy holds only blank keys', () => {
     const local = mapServerEntryToLocal(
@@ -254,7 +272,7 @@ describe('blank local formData must not beat the server', () => {
     // bug than the one being fixed.
     const local = mapServerEntryToLocal(
       { ...serverEntry, formData: { Bar: '6' }, filledByName: 'سرپرست' },
-      base({ Bar: '9' }),
+      edited({ Bar: '9' }),
       true
     )
 
@@ -262,22 +280,55 @@ describe('blank local formData must not beat the server', () => {
     expect(local.filledByName).toBeUndefined()
   })
 
+  /**
+   * The bug this change exists for, stated as its own case.
+   *
+   * <p>The device holds `Bar: '6'` — not because anybody here typed it, but because a previous
+   * sync delivered it. A supervisor then corrects the reading to `'8'` in the browser. Under
+   * value presence the device saw its own non-empty copy, decided it owned the entry, and the
+   * correction never landed; worse, the device's next submit sent `'6'` back over `'8'`.
+   *
+   * <p>Nothing about the two fixtures differs except the marker, which is the point: no rule
+   * that reads only `formData` can tell these apart.
+   */
+  it('takes a server correction over a value this device merely received', () => {
+    const local = mapServerEntryToLocal(
+      { ...serverEntry, formData: { Bar: '8' }, filledByName: 'سرپرست' },
+      untouched({ Bar: '6' }),
+      true
+    )
+
+    expect(local.formData).toEqual({ Bar: '8' })
+    expect(local.filledByName).toBe('سرپرست')
+  })
+
+  /** …and the same entry, once this operator has actually edited it, keeps their value. */
+  it('keeps this operator’s edit over a server correction they have not seen', () => {
+    const local = mapServerEntryToLocal(
+      { ...serverEntry, formData: { Bar: '8' }, filledByName: 'سرپرست' },
+      edited({ Bar: '6' }),
+      true
+    )
+
+    expect(local.formData).toEqual({ Bar: '6' })
+  })
+
   it('treats a reading of zero as a real local answer', () => {
     // In a plant a zero is usually the interesting reading. A falsy check here would throw it
     // away and replace it with whatever the server last had.
     const local = mapServerEntryToLocal(
       { ...serverEntry, formData: { Bar: '6' } },
-      base({ Bar: 0 }),
+      edited({ Bar: 0 }),
       true
     )
 
     expect(local.formData).toEqual({ Bar: 0 })
   })
 
-  it('keeps the previous operator name on an untouched local draft', () => {
-    // A local draft that is still the previous operator's work must go on naming them; it is
-    // the save that clears the name, not the merge.
-    const existing = { ...base({ Bar: '9' }), filledByName: 'اپراتور یک' }
+  it('keeps the previous operator name on an unsent local draft', () => {
+    // A draft saved on this device by the previous operator must go on naming them; it is the
+    // save that clears the name, not the merge. It is *their* edit, so it carries their marker.
+    const existing = { ...edited({ Bar: '9' }), filledByName: 'اپراتور یک' }
 
     const local = mapServerEntryToLocal(
       { ...serverEntry, formData: { Bar: '6' }, filledByName: 'سرپرست' },
@@ -297,8 +348,8 @@ describe('blank local formData must not beat the server', () => {
         { ...serverEntry, assetId: 43, formData: { Bar: '6', Status: 'ON' } }
       ],
       [
-        { ...base({ Bar: '7' }), assetId: '42' },
-        { ...base({ Bar: '', Status: '' }), assetId: '43' }
+        { ...edited({ Bar: '7' }), assetId: '42' },
+        { ...untouched({ Bar: '', Status: '' }), assetId: '43' }
       ],
       { preserveLocal: true }
     )
@@ -438,7 +489,12 @@ describe('timestamps follow whichever side won the values', () => {
   it('keeps the local timestamps when the local values win', () => {
     const local = mapServerEntryToLocal(
       { ...serverEntry, formData: { Bar: '6' }, createdAt: 5_000, updatedAt: 9_999 },
-      base({ formData: { Bar: '9' }, createdAt: 1_000, updatedAt: 2_000 }),
+      base({
+        formData: { Bar: '9' },
+        locallyEditedAt: 1650000000000,
+        createdAt: 1_000,
+        updatedAt: 2_000
+      }),
       true
     )
 
