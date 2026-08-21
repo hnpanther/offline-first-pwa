@@ -15,6 +15,32 @@ export function sheetHasLocalEntryData(
   return (sheet.entries ?? []).some(e => hasEntryFormData(e.formData))
 }
 
+/**
+ * Does the archive still hold an answered asset the live row has nothing for?
+ *
+ * <p>The question the archive's visibility actually turns on, and it is not the same as "does the
+ * live row hold anything". A **partial** restore leaves the live row holding the assets that were
+ * brought back and the archive holding the ones that were not — and a rule that asked only
+ * whether the live row had data would hide the archive at that moment, stranding the rest exactly
+ * the way the original bug stranded everything. Found by running a two-pass restore, not by a
+ * test: the card vanished after the first pass.
+ *
+ * <p>Per asset, because that is the granularity a restore works at.
+ */
+export function archiveHoldsWorkTheLiveRowLacks(
+  archived: Pick<LogSheet, 'entries'>,
+  liveRow: Pick<LogSheet, 'entries'>
+): boolean {
+  const liveByAsset = new Map(
+    (liveRow.entries ?? []).map(e => [toIdString(e.assetId), e])
+  )
+  return (archived.entries ?? []).some(entry => {
+    if (!hasEntryFormData(entry.formData)) return false
+    const live = liveByAsset.get(toIdString(entry.assetId))
+    return !live || !hasEntryFormData(live.formData)
+  })
+}
+
 export function stripEntryFormData(
   entries: LogSheetEntryData[]
 ): LogSheetEntryData[] {

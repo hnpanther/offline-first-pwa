@@ -75,7 +75,7 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
 - **Background sync** — submitted log sheets, plus locally-filed NFC fault reports when the role permits, push when online
-- **History & archives** — completed work plus per-user snapshots on shared tablets
+- **History & archives** — completed work plus per-user snapshots on shared tablets, with a per-asset restore back into a sheet that was reassigned and came back
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
@@ -791,6 +791,44 @@ Opening a history item:
 - Archived view id (`archivedLogSheetViewId`) → load from `logSheetUserArchives`; **view-only**; cannot edit or re-submit — including one that looks reopened, since an archive is another login's record, not this user's work.
 
 When the original assignee returns and sync succeeds, stale archive rows for synced work are removed automatically.
+
+**An archive is hidden only when the live row actually holds the work.** A false revoke during
+sync leaves the operator's values on the live row, so the archive is noise and is skipped. A
+*reassignment* clears the live row — and if the supervisor later assigns the sheet **back**, the
+same user owns that now-empty row again. The rule used to be ownership alone, which meant the
+archive was skipped as stale and the readings became unreachable: still on disk, shown nowhere,
+one blank card in the list. Ownership comes back; the work does not.
+
+#### Restoring an archived round
+
+The archived card is **view-only** — nothing is copied back on its own. Its entries carry
+`locallyEditedAt`, so an automatic restore would win the next merge and could bury whatever the
+other operator entered while they held the sheet. So the copy back is a decision the operator
+makes with the facts in front of them.
+
+Tapping **بازگرداندن مقادیر** opens a per-asset comparison — what they recorded, what the sheet holds
+now, field by field with the class's own labels. They tick the assets to bring back and those are
+written into the live sheet, which they then review and submit as normal. An asset somebody else
+has since answered is flagged as a conflict and starts **unticked**. The archive is dropped only
+once nothing restorable is left, so a partial restore never strands the rest.
+
+**Photographs and recordings come back too.** Media bytes live in `db.attachments` and `formData`
+holds only their ids — clearing the reassigned sheet dropped the ids and left the files, so the
+field looked empty while the files sat there unreachable, and unlike a reading a photograph cannot
+be retyped. A restore re-derives the references from the device: exactly the files this device
+still holds for that asset and field, never an id that resolves to nothing, never an empty
+reference, and no file is moved, re-encoded or deleted. Ids that no longer resolve are counted
+and shown, so a loss is never silent.
+
+The archived card stays in History for as long as it still holds an asset the live sheet has
+nothing for, so a restore done in two sittings never strands the remainder; once the live sheet
+covers everything, the card goes.
+
+The button only appears when there is something to restore and the live sheet is still this
+user's draft. If a sync lands between opening the dialog and confirming it, the write refuses and
+says why rather than overwriting an operator who now owns the sheet.
+
+Reference: [`docs/sync.md`](docs/sync.md) § *Restoring an archived round*.
 
 ---
 

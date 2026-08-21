@@ -24,7 +24,11 @@ import {
   isRevokedSyncError,
   isSupersededSyncError
 } from '@/utils/logSheetStatus'
-import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
+import {
+  archiveHoldsWorkTheLiveRowLacks,
+  resolveLocalWorkOwner,
+  sheetHasLocalEntryData
+} from '@/utils/logSheetLocalData'
 import { toIdString } from '@/utils/ids'
 import { fetchBootstrap } from '@/services/api'
 import { useAppStore } from '@/store'
@@ -309,14 +313,54 @@ export async function loadLogSheetsForSessionUser(
     const serverId = toIdString(archived.serverId)
     const liveRow = liveByServer.get(serverId)
 
-    // Live owned copy always wins — drop stale archive rows (e.g. false revoke during sync).
-    if (liveRow && resolveLocalWorkOwner(liveRow) === userId) {
+    // A live copy this user owns hides the archive — but ONLY if it actually holds the work.
+    //
+    // The rule used to be ownership alone, and ownership comes back. Reassigning a sheet away
+    // clears the live row (`reset-draft`) and archives what was on it; reassigning it *back*
+    // makes the same user the owner of that now-empty row again, so the archive was skipped as
+    // stale and the operator's readings became unreachable — still on disk, and shown nowhere.
+    // Reproduced end to end: draft with values → assigned to somebody else → archive visible →
+    // assigned back → one empty card and nothing else.
+    //
+    // `sheetHasLocalEntryData` is what separates the two cases. A false revoke during sync
+    // leaves the live row holding its values, so it should win and the archive is noise. A
+    // cleared row holds nothing, so the archive is the only copy and must stay visible.
+    //
+    // Nothing is ever copied back automatically. The archive carries `locallyEditedAt` markers,
+    // so restored values beat the server's in the next merge and could bury whatever the other
+    // operator entered meanwhile — the log sheet 85 failure again. The copy back is an explicit,
+    // per-asset action the operator confirms (`restoreArchivedWork.ts`).
+    //
+    // Which is why the check is per asset rather than per sheet. After a **partial** restore the
+    // live row holds what came back and the archive still holds what did not; asking only
+    // `sheetHasLocalEntryData(liveRow)` would hide the card at that moment and strand the
+    // remainder — the original bug, reintroduced one restore later. Found by running a two-pass
+    // restore in a browser, not by a test.
+    if (
+      liveRow &&
+      resolveLocalWorkOwner(liveRow) === userId &&
+      sheetHasLocalEntryData(liveRow) &&
+      !archiveHoldsWorkTheLiveRowLacks(archived, liveRow)
+    ) {
       if (
         liveRow.status === 'submitted' &&
         liveRow.syncStatus === 'synced'
       ) {
         await removeArchivedLogSheet(serverId, userId)
       }
+      continue
+    }
+
+    // The delivered-and-reconciled case still drops the archive even though the live row was
+    // emptied — there is nothing left to recover, and keeping a snapshot of work the server has
+    // accepted would show the operator a permanent duplicate of their own submitted round.
+    if (
+      liveRow &&
+      resolveLocalWorkOwner(liveRow) === userId &&
+      liveRow.status === 'submitted' &&
+      liveRow.syncStatus === 'synced'
+    ) {
+      await removeArchivedLogSheet(serverId, userId)
       continue
     }
 

@@ -14,7 +14,11 @@ import type { LogSheetEntryData } from '@/types'
  *
  * `0` and `false` are answers. A reading of zero is a reading.
  */
-function isValueFilled(value: unknown): boolean {
+/**
+ * Exported so `restoreArchivedWork` can ask the same question this file already answers.
+ * A second definition of "is this an answer" is what gotcha #87 is about — there is one.
+ */
+export function isValueFilled(value: unknown): boolean {
   if (value === undefined || value === null || value === '') return false
   if (typeof value === 'string') return value.trim() !== ''
   if (Array.isArray(value)) return value.length > 0

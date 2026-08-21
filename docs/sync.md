@@ -228,6 +228,174 @@ the operator records it rather than after.
 
 The operator's sheets: assigned plus claimable pool.
 
+### The local-work archive, and the round trip that broke it
+
+There is **one local row per server sheet**, and a tablet is shared. So when a sheet's ownership
+moves, the row has to be cleared — otherwise the next operator opens it and finds the previous
+one's readings. `alignLocalWorkflowWithServer` returns `reset-draft`, and `applyLogSheetBundle`
+calls `archiveLocalWorkBeforeClear` **before** clearing: the operator's values are copied into
+`logSheetUserArchives`, keyed by `(serverId, userId)`.
+
+`loadLogSheetsForSessionUser` then merges those archives back into what the operator sees, as
+read-only cards with a synthetic `archive:{serverId}:{userId}` id.
+
+#### The rule that decides whether an archive is shown
+
+```ts
+if (
+  liveRow &&
+  resolveLocalWorkOwner(liveRow) === userId &&
+  sheetHasLocalEntryData(liveRow) &&
+  !archiveHoldsWorkTheLiveRowLacks(archived, liveRow)
+) {
+  continue          // the live row is the real copy; the archive is noise
+}
+```
+
+Both of the last two clauses are fixes for bugs that were reproduced end to end, and the
+reasoning is worth keeping.
+
+**`sheetHasLocalEntryData` — ownership comes back, the work does not.**
+
+- **A false revoke during sync** leaves the live row still holding the operator's values. Two
+  cards for one sheet would be confusing and the archive adds nothing — hide it.
+- **A reassignment** clears the live row. If the sheet is later assigned **back**, the same user
+  owns that now-empty row again — so an ownership-only rule skipped the archive as stale and the
+  readings became unreachable. They were still on disk and shown nowhere.
+
+**`archiveHoldsWorkTheLiveRowLacks` — a partial restore is not a finished one.** Restore one of
+two archived assets and the live row now holds work, so the sheet-level check above hid the card
+— taking the restore button with it and stranding the second asset exactly the way the original
+bug stranded everything. The question is therefore asked per asset: does the archive still hold
+an answered asset the live row has nothing for? Found by running a two-pass restore in a browser
+after a green suite; `restoreRoundTrip.test.ts` § *a restore finished in two passes* is the
+regression, including the counterweight that a **complete** restore still drops the card.
+
+#### Showing it is automatic; copying it back never is
+
+Nothing is copied into the live sheet on its own, deliberately. The archive carries
+`locallyEditedAt` markers, so restored values **win the next merge** — and while the sheet
+belonged to somebody else, that somebody may have recorded their own readings, which an automatic
+restore would bury with no trace. That is the log sheet 85 failure by another route.
+
+So the copy back is an action the operator takes, having seen what it would replace. That is the
+next section.
+
+#### When the archive is removed
+
+Two ways. Either the sheet is `submitted` + `synced` for that user — the work reached the server,
+so there is nothing to recover and a permanent duplicate of their own round would be noise — or
+the operator restored **everything** the archive still had to offer. A partial restore keeps it,
+so the rest stays reachable rather than being stranded the way the original bug stranded it.
+
+There is no time-based purge: an archive whose sheet never completes stays until it does.
+
+Covered by `reassignRoundTrip.test.ts` (14 cases, including the neighbouring states the rule
+must not have broken) and `liveReassignRoundTrip.test.ts` (the same sequence over bundles
+captured from a running server).
+
+### Restoring an archived round
+
+`restoreArchivedWork.ts` — `buildRestorePlan` and `restoreArchivedEntries`. The operator taps
+**بازگرداندن مقادیر** on the archived History card, ticks the assets they want, and those are
+written into the live sheet, which they then review and submit as normal.
+
+#### Why per asset, and why conflicts start unticked
+
+An asset the live sheet already answers is a **conflict**: somebody recorded a reading there
+while they held the sheet. Both versions are shown, field by field with the class's own labels,
+and the checkbox starts **off**. Assets nobody touched start on, because for those there is no
+real decision. Nothing about the archive is destroyed by declining.
+
+#### What a restore writes
+
+Per chosen asset, starting from the live entry so a field the archive says nothing about is left
+alone:
+
+| | |
+|---|---|
+| A filled archived value | overwrites the live value |
+| A **blank** archived value | is skipped — the operator's own blank is not a reading, and restoring it over somebody else's value would be a deletion dressed as a restore |
+| `locallyEditedAt` | stamped **now**, not carried from the archive. The opinion is being formed at this moment by an operator who has just compared both versions; carrying the old timestamp would claim the edit predates values the server has since sent |
+| `createdAt` / `updatedAt` | **not** restored. Those are the version of the entry this device last saw, echoed back on submit and checked by the server's `wouldBlankUnseenAnswer`. The live row's are current; the archive's are stale |
+| `filledVia` | carried from the archive — the server never sends it back, so losing it would relabel a hand-entered row as NFC-scanned |
+| `filledByName` | cleared, exactly as an ordinary save clears it. Attribution is the server's to re-stamp |
+
+#### The attachment rule
+
+Media is not in `formData`: the bytes live in `db.attachments`, and the form value holds only a
+list of ids. Clearing the live row dropped those ids and left every file on the device — so the
+field renders empty while the files are still there, and no amount of retyping brings a
+photograph back. This is the half of the bug that had no workaround.
+
+The invariant, which is what the tests assert directly:
+
+> For every (asset, field) a restore writes, the ids in `formData` are **exactly** the ids of the
+> attachment rows this device holds for that (sheet, asset, field), excluding rows already queued
+> for deletion — deduplicated, and never an id that resolves to nothing.
+
+Three consequences, each deliberate:
+
+- **Nothing missing.** A file on the device is referenced even if the archive never knew about it
+  — another operator may have captured it on this tablet. Dropping a reference does not delete
+  the file, it hides it, and hiding somebody's photograph is a failure this codebase has already
+  paid for once.
+- **Nothing extra.** An id whose row is gone is not written. A dangling reference renders as a
+  broken slot and misleads the field's counter. Those ids are counted and **shown** to the
+  operator instead, so the loss is not silent.
+- **Never an empty reference.** A field with no surviving rows is omitted from the restored
+  `formData` entirely, rather than written as `{type:'attachment', ids:[]}` — a key that means
+  "nothing" is exactly the contamination gotcha #87 is about.
+
+No blob is read, moved, re-encoded or deleted. A restore is a reference-level operation, and
+`restoreRoundTrip.test.ts` asserts the attachment table is byte-for-byte identical afterwards.
+
+The per-field ceiling is **not** re-checked here. The server enforces it per
+(sheet, asset, field, kind) at upload, as a 409 that frees itself; referencing files that already
+exist on the device cannot make that worse, and dropping one to fit would be "missing".
+
+#### When it refuses
+
+`restoreArchivedEntries` rebuilds the plan internally, so a sync that landed between the dialog
+opening and the operator confirming cannot make it write something they were never shown:
+
+| Refusal | Means |
+|---|---|
+| `no-archive` | the archive is gone (submitted and synced, or already fully restored) |
+| `no-live-sheet` | no local row for that server id |
+| `not-your-work` | the sheet has been handed to somebody else again |
+| `sheet-not-editable` | the live sheet is no longer a draft |
+
+Each maps to its own Persian message, because "try again" and "this is not yours any more" call
+for different things from the operator.
+
+#### Two things a design for this got wrong, worth not re-proposing
+
+This was designed on paper first (it was §7 of the server repo's `docs/roadmap.md`, now removed
+because it is built). Two parts of that design were changed on contact with the code:
+
+- **"Offer it only when the live row is empty."** That hides the action in precisely the case
+  where the operator most needs it — the other operator did part of the round, and somebody has
+  to decide which version stands. Those assets are shown as conflicts instead, both values
+  visible, unticked.
+- **"Record *why* a snapshot was archived, and offer the restore only for the reassignment
+  case."** The built version never asks why. It asks whether there is anything to restore and
+  whether the live sheet is this user's and still a draft — which are the conditions that
+  actually decide whether the write is safe, are already knowable, and stay true whatever new
+  archiving reason gets added later. A reason field would have been a second source of truth
+  about the same question.
+
+The paper design also did not mention attachments at all, which turned out to be the harder half
+and the only part with no manual workaround.
+
+#### Tests
+
+`restoreArchivedWork.test.ts` (51) covers the plan, the readings, the attachment invariant, the
+archive lifecycle and every refusal. `restoreRoundTrip.test.ts` (17) drives the whole reported
+sequence through `applyLogSheetBundle` — so the archive it restores from is one the shipping sync
+path produced — and includes the two-pass case. `liveReassignRoundTrip.test.ts` (10) repeats the
+round trip and the restore over bundles captured from a running server.
+
 ### Bundle merge
 
 `mergeLogSheetBundle` merges a server bundle into local state **without clobbering unsynced

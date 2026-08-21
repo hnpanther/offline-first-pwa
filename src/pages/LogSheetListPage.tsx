@@ -22,6 +22,7 @@ import CloudOffIcon from '@mui/icons-material/CloudOff'
 import UndoIcon from '@mui/icons-material/Undo'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz'
+import RestoreIcon from '@mui/icons-material/Restore'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLogSheets } from '@/hooks/useLogSheets'
@@ -41,8 +42,26 @@ import { ScopeLabel } from '@/components/common/ScopeLabel'
 import { LogSheetIdentityMeta } from '@/components/common/LogSheetIdentityMeta'
 import { loadLogSheetsForSessionUser } from '@/services/auth/sessionContext'
 import { AssignOperatorDialog } from '@/components/logsheet/AssignOperatorDialog'
+import RestoreArchivedWorkDialog from '@/components/logsheets/RestoreArchivedWorkDialog'
+import { parseArchivedLogSheetViewId } from '@/services/storage/logSheetArchive'
+import { buildRestorePlan, restoreArchivedEntries } from '@/services/storage/restoreArchivedWork'
+import type { RestorePlan, RestoreRefusal } from '@/services/storage/restoreArchivedWork'
 
 const PAGE_SIZE = 20
+
+/**
+ * Why a restore was declined, in the operator's words.
+ *
+ * <p>Every refusal is a real state the plan could not have anticipated: a background sync ran
+ * between the moment the dialog opened and the moment they confirmed, and the sheet moved on.
+ * Saying which one it was is the difference between a user retrying and a user giving up.
+ */
+const RESTORE_REFUSALS: Record<RestoreRefusal, string> = {
+  'no-archive': t.restoreArchived.refusalNoArchive,
+  'no-live-sheet': t.restoreArchived.refusalNoLiveSheet,
+  'not-your-work': t.restoreArchived.refusalNotYourWork,
+  'sheet-not-editable': t.restoreArchived.refusalNotEditable
+}
 
 const formatDate = (ts: number) =>
   new Date(ts).toLocaleString('fa-IR', { dateStyle: 'short', timeStyle: 'short' })
@@ -99,12 +118,26 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
   )
 
   const [userLogs, setUserLogs] = useState<LogSheet[]>([])
+  /** Keyed by the archived card's synthetic localId, so a card can ask "is there anything to offer?" */
+  const [restorePlans, setRestorePlans] = useState<Map<string, RestorePlan>>(new Map())
 
   useEffect(() => {
     let cancelled = false
     void loadLogSheetsForSessionUser(logs, sessionUserId, inboxAssignedIds).then(
-      merged => {
-        if (!cancelled) setUserLogs(merged)
+      async merged => {
+        if (cancelled) return
+        setUserLogs(merged)
+
+        // Only archived cards can offer a restore, and a device holds at most a handful of them,
+        // so this is a couple of Dexie reads rather than one per sheet in the list.
+        const plans = new Map<string, RestorePlan>()
+        for (const sheet of merged) {
+          const parsed = parseArchivedLogSheetViewId(sheet.localId)
+          if (!parsed || !sessionUserId) continue
+          const plan = await buildRestorePlan(parsed.serverId, toIdString(sessionUserId))
+          if (plan) plans.set(sheet.localId, plan)
+        }
+        if (!cancelled) setRestorePlans(plans)
       }
     )
     return () => {
@@ -122,6 +155,9 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
     mode: 'assign' | 'reassign'
   } | null>(null)
   const [assigning, setAssigning] = useState(false)
+  const [restoreTarget, setRestoreTarget] = useState<RestorePlan | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null)
 
   useEffect(() => setPage(1), [search, mode])
 
@@ -248,6 +284,50 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
       setActionError(err instanceof Error ? err.message : t.inbox.assignFailed)
     } finally {
       setAssigning(false)
+    }
+  }
+
+  /**
+   * Copy the chosen assets back into the live sheet, then take the operator to it.
+   *
+   * <p>The plan is rebuilt inside {@link restoreArchivedEntries}, so a sync that landed while the
+   * dialog was open cannot make this write something the operator was never shown: it refuses
+   * instead, and the refusal is what they read. Navigating afterwards is the point of the whole
+   * action — the values are back in a form they still have to review and submit.
+   */
+  const handleRestoreConfirm = async (assetIds: string[]) => {
+    if (!restoreTarget || !sessionUserId) return
+    setRestoring(true)
+    setActionError(null)
+    setRestoreNotice(null)
+    try {
+      const outcome = await restoreArchivedEntries(
+        restoreTarget.serverId,
+        toIdString(sessionUserId),
+        assetIds
+      )
+      if (outcome.refusal) {
+        setActionError(RESTORE_REFUSALS[outcome.refusal])
+        setRestoreTarget(null)
+        await refreshLocal()
+        return
+      }
+      if (outcome.restoredAssetIds.length === 0) {
+        setActionError(t.restoreArchived.nothing)
+        setRestoreTarget(null)
+        return
+      }
+      const liveLocalId = restoreTarget.liveLocalId
+      setRestoreTarget(null)
+      setRestoreNotice(
+        t.restoreArchived.done.replace('{{count}}', String(outcome.restoredAssetIds.length))
+      )
+      await refreshLocal()
+      navigate(`/logsheets/${liveLocalId}`)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t.restoreArchived.failed)
+    } finally {
+      setRestoring(false)
     }
   }
 
@@ -539,6 +619,12 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
         </Alert>
       )}
 
+      {restoreNotice && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setRestoreNotice(null)}>
+          {restoreNotice}
+        </Alert>
+      )}
+
       {mode === 'active' && inboxLastSyncAt && (
         <Typography variant="caption" color="text.disabled" sx={{ mb: 1, display: 'block' }}>
           {t.inbox.lastSync}: {formatDate(inboxLastSyncAt)}
@@ -679,6 +765,17 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
                       <OpenInNewIcon fontSize="small" />
                     </IconButton>
                   </Box>
+                  {restorePlans.has(log.localId) && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<RestoreIcon />}
+                      sx={{ mb: 0.75 }}
+                      onClick={() => setRestoreTarget(restorePlans.get(log.localId) ?? null)}
+                    >
+                      {t.restoreArchived.action}
+                    </Button>
+                  )}
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
                     <LogSheetIdentityMeta
                       serverId={log.serverId}
@@ -714,6 +811,15 @@ export function LogSheetListPage({ mode }: LogSheetListPageProps) {
           if (!assigning) setAssignTarget(null)
         }}
         onConfirm={operatorId => void handleAssignConfirm(operatorId)}
+      />
+      <RestoreArchivedWorkDialog
+        open={restoreTarget != null}
+        plan={restoreTarget}
+        busy={restoring}
+        onClose={() => {
+          if (!restoring) setRestoreTarget(null)
+        }}
+        onConfirm={assetIds => void handleRestoreConfirm(assetIds)}
       />
     </Box>
   )
