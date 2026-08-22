@@ -31,6 +31,20 @@ export interface SyncableRecord {
 // Field definitions
 // ---------------------------------------------------------------------------
 
+/**
+ * Every type a class field can have, exactly as the server sends it.
+ *
+ * <p>Kept in step with the server's `FieldDataTypes`, which is the single list the admin UI's
+ * dropdowns are built from. This union used to stop at `textarea` while real bundles carried
+ * `image`, `audio`, `video` and `location` — so the types said a media field was impossible
+ * while the app was rendering one. Harmless only because every media branch tests the value
+ * through a helper that takes a `string`; a `case 'image'` written against this union would have
+ * been rejected as unreachable, and a "dead branch" cleanup would have deleted working code.
+ *
+ * <p>The server had the same split and it was not harmless there: the field editor's two
+ * dropdowns carried separate hardcoded lists, the edit one missing these four, so reopening a
+ * photo field silently retyped it to `number`.
+ */
 export type FieldDataType =
   | 'number'
   | 'text'
@@ -38,6 +52,10 @@ export type FieldDataType =
   | 'multiselect'
   | 'checkbox'
   | 'textarea'
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'location'
 
 export interface FieldValidationRange {
   min?: number

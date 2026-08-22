@@ -52,6 +52,14 @@ export interface AssetEntry {
   updatedAt: number
 }
 
+/**
+ * What {@link FormField.type} may hold — the same set as the wire's `FieldDataType`.
+ *
+ * <p>`toFormField` copies a field definition's `dataType` straight into this, so the two must
+ * match or that assignment stops compiling. `DynamicFormField` only draws the scalar cases and
+ * falls through to a disabled "نوع فیلد پشتیبانی نمی‌شود" box for the rest — which is correct, because
+ * `DynamicClassForm` routes media and location fields to their own inputs before reaching it.
+ */
 export type FormFieldType =
   | 'text'
   | 'number'
@@ -59,6 +67,10 @@ export type FormFieldType =
   | 'multiselect'
   | 'checkbox'
   | 'textarea'
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'location'
 
 export interface FormFieldOption {
   value: string
