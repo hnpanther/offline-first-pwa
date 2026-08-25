@@ -418,6 +418,23 @@ export interface LogSheet {
   submittedAt?: number
   completedAt?: number
   clientActionId?: string
+  /**
+   * Whether this device still owes the server a progress report for this round.
+   *
+   * A **separate queue from `syncStatus`**, and the separation is the whole design. `syncStatus`
+   * tracks the delivery of finished work and drives the pending badge; this tracks a live report
+   * about work still in progress, which is best-effort by nature. A refused progress push must
+   * never be able to mark real, undelivered readings as failed, and it cannot if the two never
+   * share a field.
+   *
+   * Set to `'pending'` by every operator save, cleared to `'synced'` when the server accepts the
+   * push. Plain, non-indexed property — no Dexie version bump.
+   */
+  progressSyncStatus?: SyncStatus
+  /** Server time of the last accepted progress push — what «آخرین همگام‌سازی پیشرفت» shows. */
+  progressSyncedAt?: number
+  /** Why the last progress push was refused, for the fill page. Never shown as a sync failure. */
+  progressError?: string
   createdAt: number
   updatedAt: number
 }

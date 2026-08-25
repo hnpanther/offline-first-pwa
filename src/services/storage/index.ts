@@ -187,6 +187,13 @@ export async function resetLogSheetToOpenDraft(
   delete next.syncError
   delete next.lastSubmitOutcome
   delete next.syncedAt
+  // The progress queue is reset with everything else, and it is safe to do so: the markers it
+  // reads were just cleared above, so the row has nothing to report until the operator's next
+  // save re-stamps one. Leaving a stale «آخرین ارسال پیشرفت» on a row that is starting over
+  // would tell them the server had already seen work it has not.
+  delete next.progressSyncStatus
+  delete next.progressSyncedAt
+  delete next.progressError
 
   await db.logSheets.put(next)
 }

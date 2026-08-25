@@ -110,6 +110,10 @@ const fa = {
     submit: 'ثبت نهایی Log Sheet',
     revertToDraft: 'بازگشت به پیش‌نویس',
     revertToDraftHint: 'کار از صف ارسال خارج می‌شود و می‌توانید دوباره ویرایش کنید.',
+    // Progress reporting — what the supervisor can already see of a round still being walked.
+    progressSyncedAt: 'آخرین ارسال پیشرفت به سرور',
+    progressPending: 'پیشرفت این کار هنوز به سرور ارسال نشده است.',
+    progressOffline: 'در حالت آفلاین، پیشرفت پس از اتصال به سرور ارسال می‌شود.',
     correctAndResubmit: 'اصلاح مقادیر و ارسال مجدد',
     correctAndResubmitHint:
       'سرور این ثبت را به دلیل ناقص بودن مقادیر نپذیرفت. با زدن این دکمه کار دوباره قابل ویرایش می‌شود؛ فیلدهای گفته‌شده در پیام بالا را تکمیل کنید و دوباره ثبت نهایی بزنید. ارسال دوباره بدون تغییر مقادیر فایده‌ای ندارد و همان پاسخ را می‌گیرد.',

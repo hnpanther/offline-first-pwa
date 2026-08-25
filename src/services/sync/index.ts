@@ -13,6 +13,7 @@ import {
 import { submitLogSheetsBatch, submitNfcFaultReportsBatch } from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getOwnPendingAttachments, syncPendingAttachments } from '@/services/sync/attachmentSync'
+import { pushPendingLogSheetProgress } from '@/services/sync/progressSync'
 import { bindAttachmentsToServerSheet } from '@/services/storage/attachments'
 import { getAuthSession } from '@/services/auth'
 import {
@@ -26,7 +27,7 @@ import {
   updateArchivedLogSheetSnapshot,
   parseArchivedLogSheetViewId
 } from '@/services/storage/logSheetArchive'
-import { hasPermission, PERM_NFC_FAULT_REPORT } from '@/types/auth'
+import { hasPermission, PERM_LOG_SHEET_PROGRESS, PERM_NFC_FAULT_REPORT } from '@/types/auth'
 import {
   isLogSheetExpiredForSync,
   isOwnershipReassignError,
@@ -116,6 +117,18 @@ class SyncManager {
 
     await this.markExpiredSheets()
 
+    // Before the submit batch, and outside its try/catch. A round being walked reports its
+    // progress so a supervisor can see how far it has got; that report is best-effort by
+    // definition, and it must never be able to fail — or be failed by — the delivery of work
+    // the operator has actually finished.
+    //
+    // Gated on the permission for the same reason fault reports are: pushing items the server
+    // will refuse leaves a queue that never drains. It is its own permission on the server, so
+    // holding POST:/api/log-sheets/batch does not imply it.
+    if (hasPermission(session, PERM_LOG_SHEET_PROGRESS)) {
+      await this.pushProgress()
+    }
+
     const canSyncFaultReports = hasPermission(session, PERM_NFC_FAULT_REPORT)
 
     const [pendingLogSheets, pendingFaultReports] = await Promise.all([
@@ -181,7 +194,13 @@ class SyncManager {
               // The work is the server's now, so this device stops claiming an opinion of its
               // own about these entries. Leaving the markers would make it win every later
               // merge for them — including after a supervisor reopens the sheet and edits it.
-              entries: clearLocalEditMarkers(ls.entries)
+              entries: clearLocalEditMarkers(ls.entries),
+              // Delivered work needs no progress report. The queue would skip this row anyway
+              // (it only takes drafts, and the markers above are gone), so this is tidiness
+              // rather than a guard — but a stale «pending» on a completed round reads as
+              // something still outstanding.
+              progressSyncStatus: undefined,
+              progressError: undefined
             })
             const ownerId = await getSessionUserId()
             const serverId = toIdString(result.serverId ?? ls.serverId)
@@ -300,6 +319,22 @@ class SyncManager {
     } finally {
       this.isSyncing = false
       this.abortController = null
+    }
+  }
+
+  /**
+   * Drains the progress queue.
+   *
+   * Isolated in its own try/catch, exactly like the attachment pass and for the same reason: a
+   * live report about unfinished work must never fail a submission, and the next tick retries it
+   * regardless. Nothing it does touches `syncStatus`, so a failure here cannot show up as
+   * undelivered work.
+   */
+  private async pushProgress(): Promise<void> {
+    try {
+      await pushPendingLogSheetProgress(this.abortController?.signal)
+    } catch (err) {
+      console.warn('Log sheet progress pass failed', err)
     }
   }
 

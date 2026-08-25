@@ -75,10 +75,31 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
 - **Background sync** — submitted log sheets, plus locally-filed NFC fault reports when the role permits, push when online
+- **Live progress reporting** — an open round tells the server what it has recorded as the operator walks it, so a supervisor sees «N از M دارایی» without waiting for the final submit, and a reassigned round arrives with the previous operator's readings in it (see below)
 - **History & archives** — completed work plus per-user snapshots on shared tablets, with a per-asset restore back into a sheet that was reassigned and came back
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
+
+---
+
+### گزارش پیشرفت حین کار
+
+هر بار که اپراتور یک دارایی را ذخیره می‌کند، مقدارش در اولین فرصتِ اتصال به سرور گزارش می‌شود —
+بدون اینکه کار «ارسال نهایی» شود. نتیجه‌اش دو چیز است: سرپرست در پنل «N از M دارایی» را می‌بیند
+بدون آنکه منتظر پایان کار بماند، و اگر کار به اپراتور دوم واگذار شود، فرم با داده‌های اپراتور اول
+باز می‌شود نه خالی.
+
+- **صفی جدا از ارسال کار.** رد شدن یک گزارش پیشرفت هیچ چیزی از دست نمی‌دهد و هرگز روی وضعیت ارسالِ
+  کار اثر نمی‌گذارد؛ داده روی دستگاه است و از مسیر عادی ارسال می‌شود.
+- **فقط تغییرات ارسال می‌شود**، نه کل شیت — پس هزینه‌اش به اندازه‌ی کارِ انجام‌شده است، نه به اندازه‌ی
+  شیت ضربدر تعداد tick.
+- **در شمارنده‌ی «در انتظار ارسال» شمرده نمی‌شود.** آن عدد یعنی «کاری که هنوز روی سرور نیست»، و یک
+  راند در حال انجام همیشه چنین چیزی دارد. به‌جایش «آخرین ارسال پیشرفت به سرور» در صفحه‌ی تکمیل
+  نمایش داده می‌شود.
+- **آفلاین هیچ فرقی نمی‌کند.** گزارش در صف می‌ماند و با برگشت شبکه ارسال می‌شود.
+
+جزئیات: [docs/sync.md](docs/sync.md) و در بک‌اند `docs/log-sheets.md` §3.5.
 
 ---
 

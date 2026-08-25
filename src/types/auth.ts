@@ -83,6 +83,16 @@ const PERM_WEB_FILL = 'GET:/log-sheets/{id}/fill'
 /** Reporting a tag that would not scan. Every field role. */
 export const PERM_NFC_FAULT_REPORT = 'POST:/api/nfc-fault-reports/batch'
 
+/**
+ * Reporting how far a round has got, without completing it. Every role that may deliver one.
+ *
+ * Gated the same way fault reports are: queuing items the server will refuse leaves a pending
+ * count that never drains. Its own permission on the server, so a site can stop the live-progress
+ * traffic without stopping anybody delivering a round — which means the device has to check it
+ * rather than assume it follows from `POST:/api/log-sheets/batch`.
+ */
+export const PERM_LOG_SHEET_PROGRESS = 'POST:/api/log-sheets/progress'
+
 export function hasPermission(session: AuthSession | null, perm: string): boolean {
   return session?.permissions.includes(perm) ?? false
 }

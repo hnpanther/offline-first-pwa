@@ -189,6 +189,35 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 
 ---
 
+### Progress reporting is a queue of its own, and must stay one
+
+An open round reports what it has recorded so a supervisor can see how far it has got
+(`sync/progressSync.ts`, `POST /api/log-sheets/progress`). Three rules hold it together, and each
+of them is the difference between a useful feature and a data-loss bug:
+
+1. **It never writes the submit queue's fields.** `status`, `syncStatus` and `syncError` belong to
+   the delivery of finished work. A progress report is best-effort — losing one costs nothing,
+   because the readings are still on the device and still deliverable — so it records its outcome
+   on `progressSyncStatus` / `progressError` and nowhere else. Writing the submit fields from here
+   is how real, undelivered readings would end up marked failed by a server that merely said "you
+   no longer hold this sheet".
+2. **It sends only what changed**, filtered on `locallyEditedAt`, and **clears that marker
+   conditionally**. Clearing every marker loses an edit made while the request was in flight;
+   clearing none makes the device win those entries on every future merge, so a supervisor's
+   correction never reaches the tablet — gotcha #87 by a third route. The payload build snapshots
+   each marker; only entries still holding that exact value are cleared, and the row is re-read
+   after the response rather than reused.
+3. **Ownership is checked the same way the submit queue checks it.**
+   `isLogSheetProgressOwnedByUser` mirrors `isLogSheetOutboundOwnedByUser` with `status` inverted.
+   A tablet is shared and its rows outlive a sign-out; pushing a colleague's draft publishes one
+   person's readings under another person's name.
+
+It is deliberately **not** in the pending badge: that number means "work not yet on the server",
+and a round being walked always has some, so counting it would show a badge that cannot reach zero
+for the whole shift. Regression: `progressSync.test.ts`.
+
+---
+
 ## Repository map (high signal)
 
 ```
@@ -292,6 +321,7 @@ Types and functions: **`src/services/api/index.ts`**.
 | `GET /api/log-sheets/{id}/bundle` | Refresh one sheet |
 | `POST /api/log-sheets/{id}/claim` | Pickup → bundle |
 | `POST /api/log-sheets/batch` | Push completed sheets |
+| `POST /api/log-sheets/progress` | Report what an **open** round has recorded so far — never completes anything |
 | `POST /api/nfc-fault-reports/batch` | Push locally-filed NFC fault reports |
 | `GET /api/asset-entries/nfc/{nfcTagId}` | Admin NFC inspect page — online asset lookup |
 | `POST /api/asset-entries/{id}/nfc-serial` | Admin NFC inspect page — bind scanned chip UID to an asset |
@@ -384,6 +414,7 @@ By role, the resulting UI is unchanged:
 | Manual NFC policy | `auth.ts`, `LogSheetFillPage.tsx`, Settings + `fa.ts` |
 | New field data type | `DynamicClassForm.tsx` (editable **and** read-only branches), `buildValidationRules`, backend `FormDataValidationSupport` + the field-type dropdown in `field-definitions.html` |
 | Attachment behaviour | `storage/attachments.ts`, `sync/attachmentSync.ts`, `utils/mediaCapture.ts`, and the mirror-image rules in the backend’s `AttachmentService` |
+| Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
 | Production deploy | `.env.mobile.example`, README nginx section |
 
 ---

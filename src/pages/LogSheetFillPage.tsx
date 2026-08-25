@@ -834,7 +834,14 @@ export function LogSheetFillPage() {
       )
       await updateLogSheet(localId, {
         entries: updatedEntries,
-        ...(sessionUserId ? { localOwnerUserId: sessionUserId } : {})
+        ...(sessionUserId ? { localOwnerUserId: sessionUserId } : {}),
+        // Queue a progress report so a supervisor can see how far this round has got. A
+        // separate field from `syncStatus` on purpose: this is a live report about unfinished
+        // work, and a refusal must never be able to mark the operator's real readings as
+        // failed. The next sync tick picks it up — deliberately not an immediate push, because
+        // the inbox tick is already the fleet's cost driver (backend docs/roadmap.md §3) and
+        // one request per asset save would multiply it by the size of a round.
+        progressSyncStatus: 'pending'
       })
       const refreshed = await getLogSheet(localId)
       if (refreshed) {
@@ -1281,6 +1288,21 @@ export function LogSheetFillPage() {
             {needsCorrection ? t.logSheet.correctAndResubmit : t.logSheet.revertToDraft}
           </Button>
         </Box>
+      )}
+
+      {/* How much of this round the supervisor can already see.
+          Draft rows only: once the sheet is submitted the whole thing is on the server and a
+          "progress" line would be noise. Read from `progressSyncStatus`, never `syncStatus` —
+          the two are separate queues, and conflating them is what would let a refused progress
+          report look like undelivered work. */}
+      {canEdit && entries.length > 0 && logSheet.status === 'draft' && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+          {logSheet.progressSyncedAt
+            ? `${t.logSheet.progressSyncedAt}: ${formatDate(logSheet.progressSyncedAt)}`
+            : effectivelyOffline
+              ? t.logSheet.progressOffline
+              : t.logSheet.progressPending}
+        </Typography>
       )}
 
       {/* Submit — top */}

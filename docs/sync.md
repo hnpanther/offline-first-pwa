@@ -14,11 +14,12 @@ step fails.
 ```
         PULL (server → device)                PUSH (device → server)
 
-  GET /api/bootstrap    ── master data      POST /api/log-sheets/batch  ── drafts,
-  GET /api/log-sheets/inbox ── my sheets                                   submissions,
-  GET /api/log-sheets/{id}/bundle ── one                                   actions
-        sheet, everything needed offline    POST /api/attachments       ── one file
-                                                                           at a time
+  GET /api/bootstrap    ── master data      POST /api/log-sheets/progress ── what a round
+  GET /api/log-sheets/inbox ── my sheets                                     has recorded
+  GET /api/log-sheets/{id}/bundle ── one                                     so far
+        sheet, everything needed offline    POST /api/log-sheets/batch    ── completions
+                                            POST /api/attachments         ── one file
+                                                                             at a time
                                             POST /api/nfc-fault-reports/batch
 ```
 
@@ -52,6 +53,11 @@ twice, and idempotency should be the safety net, not the mechanism.
 > **The interval is stored in milliseconds and displayed in seconds.** Convert on exactly one
 > side. See [`services/settings/syncInterval.ts`](../src/services/settings/syncInterval.ts) —
 > converting twice silently multiplied the stored value by 1000 on every save.
+
+> **A round in progress is visible to a supervisor within one interval.** The progress push runs
+> on this same timer, so «N از M دارایی» on the panel lags by at most `syncIntervalMs`. Saving an
+> asset deliberately does *not* fire an immediate sync: the inbox tick is already the fleet's cost
+> driver (see below), and one request per asset save would multiply it by the size of a round.
 
 > **Lowering the interval costs the server, not the tablet.** Every tick calls
 > `GET /api/log-sheets/inbox`, and the server rebuilds a **full bundle per assigned sheet** on
@@ -96,6 +102,59 @@ await this.markExpiredSheets()
 
 A sheet whose deadline passed while the device was offline is marked locally, so the operator
 sees the truth before a round trip rather than after.
+
+### 3b. Report how far the open rounds have got
+
+```ts
+if (hasPermission(session, PERM_LOG_SHEET_PROGRESS)) {
+  await this.pushProgress()
+}
+```
+
+**A separate queue from the submissions, and the separation is the whole design.** A submit
+delivers work the operator has finished and must never be lost; a progress report is a live
+statement about work in progress, and losing one costs nothing. Its own try/catch, its own
+permission, its own fields on the row (`progressSyncStatus`, `progressSyncedAt`,
+`progressError`) — **nothing in this path writes `status`, `syncStatus` or `syncError`.** Those
+belong to the submit queue, and a refused progress push writing them is how real, undelivered
+readings would end up marked failed.
+
+Gated on the permission for the same reason fault reports are: queuing items the server will
+refuse leaves a queue that never drains. It is a distinct permission server-side, so holding
+`POST:/api/log-sheets/batch` does not imply it.
+
+**Only what changed is sent.** `dirtyEntriesForProgress` filters on `locallyEditedAt` — the only
+marker that means "somebody edited this *on this device*" (see the bundle-merge section for why no
+question about `formData` can answer that). Since an accepted push clears the marker, "has a
+marker" is exactly "changed since the last accepted report". A cleared answer is dirty too: an
+emptying save stamps the marker, so a deliberate clear is reported like any other edit and the
+server's `wouldBlankUnseenAnswer` decides whether to honour it.
+
+**The marker is cleared conditionally**, and both simplifications fail:
+
+| | What breaks |
+|---|---|
+| Clear every marker | An edit made while the request was in flight is lost — the row takes the server's older value on the next merge |
+| Clear none | The device wins those entries on every future merge, so a supervisor's correction in the browser never reaches the tablet — log sheet 85 by a third route |
+
+So the payload build snapshots each entry's marker, and only entries still holding that exact
+value are cleared. The row is re-read after the response rather than reused, for the same reason.
+
+**Not counted in the pending badge.** The badge means "work not yet on the server"; a round being
+walked always has some, so counting it would show a number that reads as broken sync for the whole
+shift. The fill page shows «آخرین ارسال پیشرفت به سرور» instead.
+
+Shared tablets: `isLogSheetProgressOwnedByUser` mirrors `isLogSheetOutboundOwnedByUser` with
+`status` inverted — open work rather than delivered work — and refuses unprovable ownership, a
+revoked or superseded row, and an expired or cancelled round. Pushing a colleague's draft under
+the signed-in operator's token would publish one person's readings under another's name and earn
+the 403 that once cost a round's photographs.
+
+Outcomes: `SAVED` / `NO_CHANGE` are accepted; `SUPERSEDED`, `CANCELLED`, `EXPIRED`,
+`VALIDATION_ERROR`, `ERROR` are recorded on `progressSyncStatus` and nowhere else. There is no
+`DUPLICATE` — progress carries no `clientActionId`, because it is *meant* to be re-sent.
+
+Regression: [`progressSync.test.ts`](../src/services/sync/progressSync.test.ts).
 
 ### 4. Collect what is pending
 
@@ -580,6 +639,7 @@ device, which is how the evidence would actually be lost.
 |---|---|
 | Server changed master data | Server wins — it is reference data |
 | Device has an unsynced draft | Device wins — the server has no competing version |
+| Device has a draft it has already **reported** | Server wins for anything it has not edited since. The report clears `locallyEditedAt`, so a supervisor's correction in the browser reaches the tablet instead of being overwritten at submit |
 | Device submits an expired sheet | Server records it as a void submission; nothing is lost |
 | Same sheet submitted twice | `clientActionId` makes the second a `DUPLICATE` |
 | Two operators on one pool sheet | The server's claim guard settles it; the loser gets a refusal outcome and keeps their data |

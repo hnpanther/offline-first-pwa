@@ -433,6 +433,70 @@ export async function submitLogSheetsBatch(
 }
 
 // ===========================================================================
+// Progress — partial values from a round still being walked
+// ===========================================================================
+
+/**
+ * What the server did with one sheet's partial values.
+ *
+ * **Its own vocabulary, deliberately not `LogSheetSubmitResult`'s.** A submit result says whether
+ * a round was delivered; this says whether a report about an *unfinished* round was accepted, and
+ * the device has to act on the two differently. A refused progress push changes nothing about the
+ * operator's work and must never touch the row's `status` or `syncStatus` — those belong to the
+ * submit path. Sharing one type is how a "the server said no" branch ends up marking real,
+ * undelivered work as failed.
+ *
+ * There is no `DUPLICATE`. Progress carries no `clientActionId` and is meant to be re-sent.
+ */
+export interface LogSheetProgressResult {
+  localId: string
+  serverId?: number | string
+  error?: string | null
+  outcome?:
+    | 'SAVED'
+    | 'NO_CHANGE'
+    | 'SUPERSEDED'
+    | 'CANCELLED'
+    | 'EXPIRED'
+    | 'VALIDATION_ERROR'
+    | 'ERROR'
+  /** Server time the progress was stamped, on an accepted push only. */
+  savedAt?: number | null
+}
+
+/**
+ * Payload shape expected by POST /api/log-sheets/progress.
+ *
+ * **`entries` carries only what changed since the last accepted push**, not the whole sheet —
+ * the opposite of a submit, which resends every asset so the delivered round is self-contained.
+ * A progress push runs on a timer, so making it proportional to the work actually done rather
+ * than to the size of the sheet is what keeps the cost proportional to the plant instead of to
+ * the clock.
+ */
+export interface LogSheetProgressItem {
+  serverId: number | string
+  localId: string
+  operatorName?: string
+  entries: ApiLogSheetEntry[]
+}
+
+/**
+ * POST /api/log-sheets/progress
+ *
+ * Report how far one or more rounds have got, without completing any of them.
+ */
+export async function pushLogSheetProgressBatch(
+  logSheets: LogSheetProgressItem[],
+  signal?: AbortSignal
+): Promise<LogSheetProgressResult[]> {
+  return apiClient.post<LogSheetProgressResult[]>(
+    '/api/log-sheets/progress',
+    { logSheets },
+    signal
+  )
+}
+
+// ===========================================================================
 // NFC fault reports — "NFC scan failed" reports push
 // ===========================================================================
 

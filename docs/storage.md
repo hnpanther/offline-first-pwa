@@ -54,6 +54,14 @@ This is the data that matters. Losing it loses field readings.
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
 
+**Three progress fields on `logSheets` are plain properties, not indexes.**
+`progressSyncStatus`, `progressSyncedAt` and `progressError` track a queue of their own — a live
+report about a round still being walked, separate from `syncStatus`, which tracks the delivery of
+finished work. They deliberately did **not** get a Dexie version bump: the progress queue scans
+`getAllLogSheets()` and filters in memory, exactly as the submit queue already does, so nothing
+selects on them. Keeping them out of `syncStatus` is what stops a refused progress report from
+ever marking real, undelivered readings as failed.
+
 **`logSheets` is keyed on both `localId` and `serverId`.** A sheet exists on the device before
 the server has ever heard of it — `localId` is minted locally and is the stable identity
 throughout; `serverId` arrives only after a successful sync. Code that assumes `serverId` is
