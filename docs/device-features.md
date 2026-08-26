@@ -140,6 +140,55 @@ Maximum size and maximum count per field arrive through `GET /api/bootstrap` and
 big *before* recording it rather than after walking back. The settings screen shows these
 read-only — the device is not their owner.
 
+## A ceiling ends the recording exactly as the operator would
+
+There are two ceilings on a recording — a **duration** and a **byte count** — and reaching either
+does the whole of what pressing stop does, not part of it:
+
+| | |
+|---|---|
+| The blob is closed | at the ceiling |
+| The microphone / camera is released | at the ceiling — the browser's recording indicator goes out |
+| The clip is saved | through the *same* handler a manual stop uses |
+| The counter stops | clamped to the ceiling |
+| The operator is told | which ceiling, because the two ask for different things next |
+
+`startAudioRecording` / `startVideoRecording` return a handle whose **`finished` promise resolves
+for every ending**, and `AttachmentFieldInput` awaits it and runs its ordinary save. That is why
+the save path is shared rather than duplicated: anything added to saving later — a storage check,
+a compression step — applies to an automatic stop for free.
+
+### Why the duration is measured at the stop, not at the read
+
+`durationMs` is `stoppedAt − startedAt`, stamped in `onstop`. This is the single most important
+line in the file, and it used to be `Date.now() − startedAt` evaluated inside `stop()`:
+
+> The ceiling cut the clip correctly at two minutes. The operator, seeing a counter still
+> climbing, pressed stop five minutes later. The clip was two minutes long and was reported as
+> five. The server refuses a duration past its ceiling, and the upload queue parks a 4xx as
+> permanent — **so a perfectly valid clip was destroyed by the number attached to it.**
+
+It is additionally clamped to the ceiling. That is not a fudge: media only grows when
+`ondataavailable` delivers a chunk, and the overdue check runs on every one of those, so the blob
+cannot exceed the ceiling by more than a single timeslice **by construction**. Wall-clock time
+beyond that is the process having been suspended with no media produced, and reporting suspension
+as recorded content is what destroys the clip.
+
+### Two mechanisms for one ceiling
+
+| Mechanism | Fires | Covers |
+|---|---|---|
+| `setTimeout(maxDurationMs)` | exactly at the ceiling | the normal case |
+| an elapsed check inside `ondataavailable` | ~once a second, from the media stream | **a throttled background timer** — with the tablet's screen off a `setTimeout` can be delayed by minutes, and then the blob itself overruns, which no amount of honest reporting can fix |
+
+### `onstop` is installed once, at construction
+
+Not inside `stop()`. That one detail is what makes every row of the table above true, and its
+absence is what made all of them false: with no handler at ceiling time the stream was never
+released, nothing saved, and the special-case «already stopped» branch invented the wrong
+duration. Regression: [`recordingLimits.test.ts`](../src/utils/recordingLimits.test.ts) — 14 of
+its cases fail against the old shape.
+
 ## The truthiness trap
 
 An attachment field's value is an **object**, and an object is truthy even when it holds nothing

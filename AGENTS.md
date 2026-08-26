@@ -189,6 +189,37 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 
 ---
 
+### A recording ends once, on every path
+
+`beginRecording` in `utils/mediaCapture.ts` owns the ending for both recorders, and
+**`recorder.onstop` is installed at construction — never inside `stop()`.** Every path (the
+operator, the duration ceiling, the byte ceiling, `cancel()`) runs the same ending exactly once:
+stamp `stoppedAt`, release the stream, resolve `finished`.
+
+Installing it late is what produced the original defect, and it broke six things at once — the
+microphone stayed live, the browser's recording indicator stayed on, the clip was never saved, the
+counter kept climbing, the button still said «پایان ضبط», and `durationMs` reported time-until-the-
+button instead of time-recorded. **The last one destroyed clips**: the server refuses a duration
+past its ceiling and `isPermanentFailure` parks a 4xx for good, so a correctly-capped two-minute
+recording was thrown away because it claimed to be five minutes long.
+
+Three rules follow, and none of them is optional:
+
+1. **`durationMs` is `stoppedAt − startedAt`**, clamped to the ceiling. Not `Date.now()` at read
+   time. The clamp is honest, not a fudge — media only grows when `ondataavailable` fires and the
+   overdue check runs on every one, so the blob cannot exceed the ceiling by more than a
+   timeslice; anything past that is process suspension with no media.
+2. **The ceiling is enforced twice**, by `setTimeout` and by an elapsed check inside
+   `ondataavailable`. The second exists for a throttled background timer with the screen off,
+   where the first can be minutes late and the blob genuinely overruns.
+3. **The UI saves through the same handler a manual stop uses**, by awaiting `handle.finished`.
+   A parallel path would drift the moment anything is added to saving.
+
+Regression: `recordingLimits.test.ts`, whose fakes drive every ending; 14 of its cases fail
+against the old shape.
+
+---
+
 ### Progress reporting is a queue of its own, and must stay one
 
 An open round reports what it has recorded so a supervisor can see how far it has got
@@ -414,6 +445,7 @@ By role, the resulting UI is unchanged:
 | Manual NFC policy | `auth.ts`, `LogSheetFillPage.tsx`, Settings + `fa.ts` |
 | New field data type | `DynamicClassForm.tsx` (editable **and** read-only branches), `buildValidationRules`, backend `FormDataValidationSupport` + the field-type dropdown in `field-definitions.html` |
 | Attachment behaviour | `storage/attachments.ts`, `sync/attachmentSync.ts`, `utils/mediaCapture.ts`, and the mirror-image rules in the backend’s `AttachmentService` |
+| Recording ceilings | `utils/mediaCapture.ts` (`beginRecording`), `AttachmentFieldInput`'s auto-save effect, `recordingLimits.test.ts`, and the server's `AttachmentService.enforceDuration` — the two must agree or a capped clip is refused |
 | Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
 | Production deploy | `.env.mobile.example`, README nginx section |
 

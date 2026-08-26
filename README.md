@@ -75,6 +75,7 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
 - **Background sync** — submitted log sheets, plus locally-filed NFC fault reports when the role permits, push when online
+- **Recording ceilings that stop cleanly** — a voice note or video that reaches the site's duration or size limit is stopped, the microphone released and the clip **saved automatically**, with a message naming which limit was reached. The counter shows the ceiling rather than climbing past it
 - **Live progress reporting** — an open round tells the server what it has recorded as the operator walks it, so a supervisor sees «N از M دارایی» without waiting for the final submit, and a reassigned round arrives with the previous operator's readings in it (see below)
 - **History & archives** — completed work plus per-user snapshots on shared tablets, with a per-asset restore back into a sheet that was reassigned and came back
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)

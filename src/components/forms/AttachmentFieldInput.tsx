@@ -35,7 +35,8 @@ import {
   startAudioRecording,
   startVideoRecording,
   type AudioRecorderHandle,
-  type VideoRecorderHandle
+  type VideoRecorderHandle,
+  endReasonMessage
 } from '@/utils/mediaCapture'
 import { getSettings } from '@/services/storage'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
@@ -179,14 +180,6 @@ export function AttachmentFieldInput({
     }
   }, [videoRecorder])
 
-  // Elapsed-time readout while recording, so the operator can see the cap approaching.
-  useEffect(() => {
-    if (!recorder && !videoRecorder) return
-    const started = Date.now()
-    const id = setInterval(() => setRecordingMs(Date.now() - started), 250)
-    return () => clearInterval(id)
-  }, [recorder, videoRecorder])
-
   /** Ceiling for this field's kind, straight from the server's settings. */
   const maxCount =
     kind === 'IMAGE'
@@ -197,6 +190,47 @@ export function AttachmentFieldInput({
 
   const maxDurationMs =
     kind === 'AUDIO' ? limits.maxAudioSeconds * 1000 : limits.maxVideoSeconds * 1000
+
+  // Elapsed-time readout while recording, so the operator can see the cap approaching.
+  //
+  // Clamped to the ceiling. The recorder stops itself there, so a counter that kept climbing was
+  // reporting how long the screen had been open rather than how much had been recorded — which
+  // is exactly the misreading that let an operator stand there for five minutes believing a
+  // two-minute clip was still growing.
+  useEffect(() => {
+    if (!recorder && !videoRecorder) return
+    const started = Date.now()
+    const id = setInterval(
+      () => setRecordingMs(Math.min(Date.now() - started, maxDurationMs)),
+      250
+    )
+    return () => clearInterval(id)
+  }, [recorder, videoRecorder, maxDurationMs])
+
+  // A ceiling ends the recording exactly as if the operator had pressed stop.
+  //
+  // `finished` resolves for every ending — the duration cap, the byte cap, the operator — and
+  // the same save handler runs in all three cases. Deliberately the *same* handler rather than a
+  // parallel path: anything added to saving later (a storage check, a compression step) then
+  // applies to an automatic stop for free, which a duplicate would not.
+  //
+  // Before this, a cap stopped the `MediaRecorder` and nothing else. The clip sat unsaved, the
+  // microphone stayed live, and the operator eventually pressed a button that recorded a wildly
+  // wrong duration — which the server then refused and the upload queue parked for good.
+  useEffect(() => {
+    const active = recorder ?? videoRecorder
+    if (!active) return
+    let cancelled = false
+    void active.finished.then(() => {
+      if (cancelled) return
+      void (recorder ? handleStopRecording() : handleStopVideo())
+    })
+    // Only stops *this* effect from acting; it never cancels the recording itself.
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recorder, videoRecorder])
 
   // Counted from every stored row for this (asset, field) rather than from `ids` or from the
   // displayed list: `ids` can hold a reference to a row that no longer exists, and the displayed
@@ -320,7 +354,7 @@ export function AttachmentFieldInput({
     if (!recorder) return
     setBusy(true)
     try {
-      const { blob, mimeType, durationMs, truncated } = await recorder.stop()
+      const { blob, mimeType, durationMs, endedBy } = await recorder.stop()
       await persist({
         id: uuidv4(),
         logSheetLocalId,
@@ -335,7 +369,7 @@ export function AttachmentFieldInput({
         syncStatus: 'pending',
         createdAt: Date.now()
       })
-      if (truncated) setError(t.attachments.truncatedBySize)
+      setError(endReasonMessage(endedBy, maxDurationMs))
     } catch (err) {
       setError(err instanceof Error ? err.message : t.attachments.captureFailed)
     } finally {
@@ -366,7 +400,7 @@ export function AttachmentFieldInput({
     if (!videoRecorder) return
     setBusy(true)
     try {
-      const { blob, mimeType, durationMs, width, height, truncated } = await videoRecorder.stop()
+      const { blob, mimeType, durationMs, width, height, endedBy } = await videoRecorder.stop()
       await persist({
         id: uuidv4(),
         logSheetLocalId,
@@ -383,9 +417,10 @@ export function AttachmentFieldInput({
         syncStatus: 'pending',
         createdAt: Date.now()
       })
-      // Said out loud rather than hidden: the operator needs to know the clip is short because
-      // the size ceiling cut it, not because the camera failed.
-      if (truncated) setError(t.attachments.truncatedBySize)
+      // Said out loud rather than hidden: the operator needs to know the clip is short because a
+      // ceiling cut it, not because the camera failed — and *which* ceiling, because the two ask
+      // for different things next.
+      setError(endReasonMessage(endedBy, maxDurationMs))
     } catch (err) {
       setError(err instanceof Error ? err.message : t.attachments.captureFailed)
     } finally {

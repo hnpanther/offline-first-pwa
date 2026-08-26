@@ -11,6 +11,7 @@
  * a copy nothing ever reads.
  */
 
+import { t } from '@/i18n'
 import { canUseMediaDevices } from '@/utils/mediaPermissions'
 
 /** Long-edge cap. Enough to read a gauge face or see a leak; far below what a camera emits. */
@@ -141,12 +142,33 @@ export function pickAudioMimeType(): string | null {
   return candidates.find(type => MediaRecorder.isTypeSupported(type)) ?? null
 }
 
+/**
+ * What ended a recording.
+ *
+ * A boolean `truncated` used to cover this, and it could not say *which* ceiling was hit — which
+ * is the only part the operator can act on. Hitting the size cap means "record at a lower
+ * quality or in shorter pieces"; hitting the duration cap means "that is the whole clip you are
+ * allowed, record a second one". Two different instructions from one flag.
+ */
+export type RecordingEndReason = 'user' | 'duration' | 'size'
+
 export interface AudioRecording {
   blob: Blob
   mimeType: string
+  /**
+   * How long the recording actually ran.
+   *
+   * **Measured to the moment the recorder stopped, not to the moment the operator noticed.**
+   * This used to be `Date.now() - startedAt` evaluated inside `stop()`, which is a different
+   * number entirely once a ceiling has already cut the recording: the clip was correctly capped
+   * at, say, two minutes, and then reported as however long the operator left the screen open —
+   * five minutes, ten. The server refuses a duration past its ceiling and the client parks a 4xx
+   * as permanent, so a perfectly valid two-minute clip was destroyed by a wrong number attached
+   * to it.
+   */
   durationMs: number
-  /** Set when the recording was cut short by the byte ceiling rather than by the operator. */
-  truncated?: boolean
+  /** Why the recording ended. `'user'` means they pressed stop. */
+  endedBy: RecordingEndReason
 }
 
 export interface VideoRecording extends AudioRecording {
@@ -155,8 +177,135 @@ export interface VideoRecording extends AudioRecording {
 }
 
 export interface AudioRecorderHandle {
+  /**
+   * Resolves the moment recording actually ends, whoever ended it.
+   *
+   * **This is what turns a ceiling into a save.** A cap firing used to stop the `MediaRecorder`
+   * and nothing else: the microphone stayed live, the browser kept showing its recording
+   * indicator, the on-screen counter kept climbing, and the clip sat unsaved until the operator
+   * eventually pressed a button that no longer did what it said. Awaiting this lets the UI run
+   * exactly the same save path a manual stop runs.
+   */
+  finished: Promise<void>
   stop: () => Promise<AudioRecording>
   cancel: () => void
+}
+
+/**
+ * The end of a recording, owned in one place for both recorders.
+ *
+ * <h3>Why this exists at all</h3>
+ *
+ * Both recorders used to assign {@code recorder.onstop} *inside* their `stop()` promise — i.e.
+ * only once the operator pressed a button. A ceiling firing before that left the recording in a
+ * half-ended state that nothing was watching:
+ *
+ * | what a stop should do | what a ceiling actually did |
+ * |---|---|
+ * | close the blob | ✅ |
+ * | release the microphone / camera | ❌ no handler existed, so the track stayed live |
+ * | stop the browser's recording indicator | ❌ |
+ * | save the clip | ❌ it sat in memory |
+ * | stop the on-screen counter | ❌ it kept climbing |
+ * | report an honest duration | ❌ it reported time-until-the-button, not time-recorded |
+ *
+ * The last one was the expensive part: the server refuses a duration past its ceiling and the
+ * upload queue parks a 4xx permanently, so a valid capped clip was destroyed by the number
+ * attached to it.
+ *
+ * <h3>The fix, in one sentence</h3>
+ *
+ * `onstop` is installed **once, at construction**, so every path — the operator, the duration
+ * ceiling, the byte ceiling, `cancel()` — runs the same ending exactly once.
+ *
+ * <h3>Two ceilings for the same limit, deliberately</h3>
+ *
+ * `setTimeout` gives a precise cut in the normal case. `cutIfOverdue()`, called from
+ * `ondataavailable` roughly once a second, is the one that holds when the tablet's screen goes
+ * off: browsers throttle background timers heavily, and a throttled `setTimeout` would let the
+ * blob itself run past the ceiling — at which point no amount of honest reporting helps, because
+ * the recording really is too long. Driving the check from the media stream keeps it running
+ * whenever the encoder is running.
+ */
+function beginRecording(
+  recorder: MediaRecorder,
+  releaseStream: () => void,
+  startedAt: number,
+  maxDurationMs: number
+) {
+  let stoppedAt: number | null = null
+  let reason: RecordingEndReason = 'user'
+  let errored = false
+  let settle!: () => void
+  const finished = new Promise<void>(resolve => {
+    settle = resolve
+  })
+
+  const end = () => {
+    if (stoppedAt !== null) return
+    stoppedAt = Date.now()
+    clearTimeout(autoStop)
+    releaseStream()
+    settle()
+  }
+
+  recorder.onstop = end
+  recorder.onerror = () => {
+    errored = true
+    end()
+  }
+
+  /**
+   * Ends the recording, attributing it to `why`.
+   *
+   * **First cut wins.** The `state !== 'recording'` guard is what makes that true: when the
+   * duration ceiling fires and the operator presses stop a moment later, the reason stays
+   * `'duration'` rather than being overwritten with `'user'`, so the message they get explains
+   * what actually happened.
+   */
+  const cut = (why: RecordingEndReason) => {
+    if (recorder.state !== 'recording') return
+    reason = why
+    recorder.stop()
+  }
+
+  const autoStop = setTimeout(() => cut('duration'), maxDurationMs)
+
+  return {
+    finished,
+    cut,
+    cutIfOverdue: () => {
+      if (Date.now() - startedAt >= maxDurationMs) cut('duration')
+    },
+    /**
+     * Time actually recorded, and never more than the ceiling.
+     *
+     * <p>Two parts, and both are load-bearing.
+     *
+     * <p><b>`stoppedAt` rather than the current clock.</b> This is the fix for the original
+     * defect: read at `stop()` time it returned however long the operator left the screen open
+     * after a ceiling had already ended the recording.
+     *
+     * <p><b>Clamped to the ceiling.</b> Not a fudge — it is the honest number. Media only grows
+     * when `ondataavailable` delivers a chunk, and `cutIfOverdue` runs on every one of those, so
+     * **the blob cannot exceed the ceiling by more than a single timeslice, by construction.**
+     * Wall-clock time beyond that is the process having been suspended (screen off, tab
+     * backgrounded) with no media produced at all, and reporting suspension as recorded content
+     * would hand the server a duration it refuses — which the upload queue parks permanently,
+     * destroying a clip that is in fact exactly as long as it is allowed to be. The byte
+     * ceilings remain the real guard on payload size, which is what the server's own
+     * `enforceDuration` says it relies on.
+     */
+    durationMs: () => Math.min((stoppedAt ?? Date.now()) - startedAt, maxDurationMs),
+    endedBy: () => reason,
+    failed: () => errored,
+    cancel: () => {
+      cut('user')
+      // A recording that never started, or one already ended: `end()` is idempotent and the
+      // track must be released either way.
+      end()
+    }
+  }
 }
 
 /**
@@ -185,10 +334,12 @@ export async function startAudioRecording(
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
   })
   const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24_000 })
+  const releaseStream = () => stream.getTracks().forEach(t => t.stop())
   const chunks: Blob[] = []
   const startedAt = Date.now()
   let bytes = 0
-  let truncated = false
+
+  const ending = beginRecording(recorder, releaseStream, startedAt, maxDurationMs)
 
   recorder.ondataavailable = e => {
     if (e.data.size === 0) return
@@ -196,59 +347,38 @@ export async function startAudioRecording(
     bytes += e.data.size
     // Same reasoning as video: the bitrate is a hint. Stopping here keeps what was captured
     // instead of letting the server refuse the whole clip afterwards.
-    if (bytes >= MAX_AUDIO_BYTES && recorder.state === 'recording') {
-      truncated = true
-      recorder.stop()
-    }
+    if (bytes >= MAX_AUDIO_BYTES) ending.cut('size')
+    // The duration ceiling again, from the data stream rather than from a timer. See `cut`.
+    ending.cutIfOverdue()
   }
-  // A timeslice is required for the byte check to run at all — without it `ondataavailable`
-  // fires once, at the very end, which is far too late to stop anything.
+  // A timeslice is required for the byte and elapsed checks to run at all — without it
+  // `ondataavailable` fires once, at the very end, which is far too late to stop anything.
   recorder.start(1000)
 
-  const releaseStream = () => stream.getTracks().forEach(t => t.stop())
-  const autoStop = setTimeout(() => {
-    if (recorder.state === 'recording') recorder.stop()
-  }, maxDurationMs)
+  const build = (): AudioRecording => ({
+    blob: new Blob(chunks, { type: mimeType }),
+    mimeType,
+    durationMs: ending.durationMs(),
+    endedBy: ending.endedBy()
+  })
 
   return {
-    stop: () =>
-      new Promise<AudioRecording>((resolve, reject) => {
-        clearTimeout(autoStop)
-        recorder.onstop = () => {
-          releaseStream()
-          const blob = new Blob(chunks, { type: mimeType })
-          if (blob.size === 0) {
-            reject(new Error('ضبط صدا انجام نشد.'))
-            return
-          }
-          resolve({ blob, mimeType, durationMs: Date.now() - startedAt, truncated })
-        }
-        recorder.onerror = () => {
-          releaseStream()
-          reject(new Error('خطا در ضبط صدا.'))
-        }
-        if (recorder.state === 'recording') {
-          recorder.stop()
-        } else {
-          // Already stopped by the duration cap — onstop will not fire again.
-          releaseStream()
-          resolve({
-            blob: new Blob(chunks, { type: mimeType }),
-            mimeType,
-            durationMs: Date.now() - startedAt,
-            truncated
-          })
-        }
-      }),
-    cancel: () => {
-      clearTimeout(autoStop)
-      if (recorder.state === 'recording') recorder.stop()
-      releaseStream()
-    }
+    finished: ending.finished,
+    stop: async () => {
+      ending.cut('user')
+      await ending.finished
+      if (ending.failed()) throw new Error('خطا در ضبط صدا.')
+      const result = build()
+      if (result.blob.size === 0) throw new Error('ضبط صدا انجام نشد.')
+      return result
+    },
+    cancel: () => ending.cancel()
   }
 }
 
 export interface VideoRecorderHandle {
+  /** Resolves the moment recording ends, whoever ended it. See {@link AudioRecorderHandle}. */
+  finished: Promise<void>
   stop: () => Promise<VideoRecording>
   cancel: () => void
   /** Live preview source, so the operator can see what they are filming. */
@@ -292,70 +422,74 @@ export async function startVideoRecording(
     videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
     audioBitsPerSecond: VIDEO_AUDIO_BITS_PER_SECOND
   })
+  const releaseStream = () => stream.getTracks().forEach(t => t.stop())
   const chunks: Blob[] = []
   const startedAt = Date.now()
   let bytes = 0
-  let truncated = false
 
   const settings = stream.getVideoTracks()[0]?.getSettings?.() ?? {}
+  const ending = beginRecording(recorder, releaseStream, startedAt, maxDurationMs)
 
   recorder.ondataavailable = e => {
     if (e.data.size === 0) return
     chunks.push(e.data)
     bytes += e.data.size
-    if (bytes >= maxBytes && recorder.state === 'recording') {
-      truncated = true
-      recorder.stop()
-    }
+    if (bytes >= maxBytes) ending.cut('size')
+    ending.cutIfOverdue()
   }
   recorder.start(1000)
 
-  const releaseStream = () => stream.getTracks().forEach(t => t.stop())
-  const autoStop = setTimeout(() => {
-    if (recorder.state === 'recording') recorder.stop()
-  }, maxDurationMs)
-
-  const finish = (): VideoRecording => ({
+  const build = (): VideoRecording => ({
     blob: new Blob(chunks, { type: mimeType }),
     mimeType,
-    durationMs: Date.now() - startedAt,
+    durationMs: ending.durationMs(),
     width: typeof settings.width === 'number' ? settings.width : undefined,
     height: typeof settings.height === 'number' ? settings.height : undefined,
-    truncated
+    endedBy: ending.endedBy()
   })
 
   return {
     stream,
-    stop: () =>
-      new Promise<VideoRecording>((resolve, reject) => {
-        clearTimeout(autoStop)
-        recorder.onstop = () => {
-          releaseStream()
-          const result = finish()
-          if (result.blob.size === 0) {
-            reject(new Error('ضبط ویدئو انجام نشد.'))
-            return
-          }
-          resolve(result)
-        }
-        recorder.onerror = () => {
-          releaseStream()
-          reject(new Error('خطا در ضبط ویدئو.'))
-        }
-        if (recorder.state === 'recording') {
-          recorder.stop()
-        } else {
-          // Already stopped by the duration or byte cap — onstop will not fire again.
-          releaseStream()
-          resolve(finish())
-        }
-      }),
-    cancel: () => {
-      clearTimeout(autoStop)
-      if (recorder.state === 'recording') recorder.stop()
-      releaseStream()
-    }
+    finished: ending.finished,
+    stop: async () => {
+      ending.cut('user')
+      await ending.finished
+      if (ending.failed()) throw new Error('خطا در ضبط ویدئو.')
+      const result = build()
+      if (result.blob.size === 0) throw new Error('ضبط ویدئو انجام نشد.')
+      return result
+    },
+    cancel: () => ending.cancel()
   }
+}
+
+/**
+ * What to tell the operator about how their recording ended, or {@code null} when they ended it.
+ *
+ * **Two ceilings, two messages, deliberately not one.** A size cut means "record at a lower
+ * quality, or in shorter pieces"; a duration cut means "that is the whole clip you may record —
+ * take a second one if you need more". A single «کوتاه شد» for both leaves the operator guessing
+ * which lever to pull, and the size message in particular is actively wrong when the clock is
+ * what stopped them. This is why {@link RecordingEndReason} replaced a boolean `truncated`.
+ *
+ * The seconds come from the ceiling actually in force — the server's setting, mirrored into the
+ * device's `limits` — so the number in the message can never drift from the number enforced.
+ *
+ * Lives here rather than in the component so it can be tested without pulling in the UI, and so
+ * the wording stays next to the code that decides the reason.
+ */
+export function endReasonMessage(
+  endedBy: RecordingEndReason,
+  maxDurationMs: number
+): string | null {
+  if (endedBy === 'size') return t.attachments.truncatedBySize
+  if (endedBy === 'duration') {
+    return t.attachments.truncatedByDuration.replace(
+      '{{seconds}}',
+      String(Math.round(maxDurationMs / 1000))
+    )
+  }
+  return null
 }
 
 export function formatDuration(ms: number | undefined): string {

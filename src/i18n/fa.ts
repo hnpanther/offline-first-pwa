@@ -261,6 +261,11 @@ const fa = {
     stopVideo: 'پایان ضبط ویدئو',
     limitReached: 'حداکثر {{max}} مورد برای این فیلد مجاز است.',
     truncatedBySize: 'ضبط به دلیل رسیدن به حداکثر حجم مجاز، زودتر متوقف شد. بخش ضبط‌شده ذخیره شد.',
+    // Its own message, not a reuse of the size one: the two ask the operator for different
+    // things next — a size cut means "record at lower quality or in pieces", a duration cut
+    // means "that is the whole clip you may record; take a second one if you need more".
+    // {{seconds}} is filled from the server's own ceiling so the number is never a guess.
+    truncatedByDuration: 'ضبط به سقف مجاز ({{seconds}} ثانیه) رسید و به‌طور خودکار متوقف و ذخیره شد.',
     annotateTitle: 'بررسی و علامت‌گذاری عکس',
     annotateFree: 'قلم آزاد',
     annotateArrow: 'فلش',
