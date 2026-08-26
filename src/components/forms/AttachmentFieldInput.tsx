@@ -51,6 +51,75 @@ import {
 import { t } from '@/i18n'
 import type { AttachmentKind, LocalAttachment } from '@/types'
 
+
+/**
+ * One recording, one saved row.
+ *
+ * <p>Every ending — the operator pressing stop, the duration cap, the byte cap — resolves the
+ * recorder's {@code finished} promise, and the component deliberately routes all three through
+ * the same stop handler so anything added to saving applies to all of them. A **manual** stop,
+ * though, resolves {@code finished} from inside that handler: the effect watching it then fired
+ * again in the same tick, before {@code setRecorder(null)} had run the cleanup that sets
+ * {@code cancelled}, and the handler's own {@code if (!recorder) return} read the non-null value
+ * its closure had captured. The recorder was already finished, so the second {@code stop()}
+ * returned the same blob and wrote a second identical row.
+ *
+ * <p>Measured in a browser before this existed: one tap on «پایان ضبط» produced two
+ * 5757-byte rows and a counter reading 2 / 1 against a ceiling of 1. Combined with the reference
+ * being rebuilt only from the closure's ids, one of the two rows ended up named by nothing:
+ * counted against the ceiling, absent from the list, and so impossible to delete.
+ *
+ * <p>A closure rather than React state, because both calls happen in a single tick — which is
+ * exactly what a state guard cannot see.
+ */
+export function createCaptureGuard() {
+  let saving = false
+  return {
+    /** True when the caller owns this save; false when one is already in flight. */
+    begin(): boolean {
+      if (saving) return false
+      saving = true
+      return true
+    },
+    /** Releases the guard, whether the save succeeded or threw. */
+    end(): void {
+      saving = false
+    }
+  }
+}
+
+/**
+ * The ids a media field should reference, given what this device actually holds for it.
+ *
+ * <p>Two things are wrong with building this from the component's {@code ids} closure, and both
+ * were reached in the field:
+ *
+ * <ul>
+ *   <li><b>Two captures in one tick read the same stale list</b>, so the second {@code onChange}
+ *       overwrote the first and one row was left referenced by nothing.</li>
+ *   <li><b>A row referenced by nothing is invisible but still counted.</b> The list is built from
+ *       the reference; the ceiling is counted from the device. So the field read as full with no
+ *       item on screen to delete — a dead end the operator could not escape.</li>
+ * </ul>
+ *
+ * <p>Answering from the device settles both: the reference becomes what the counter has always
+ * measured, and an orphan is **adopted** rather than dropped — which is the only route by which
+ * a tablet already carrying one can be freed. Deliberately narrow: the rows passed in are those
+ * for exactly this (sheet, asset, field), which are this field's own captures by definition.
+ * Nothing is invented and nothing is deleted.
+ *
+ * @returns the ids to publish, and whether that differs from what the field names today
+ */
+export function fieldReferenceFor(
+  deviceRows: Pick<LocalAttachment, 'id'>[],
+  currentIds: string[]
+): { ids: string[]; changed: boolean } {
+  const ids = deviceRows.map(row => row.id)
+  const changed =
+    ids.length !== currentIds.length || ids.some((id, i) => id !== currentIds[i])
+  return { ids, changed }
+}
+
 interface Props {
   kind: AttachmentKind
   label: string
@@ -111,6 +180,8 @@ export function AttachmentFieldInput({
   const [recordingMs, setRecordingMs] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const objectUrls = useRef<string[]>([])
+  /** One recording, one saved row — see {@link createCaptureGuard}. */
+  const captureGuard = useRef(createCaptureGuard())
 
   const ids = attachmentIdsOf(value)
 
@@ -132,6 +203,16 @@ export function AttachmentFieldInput({
     const counted = new Set(rows.map(r => r.id))
     forField.forEach(r => counted.add(r.id))
     setFieldCount(counted.size)
+
+    // A row this device holds for this field that the form value does not name is **adopted**
+    // rather than left out — see {@link fieldReferenceFor}. Repairing it here is the only route
+    // by which a tablet already carrying an orphan can be freed, and it happens the moment the
+    // field is opened.
+    const repaired = fieldReferenceFor(forField, ids)
+    if (repaired.changed && !readOnly) {
+      setItems(forField)
+      onChange(buildAttachmentRef(repaired.ids))
+    }
 
     releaseUrls()
     const next = new Map<string, string>()
@@ -238,9 +319,23 @@ export function AttachmentFieldInput({
   // the same triple, and the number shown here has to be the one it will enforce.
   const atLimit = fieldCount >= maxCount
 
+  /**
+   * Stores one capture and republishes the field's reference.
+   *
+   * <p><b>The id list is rebuilt from the device, not from the {@code ids} this render closed
+   * over.</b> Two captures completing in the same tick both read the same stale {@code ids}, so
+   * the second {@code onChange} overwrote the first and one of the two rows was left referenced
+   * by nothing — invisible in the list, which is built from {@code ids}, yet still counted by
+   * {@code getAttachmentsForEntry}, which asks the device. That is what turned a duplicated clip
+   * into a field that was permanently full with nothing the operator could delete.
+   *
+   * <p>Reading the rows back also makes the written reference agree with the number on screen by
+   * construction: the counter has always been the device's answer, and now so is the value.
+   */
   const persist = async (attachment: LocalAttachment) => {
     await saveAttachment(attachment)
-    onChange(buildAttachmentRef([...ids, attachment.id]))
+    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey)
+    onChange(buildAttachmentRef(fieldReferenceFor(onDevice, ids).ids))
   }
 
   /**
@@ -342,6 +437,7 @@ export function AttachmentFieldInput({
         return
       }
 
+      captureGuard.current.end()
       setRecorder(await startAudioRecording(maxDurationMs))
     } catch (err) {
       const failure = describeMediaError(err, (await getMicrophonePermission()) === 'denied')
@@ -351,7 +447,7 @@ export function AttachmentFieldInput({
   }
 
   const handleStopRecording = async () => {
-    if (!recorder) return
+    if (!recorder || !captureGuard.current.begin()) return
     setBusy(true)
     try {
       const { blob, mimeType, durationMs, endedBy } = await recorder.stop()
@@ -376,6 +472,7 @@ export function AttachmentFieldInput({
       setRecorder(null)
       setRecordingMs(0)
       setBusy(false)
+      captureGuard.current.end()
     }
   }
 
@@ -388,6 +485,7 @@ export function AttachmentFieldInput({
         return
       }
       if (await blockedByStorage()) return
+      captureGuard.current.end()
       setVideoRecorder(await startVideoRecording(maxDurationMs))
     } catch (err) {
       const failure = describeMediaError(err, (await getMicrophonePermission()) === 'denied')
@@ -397,7 +495,7 @@ export function AttachmentFieldInput({
   }
 
   const handleStopVideo = async () => {
-    if (!videoRecorder) return
+    if (!videoRecorder || !captureGuard.current.begin()) return
     setBusy(true)
     try {
       const { blob, mimeType, durationMs, width, height, endedBy } = await videoRecorder.stop()
@@ -427,6 +525,7 @@ export function AttachmentFieldInput({
       setVideoRecorder(null)
       setRecordingMs(0)
       setBusy(false)
+      captureGuard.current.end()
     }
   }
 
@@ -443,7 +542,11 @@ export function AttachmentFieldInput({
     // whether to carry it there (sheet not yet submitted) or keep the server's copy as
     // delivered evidence (sheet submitted).
     await removeAttachment(id)
-    onChange(buildAttachmentRef(ids.filter(existing => existing !== id)))
+    // Rebuilt from the device for the same reason as `persist`: subtracting from the id
+    // list this render closed over means two deletes in quick succession disagree, and
+    // the loser's list resurrects a reference to a row that is already gone.
+    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey)
+    onChange(buildAttachmentRef(fieldReferenceFor(onDevice, ids).ids))
     await refresh()
   }
 

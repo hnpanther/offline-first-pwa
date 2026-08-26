@@ -509,6 +509,34 @@ sequence through `applyLogSheetBundle` — so the archive it restores from is on
 path produced — and includes the two-pass case. `liveReassignRoundTrip.test.ts` (10) repeats the
 round trip and the restore over bundles captured from a running server.
 
+### Capturing media: one recording, one row, one reference
+
+Two rules hold this together, and both were learned from the same field report — *record a clip,
+delete it, and the field is full forever*.
+
+**One recording is saved once.** Every ending resolves the recorder's `finished` promise and the
+component deliberately routes all of them — operator, duration cap, byte cap — through one stop
+handler. A *manual* stop resolves `finished` from inside that handler, so the effect watching it
+re-entered in the same tick, past a guard reading the stale recorder from its closure, and the
+already-finished recorder returned the same blob again. `createCaptureGuard()` admits exactly one
+save per recording; it is a closure in a ref because React state cannot see a second call in the
+same tick.
+
+**The reference is what the device holds.** `fieldReferenceFor(deviceRows, currentIds)` rebuilds a
+field's id list from `getAttachmentsForEntry` rather than adding to or subtracting from the `ids`
+the render closed over. Two writes in one tick otherwise read the same stale list and one row ends
+up named by nothing — and such a row is *invisible and countable at the same time*, because the
+item list is built from the reference while the ceiling is counted from the device. That is what
+turned a duplicated clip into a dead end: full field, empty screen, no button to press.
+
+It also **adopts** an unreferenced row instead of ignoring it. That is deliberate and is the only
+way a tablet already carrying an orphan can be freed: opening the field repairs the reference, the
+row appears, and the operator can delete it. Narrow by construction — only rows for exactly this
+(sheet, asset, field), which are that field's own captures. Nothing is invented, nothing deleted.
+
+Both rules are exercised by `attachmentCapture.test.ts` and were verified in a browser against a
+real draft sheet, for audio and for video.
+
 ### Bundle merge
 
 `mergeLogSheetBundle` merges a server bundle into local state **without clobbering unsynced
