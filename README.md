@@ -768,6 +768,19 @@ that state, because the `synced` stamp only exists after the server committed th
 > the sheet `EXPIRED` rather than restoring `SUBMITTED` — a completed round becomes a missed one
 > in the compliance report. Reopen only when the correction will actually be made.
 
+**A round the supervisor has approved cannot be reopened until they withdraw the approval.** The
+server gained an `APPROVED` status — a sign-off laid on top of `SUBMITTED` — and `reopen`, `void`
+and `extend` all refuse it, so the history always records who took the sign-off back. On this
+device `APPROVED` means exactly what `SUBMITTED` means: the round is delivered, the inbox never
+lists it, and «ادامه‌ی کار» is not offered. The chip reads **تأییدشده**.
+
+That equivalence is a real invariant rather than a convenience. Every branch of
+`alignLocalWorkflowWithServer` ends in `return null` meaning *nothing to do*, so a status the
+device did not recognise would leave a stale local draft alive and editable for a round the
+server had closed — the operator would edit it, submit, and have it voided as superseded with
+nothing to show for the work. `isCompletedServerStatus` in `src/types` is the single place that
+answers "did the server consider this delivered", and every check goes through it.
+
 ### 6. Status in My Work
 
 | Local state | Chip in inbox list |
@@ -775,6 +788,7 @@ that state, because the `synced` stamp only exists after the server committed th
 | Draft, in progress | Server status (e.g. In progress) |
 | Submitted, not synced | **Completed — pending sync** |
 | Submitted, synced | **Sent** |
+| Submitted, synced, server status `APPROVED` | **تأییدشده** — a supervisor signed the round off; identical to *Sent* in every behaviour |
 | Submitted, synced, server reopened it with a future deadline | **بازگشایی شده — قابل ادامه** |
 
 ### 7. Active inbox UI (`LogSheetListPage` — mode `active`)

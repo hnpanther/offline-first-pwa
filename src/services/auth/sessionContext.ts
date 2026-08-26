@@ -32,7 +32,7 @@ import {
 import { toIdString } from '@/utils/ids'
 import { fetchBootstrap } from '@/services/api'
 import { useAppStore } from '@/store'
-import type { LogSheet } from '@/types'
+import { isCompletedServerStatus, type LogSheet } from '@/types'
 
 const SESSION_USER_ID_KEY = 'sessionUserId'
 const LAST_USERNAME_KEY = 'lastSessionUsername'
@@ -366,7 +366,7 @@ export async function loadLogSheetsForSessionUser(
 
     const completedOwnWork =
       archived.status === 'submitted' &&
-      (archived.syncStatus === 'synced' || archived.serverStatus === 'SUBMITTED')
+      (archived.syncStatus === 'synced' || isCompletedServerStatus(archived.serverStatus))
 
     merged.push({
       ...archived,

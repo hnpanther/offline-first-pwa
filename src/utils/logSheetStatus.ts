@@ -1,4 +1,4 @@
-import type { LogSheet } from '@/types'
+import { isCompletedServerStatus, type LogSheet } from '@/types'
 import type { FieldDefinition } from '@/types/sync'
 import {
   describeSubmitBlockingIssues,
@@ -69,7 +69,8 @@ export function isLogSheetExpiredForSync(
 export function isSupersededSyncError(
   sheet: Pick<LogSheet, 'status' | 'syncStatus' | 'serverStatus' | 'syncError'>
 ): boolean {
-  if (sheet.status === 'submitted' && sheet.syncStatus === 'failed' && sheet.serverStatus === 'SUBMITTED') {
+  if (sheet.status === 'submitted' && sheet.syncStatus === 'failed'
+      && isCompletedServerStatus(sheet.serverStatus)) {
     return true
   }
   const syncError = sheet.syncError
@@ -178,7 +179,7 @@ export function canSubmitLogSheet(
   if (isLogSheetExpired(sheet, now)) {
     return { ok: false, reason: SYNC_OUTCOME_MESSAGES.EXPIRED }
   }
-  if (sheet.serverStatus === 'SUBMITTED' && sheet.syncStatus === 'synced') {
+  if (isCompletedServerStatus(sheet.serverStatus) && sheet.syncStatus === 'synced') {
     return { ok: false, reason: 'این کار قبلاً ثبت نهایی شده است.' }
   }
 

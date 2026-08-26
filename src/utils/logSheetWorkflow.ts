@@ -1,4 +1,4 @@
-import type { LogSheet } from '@/types'
+import { isCompletedServerStatus, type LogSheet } from '@/types'
 import type { ServerLogSheet } from '@/services/api'
 import {
   isAssigneeMismatch,
@@ -24,7 +24,11 @@ export function alignLocalWorkflowWithServer(
     return null
   }
 
-  if (serverSheet.status === 'SUBMITTED') {
+  // APPROVED as well as SUBMITTED: a reviewed round is a delivered round, and the device has to
+  // give up its local copy for both. Left out, an approved sheet falls through every branch below
+  // to `return null`, and the stale draft stays alive and editable for work the server has closed
+  // — the operator submits it, the server voids it as superseded, and their round disappears.
+  if (isCompletedServerStatus(serverSheet.status)) {
     return 'mark-synced'
   }
 
@@ -163,7 +167,7 @@ export function canContinueReopenedLogSheet(
   }
 
   const status = serverSheet.status ?? null
-  if (status === 'SUBMITTED') {
+  if (isCompletedServerStatus(status)) {
     return { ok: false, reason: 'این کار روی سرور همچنان ثبت نهایی است و بازگشایی نشده است.' }
   }
   if (status === 'CANCELLED') {

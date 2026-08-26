@@ -118,6 +118,48 @@ describe('alignLocalWorkflowWithServer', () => {
     expect(alignLocalWorkflowWithServer(local, server)).toBeNull()
   })
 
+  /**
+   * The failure mode APPROVED introduced, and the reason `isCompletedServerStatus` exists.
+   *
+   * An unhandled status falls through every branch to `return null`, which means "nothing to do"
+   * — so the device keeps a stale local draft alive and editable for a round the server has
+   * closed. The operator edits it, submits, the server voids it as superseded, and from their
+   * side the work simply vanished. Approval is a review laid on top of completion, not a
+   * different kind of completion, so it has to resolve exactly as SUBMITTED does.
+   */
+  it('marks a synced local sheet as delivered when the server has APPROVED it', () => {
+    const local = baseLocal({
+      status: 'submitted',
+      syncStatus: 'synced',
+      assigneeUserId: '2',
+      localOwnerUserId: '2'
+    })
+    const server = baseServer({ assigneeUserId: 2, status: 'APPROVED' })
+
+    expect(alignLocalWorkflowWithServer(local, server)).toBe('mark-synced')
+    // ...and identically for SUBMITTED, which is the point: the two must not diverge.
+    expect(alignLocalWorkflowWithServer(local, baseServer({ assigneeUserId: 2, status: 'SUBMITTED' })))
+      .toBe('mark-synced')
+  })
+
+  it('an APPROVED server sheet resolves a local draft the same way a SUBMITTED one does', () => {
+    const local = baseLocal({ status: 'draft', assigneeUserId: '2', localOwnerUserId: '2' })
+
+    expect(alignLocalWorkflowWithServer(local, baseServer({ assigneeUserId: 2, status: 'APPROVED' })))
+      .toBe('mark-synced')
+  })
+
+  /**
+   * The other half of the pending-submission guarantee. An operator whose own submission has not
+   * left the device must not have it silently discarded because somebody else's round reached
+   * APPROVED — exactly the regression already pinned for SUBMITTED above.
+   */
+  it('never resolves a still-unsynced pending submission because the server shows APPROVED', () => {
+    const local = baseLocal({ status: 'submitted', syncStatus: 'pending' })
+
+    expect(alignLocalWorkflowWithServer(local, baseServer({ status: 'APPROVED' }))).toBeNull()
+  })
+
   it('does not reset a cancelled sheet even if the assignee also changed', () => {
     // The CANCELLED early-return must win before any assignee-mismatch reset logic runs —
     // a cancelled sheet's data must never be silently wiped, matching EXPIRED's guarantee.
@@ -295,6 +337,19 @@ describe('canContinueReopenedLogSheet', () => {
     // device's submission landed still shows the sheet open. Reopening on that would let the
     // operator edit a completed sheet and earn a DUPLICATE/SUPERSEDED refusal on resubmit.
     const result = canContinueReopenedLogSheet(reopenedServer({ status: 'SUBMITTED' }), me)
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('ثبت نهایی')
+  })
+
+  /**
+   * And the same refusal once a supervisor has approved it. A round that has been reviewed and
+   * accepted is further from reopenable than a merely completed one, so the branch that refuses
+   * SUBMITTED must cover APPROVED or the operator is invited to edit a closed round and earns a
+   * SUPERSEDED refusal for their trouble.
+   */
+  it('refuses an APPROVED sheet for the same reason it refuses a SUBMITTED one', () => {
+    const result = canContinueReopenedLogSheet(reopenedServer({ status: 'APPROVED' }), me)
 
     expect(result.ok).toBe(false)
     expect(result.reason).toContain('ثبت نهایی')

@@ -131,7 +131,11 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         ...fieldDefinitionsPatch,
         status: 'submitted',
         syncStatus: 'synced',
-        serverStatus: 'SUBMITTED',
+        // The server's own value, not a hard-coded 'SUBMITTED'. This branch fires for any
+        // completed round, and since approval that can be APPROVED — writing 'SUBMITTED' over it
+        // would make the device's copy disagree with the server about a status the reopen
+        // detection and the history chip both read.
+        serverStatus: serverSheet.status ?? 'SUBMITTED',
         syncError: undefined,
         syncedAt: existing.syncedAt ?? Date.now(),
         entries,

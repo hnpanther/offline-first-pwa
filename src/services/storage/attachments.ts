@@ -80,11 +80,28 @@ export async function markAttachmentPendingDelete(id: string): Promise<void> {
  * divergence this mechanism exists to prevent. Found in a live run: the unit tests missed it
  * because they called the marker directly and never went through the component's snapshot.
  *
+ * **The question is "might the server have this", not "do we know it does".** The condition used
+ * to be `syncStatus === 'synced'`, which is the second question, and the two differ exactly when
+ * it matters: an upload whose response never arrived — a timeout, a 502, a link that dropped
+ * after the server committed — leaves the row `pending` or `failed` here while the file sits on
+ * the server. Deleting such a row locally orphans the server's copy, and because the server
+ * counts its own rows against the per-field ceiling, a one-clip field is then **full forever**
+ * with nothing the operator can delete: the device no longer knows the file exists. That is a
+ * dead end an operator cannot escape, and it was reached in the field on a one-video field.
+ *
+ * Asking the server to delete something it does not have costs one request: `drainPendingDeletes`
+ * already treats `404` as the desired end state. Being wrong in that direction costs a no-op;
+ * being wrong the other way costs the operator the rest of their round. Same trade as
+ * `isPermanentFailure`'s 403 branch, for the same reason.
+ *
+ * A row with no `logSheetServerId` still goes locally: the upload queue is gated on that field,
+ * so the file cannot have reached the server and there is nothing to ask about.
+ *
  * @returns `queued` when the server still has to be told, `dropped` when the row was local only
  */
 export async function removeAttachment(id: string): Promise<'queued' | 'dropped'> {
   const row = await getAttachment(id)
-  if (row?.logSheetServerId && row.syncStatus === 'synced') {
+  if (row?.logSheetServerId) {
     await markAttachmentPendingDelete(id)
     return 'queued'
   }

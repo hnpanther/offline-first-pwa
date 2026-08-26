@@ -76,6 +76,7 @@ function serverStatusLabel(status?: string | null): string {
     case 'IN_PROGRESS': return 'در حال انجام'
     case 'PENDING': return 'در انتظار پیک‌آپ'
     case 'SUBMITTED': return 'ارسال شده'
+    case 'APPROVED': return 'تأییدشده'
     case 'EXPIRED': return 'منقضی'
     case 'CANCELLED': return 'لغو شده'
     default: return status ?? '—'

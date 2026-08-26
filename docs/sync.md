@@ -205,7 +205,7 @@ device:
 
 | Outcome | Meaning | Device does |
 |---|---|---|
-| `SUBMITTED` | Accepted | Mark synced, stamp `serverId`, release attachments |
+| `SUBMITTED` | Accepted | Mark synced, stamp `serverId`, release attachments. (The *outcome* name; the sheet's later `APPROVED` status is a separate thing — see below) |
 | `DUPLICATE` | Already had it (a retry) | Treat as success — this is idempotency working |
 | `EXPIRED` | Deadline passed server-side | Keep the data, surface the state; **not** an error |
 | `CANCELLED` | The round was called off | Same |
@@ -254,6 +254,7 @@ its rule is narrow: **update what the server owns, never destroy what the operat
 | A completion was rejected as `EXPIRED` but finished **in time** | Re-queued with a **fresh `clientActionId`** — the old one was already answered, so reusing it would read as a replay |
 | A completion genuinely finished **late** | Left refused. Reviving it would push work the server has already ruled on, on every pass, forever |
 | A completion was submitted but never sent, and the deadline passed | Marked failed/`EXPIRED`, data kept, available as a void submission when it is pushed |
+| A supervisor **approved** the completed round | The local row takes `serverStatus: 'APPROVED'` and stays delivered. Nothing else changes: the readings are the record of what happened at the equipment, and a review is not a reason to touch them |
 | Nothing changed | Nothing changes — the merge is idempotent across passes |
 
 > **Absence is not a reason.** The inbox says only that a sheet is no longer assigned, never
@@ -263,6 +264,59 @@ its rule is narrow: **update what the server owns, never destroy what the operat
 > `CANCELLED` submit outcome, a later pull must not talk it back down to a guess.
 
 Regression tests: [`logSheetLifecycle.test.ts`](../src/services/sync/logSheetLifecycle.test.ts).
+
+---
+
+## `APPROVED`: a status this device must treat as ordinary
+
+The server gained an `APPROVED` status — a supervisor's sign-off laid on top of `SUBMITTED`. On
+this device it means **exactly** what `SUBMITTED` means: the round is delivered, the server owns
+it, and nothing here behaves differently.
+
+That sounds like it needs no work, and that is the trap.
+
+**An unhandled status is not inert.** Every branch of `alignLocalWorkflowWithServer` ends in
+`return null`, which means *nothing to do*. A status it does not recognise therefore falls all the
+way through and leaves the stale local draft **alive and editable** for a round the server has
+closed. The operator edits it, submits, the server voids it as superseded — and from their side
+the work simply vanished, with no error anywhere on either machine.
+
+So the completed test is a named function rather than a comparison, and every check that read
+`serverStatus === 'SUBMITTED'` now goes through it:
+
+```ts
+// src/types
+export function isCompletedServerStatus(status?: LogSheetServerStatus | null): boolean {
+  return status === 'SUBMITTED' || status === 'APPROVED'
+}
+```
+
+| Reader | Why it has to accept both |
+|---|---|
+| `alignLocalWorkflowWithServer` | Resolves the local copy — `'mark-synced'`. The failure above |
+| `canContinueReopenedLogSheet` | Refuses «ادامه‌ی کار» on a closed round. An approved round is *further* from reopenable than a completed one |
+| `canSubmitLogSheet` | Blocks a second submit of work the server already holds |
+| `isSupersededSyncError` | Recognises "somebody else's completion beat mine" |
+| `loadLogSheetsForSessionUser` | Decides whether an archived row was this operator's own completed work |
+
+Two writes are worth knowing about:
+
+- **`applyLogSheetBundle` stores the server's own status**, `serverSheet.status ?? 'SUBMITTED'`,
+  where it used to hard-code `'SUBMITTED'` on the completed branch. That was harmless while
+  `SUBMITTED` was the only completed status and became a lie the day `APPROVED` existed — the row
+  would disagree with the server about a value the list chip and the reopen detection both read.
+- **The batch-submit outcomes still write `'SUBMITTED'`**, because that is genuinely what the
+  response tells us: an outcome of `SUBMITTED` means this device just delivered it, and a
+  `DUPLICATE` or `SUPERSEDED` carries no status at all. The next bundle refresh corrects a round
+  that had already been approved. Nothing reads the difference — both go through
+  `isCompletedServerStatus`.
+
+**An approved sheet is never in the inbox** (the server's inbox is `ASSIGNED` and `IN_PROGRESS`
+only), and `shouldMarkDraftRevokedForMissingInbox` has an allow-list of `ASSIGNED` /
+`IN_PROGRESS` / `PENDING` — so its absence is not read as a revocation.
+
+Regression tests: [`approvedLogSheet.test.ts`](../src/services/sync/approvedLogSheet.test.ts) and
+the `APPROVED` cases in [`logSheetWorkflow.test.ts`](../src/utils/logSheetWorkflow.test.ts).
 
 ---
 
@@ -554,9 +608,9 @@ again into a second, then:
 LIVE_BUNDLE_BEFORE=before.json LIVE_BUNDLE_AFTER=after.json LIVE_BUNDLE_ASSET=48   npx vitest run src/services/sync/liveBundleMerge.test.ts
 ```
 
-The sheet has to be open. On a `SUBMITTED` one the device correctly gives up its local copy
-entirely (`alignLocalWorkflowWithServer` returns `reset-draft`), so the "operator's edit survives"
-case does not apply and will fail — which is the merge being right, not the test.
+The sheet has to be open. On a completed one — `SUBMITTED` **or** `APPROVED` — the device
+correctly gives up its local copy, so the "operator's edit survives" case does not apply and will
+fail. That is the merge being right, not the test.
 
 ---
 
@@ -680,6 +734,12 @@ that state, because the `synced` stamp is only written after the server committe
 
 `cleanupLogSheets` holds a reopened row back from the 24-hour synced purge while its new
 deadline stands — it is live work, and it is also the only place `filledVia` survives.
+
+**An approved round cannot be reopened at all** until the supervisor withdraws the approval:
+`reopen`, `void` and `extend` all refuse `APPROVED` on the server. The device does not need to
+know that rule — it only needs `canContinueReopenedLogSheet` to refuse the status, which it does
+through `isCompletedServerStatus`, so «ادامه‌ی کار» is never offered on a round the server would
+turn down.
 
 ---
 

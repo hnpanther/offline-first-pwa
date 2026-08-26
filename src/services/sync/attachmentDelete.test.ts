@@ -141,12 +141,24 @@ describe('deciding what a delete means, from the database rather than the screen
     expect((await getPendingAttachmentDeletes()).map(r => r.id)).toEqual(['att-1'])
   })
 
-  it('drops a file the server never received, with nothing left queued', async () => {
+  it('queues a deletion for a row still marked pending — the server may already have it', async () => {
+    // The question is "might the server have this", not "do we know it does", and the two differ
+    // exactly when it matters: an upload whose response never arrived — a timeout, a 502, a link
+    // that dropped after the server committed — leaves the row `pending` here while the file
+    // sits on the server. Taking the local-only path there orphans the server's copy, and since
+    // the server counts its own rows against the per-field ceiling a one-clip field is then full
+    // forever with nothing the operator can delete. Reached in the field on a one-video field.
     await saveAttachment(attachment({ syncStatus: 'pending' }))
 
-    expect(await removeAttachment('att-1')).toBe('dropped')
-    expect(await getAttachment('att-1')).toBeUndefined()
-    expect(await getPendingAttachmentDeletes()).toEqual([])
+    expect(await removeAttachment('att-1')).toBe('queued')
+    expect((await getPendingAttachmentDeletes()).map(r => r.id)).toEqual(['att-1'])
+  })
+
+  it('queues one for a failed row too — a refusal is not proof the file is absent', async () => {
+    await saveAttachment(attachment({ syncStatus: 'failed' }))
+
+    expect(await removeAttachment('att-1')).toBe('queued')
+    expect((await getPendingAttachmentDeletes()).map(r => r.id)).toEqual(['att-1'])
   })
 
   it('reads the row fresh, so a stale screen cannot orphan the server copy', async () => {

@@ -237,9 +237,32 @@ export type LogSheetServerStatus =
   | 'ASSIGNED'
   | 'IN_PROGRESS'
   | 'SUBMITTED'
+  /**
+   * A supervisor reviewed the completed round and accepted it.
+   *
+   * **Treat it exactly as `SUBMITTED` everywhere on this device.** Approval is a review laid on
+   * top of completion, not a different kind of completion: the round is delivered, the server
+   * owns it, and nothing here may behave differently. The one place that mattered is
+   * `alignLocalWorkflowWithServer` — an unhandled status falls through to "not open", which
+   * returns null and leaves a stale local draft alive and editable for a sheet the server has
+   * closed. The operator then submits it, the server voids it as superseded, and from their
+   * side the work vanished.
+   */
+  | 'APPROVED'
   | 'VOIDED'
   | 'EXPIRED'
   | 'CANCELLED'
+
+/**
+ * Whether the server considers this round delivered.
+ *
+ * The client-side twin of the backend's `LogSheetStatus.COMPLETED_STATUSES`. Every check that
+ * used to read `serverStatus === 'SUBMITTED'` has to go through this, for the reason spelled out
+ * on `'APPROVED'` above.
+ */
+export function isCompletedServerStatus(status?: LogSheetServerStatus | null): boolean {
+  return status === 'SUBMITTED' || status === 'APPROVED'
+}
 
 export type LogSheetAssignmentType = 'SELF_CLAIMED' | 'SUPERVISOR_ASSIGNED'
 

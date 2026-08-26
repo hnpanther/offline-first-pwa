@@ -95,6 +95,43 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 - Do not “helpfully” push all pending rows on any login.
 - **This invariant has to be applied to every new outbound-syncable local table separately** — it is not automatic. The NFC fault report feature initially missed it entirely: `getPendingNfcFaultReports()` had no per-user filter, so a report an operator filed offline and never synced before logging out would get silently uploaded — and attributed on the server to whoever logged in next on the same device — the moment that next operator's own sync ran. Found via a real browser repro (operator1 offline → fault report → logout without syncing → operator2 logs in same device → automatic sync attributes the report to operator2). Fixed by stamping `createdByUserId` at creation time (`createNfcFaultReport`) and filtering the outbound query by it, mirroring `isLogSheetOutboundOwnedByUser`. Reports with no `createdByUserId` (pre-fix legacy rows) are treated as syncable by whoever is currently logged in. Regression tests: `nfcFaultReports.test.ts`.
 
+### Attachments
+
+- **A deletion is queued for anything the server *might* hold, not only for what we know it
+  holds.** `removeAttachment` asks whether the row has a `logSheetServerId`, not whether its
+  `syncStatus` is `synced`. The two differ exactly when it matters: an upload whose response never
+  arrived — a timeout, a 502, a link that dropped after the server committed — leaves the row
+  `pending` or `failed` here while the file sits on the server. Deleting it locally orphans the
+  server's copy, and the server counts its own rows against the per-field ceiling, so a one-clip
+  field is then **full forever with nothing the operator can delete** — their device has forgotten
+  the file exists. Reached in the field on a one-video field; the replacement was refused with
+  `409` on every sync pass for the rest of the round.<br><br>
+  This is safe only because the server's `DELETE` is idempotent (`204` for an id it has never
+  seen) and `drainPendingDeletes` treats `404`/`204` as the desired end state. Anything else there
+  leaves the row queued and **stops the pass**, so one undeliverable deletion wedges every
+  deletion behind it. Regression tests: `attachmentDelete.test.ts`.
+
+### Server statuses
+
+- **Never compare `serverStatus` to `'SUBMITTED'`. Use `isCompletedServerStatus` (`src/types`).**
+  The server has two completed statuses — `SUBMITTED` (delivered, awaiting review) and `APPROVED`
+  (a supervisor signed it off) — and on this device they mean exactly the same thing.<br><br>
+  The reason this is an invariant and not a style note: **an unhandled status is not inert.**
+  Every branch of `alignLocalWorkflowWithServer` ends in `return null`, meaning *nothing to do*,
+  so a status it does not recognise falls through and leaves the stale local draft **alive and
+  editable** for a round the server has closed. The operator edits it, submits, the server voids
+  it as superseded — and from their side the work vanished, with no error on either machine. The
+  same shape will swallow the next status somebody adds server-side, so widen the helper rather
+  than the call sites. Readers that must accept both: `alignLocalWorkflowWithServer`,
+  `canContinueReopenedLogSheet`, `canSubmitLogSheet`, `isSupersededSyncError`,
+  `loadLogSheetsForSessionUser`.<br><br>
+  Related: `applyLogSheetBundle` writes `serverSheet.status ?? 'SUBMITTED'` rather than a
+  hard-coded `'SUBMITTED'`, or the local row disagrees with the server about a value the list chip
+  and the reopen detection both read. The **batch-submit** outcomes still write `'SUBMITTED'`
+  deliberately — that is genuinely what that response tells us, and the next bundle refresh
+  corrects a round that was already approved. Regression tests: `approvedLogSheet.test.ts`,
+  `logSheetWorkflow.test.ts`.
+
 ### Log sheet merge
 
 - **A deadline is judged on `completedAt`, not on when the sync happened — and `EXPIRED` is not final.** The device keeps an on-time offline completion queued however late the link returns (`isLogSheetExpiredForSync`), and the server accepts it even against an already-`EXPIRED` sheet (`submitIfStillCompletable`: `dueAt >= completedAt`, with `EXPIRED` in `COMPLETABLE_STATUSES`). Both halves are required — drop either and every round walked out of coverage is lost to the expiry scheduler, which is the exact scenario this app exists for. Two consequences that look like bugs and are not: a submission rejected as `EXPIRED` while the two sides disagreed is **re-queued** by the next inbox merge if the device can prove it finished in time, with a **fresh `clientActionId`** (the old one was already answered, so reusing it reads as a replay); and a genuinely late completion is deliberately **not** revived, because it would be pushed and refused on every pass forever. A draft has no completion to date it by, so it is judged on the wall clock. Regression tests: `logSheetLifecycle.test.ts` here, `completedBeforeDueAcceptedEvenWhenServerMarkedExpired` / `lateCompletionAfterExpiryStaysExpired` on the server.
