@@ -249,6 +249,50 @@ describe('draining deletions on an unsubmitted sheet', () => {
     expect((await getPendingAttachmentDeletes()).map(r => r.id)).toEqual(['att-1'])
   })
 
+  it('keeps a frozen one queued but does not let it hold up the rest of the queue', async () => {
+    // 409 is the server saying "not this one, not yet": an approved round's evidence cannot be
+    // removed until somebody withdraws the approval. The deletion is still wanted, so the row
+    // stays — but the pass must carry on, or one frozen sheet would stall every unrelated
+    // deletion on the device behind it.
+    await seedSheet('draft')
+    await saveAttachment(attachment({ id: 'a-frozen' }))
+    await saveAttachment(attachment({ id: 'b-ordinary' }))
+    await markAttachmentPendingDelete('a-frozen')
+    await markAttachmentPendingDelete('b-ordinary')
+    const attempted: string[] = []
+    deleteRemoteAttachment.mockImplementation(async (id: string) => {
+      attempted.push(id)
+      if (id === 'a-frozen') throw new ApiError(409, 'این لاگ‌شیت تأیید شده است')
+    })
+
+    const result = await syncPendingAttachments()
+
+    // The frozen row is reached first (Dexie iterates the primary key, and 'a' < 'f'),
+    // so a  here would leave the ordinary one undeleted — which is the wedge.
+    expect(attempted[0]).toBe('a-frozen')
+    expect(await getAttachment('a-frozen')).toBeDefined()
+    expect(await getAttachment('b-ordinary')).toBeUndefined()
+    expect(result.deleted).toBe(1)
+  })
+
+  it('delivers a frozen deletion once the approval is withdrawn', async () => {
+    // Which is why the row is kept rather than dropped: the refusal is about the sheet's state
+    // right now, and that state is reversible by a recorded act.
+    await seedSheet('draft')
+    await saveAttachment(attachment())
+    await markAttachmentPendingDelete('att-1')
+    deleteRemoteAttachment.mockRejectedValueOnce(new ApiError(409, 'approved'))
+
+    await syncPendingAttachments()
+    expect(await getAttachment('att-1')).toBeDefined()
+
+    deleteRemoteAttachment.mockResolvedValue(undefined)
+    const result = await syncPendingAttachments()
+
+    expect(result.deleted).toBe(1)
+    expect(await getAttachment('att-1')).toBeUndefined()
+  })
+
   it('keeps it queued when the server refuses the deletion', async () => {
     await seedSheet('draft')
     await saveAttachment(attachment())

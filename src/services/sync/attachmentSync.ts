@@ -186,7 +186,22 @@ async function drainPendingDeletes(
         // Offline. The row stays marked and the next pass tries again.
         break
       }
-      // Anything else (403, 409, a 5xx): leave it queued rather than dropping the row, or the
+      if (err instanceof ApiError && err.status === 409) {
+        // The server will not remove this one *yet* — an approved round's evidence is frozen
+        // until somebody withdraws the approval. That is a fact about this sheet and nothing
+        // else, so the row stays queued (the deletion is still wanted, and becomes possible the
+        // moment the approval is withdrawn) while the pass moves on to the others.
+        //
+        // `continue`, not `break`: the old catch-all stopped the whole queue behind the first
+        // refusal, so one frozen sheet would have held up every unrelated deletion on the device
+        // — the wedge gotcha #109 fixed for a different cause and would have reintroduced here.
+        //
+        // Reachable even though `drainPendingDeletes` skips a sheet the device already knows is
+        // delivered: a round completed and approved on the web while this tablet still holds it
+        // as a local draft reaches the server branch, and only learns better on the next bundle.
+        continue
+      }
+      // Anything else (403, a 5xx): leave it queued rather than dropping the row, or the
       // deletion would be forgotten and the slot stay consumed with nothing left to retry.
       break
     }
