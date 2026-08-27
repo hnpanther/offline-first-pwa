@@ -48,10 +48,3 @@ export function useMasterDataSync(): void {
     }
   }, [isOnline, attemptPull])
 }
-
-export function useForceBootstrapPull(): () => Promise<{ success: boolean; error?: string }> {
-  return useCallback(async () => {
-    const result = await pullBootstrapIfStale(0)
-    return { success: result.success, error: result.error }
-  }, [])
-}

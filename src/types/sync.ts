@@ -105,13 +105,6 @@ export interface FieldDefinition extends SyncableRecord {
 // Attributes
 // ---------------------------------------------------------------------------
 
-/**
- * Dynamic field values for one asset instance in a log sheet entry.
- * Keys correspond to FieldDefinition.key values for the asset's class.
- * e.g. { temperature: 85.5, pressure: 1.2, status: "normal" }
- */
-export type AttributeMap = Record<string, unknown>
-
 // ---------------------------------------------------------------------------
 // Outbox
 // ---------------------------------------------------------------------------

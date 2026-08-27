@@ -132,16 +132,6 @@ export async function fetchLogSheetBundle(
   return apiClient.get<LogSheetBundleDto>(`/api/log-sheets/${serverId}/bundle`, signal)
 }
 
-export async function fetchLogSheetEntries(
-  serverId: number | string,
-  signal?: AbortSignal
-): Promise<ServerLogSheetEntry[]> {
-  return apiClient.get<ServerLogSheetEntry[]>(
-    `/api/log-sheets/${serverId}/entries`,
-    signal
-  )
-}
-
 export async function claimLogSheet(
   serverId: number | string,
   signal?: AbortSignal
