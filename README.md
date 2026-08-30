@@ -425,6 +425,44 @@ npm run setup:mkcert
 4. User engagement on the site
 5. Install from **port 4173**, not 5173
 
+### Why the same install sometimes carries a Chrome badge
+
+Two different things are called "install", and which one you get is decided by the network the
+tablet is on at that moment — not by anything in this repository.
+
+| | What you get | When |
+|---|---|---|
+| **WebAPK** | Its own icon in the app drawer, no Chrome badge, its own entry in Recents, fully standalone | Chrome could reach Google's minting service |
+| **Legacy shortcut** | Home-screen icon with a small Chrome badge, and Chrome UI may remain visible | It could not |
+
+A WebAPK is **built on Google's servers**: Chrome posts the manifest and icons it has already
+fetched, and receives a signed APK. That call needs working internet and Play Services *at the
+moment of installation*. On an isolated plant network it cannot happen, so Chrome falls back to
+the shortcut. Nothing is wrong with the manifest when this happens — the same build installs
+cleanly on a tablet that has a route to the internet.
+
+Two consequences worth knowing. Google's servers never contact **your** server, so a private
+origin can still be minted — a tablet that is on plant Wi-Fi *and* has any internet path can
+produce a proper WebAPK for `https://pwa.hnp.com`. And the manifest and icons do leave the site in
+that request, which is a decision for whoever owns the plant's network policy, not a technical
+detail.
+
+Once installed, a WebAPK keeps working offline; only a change to the **manifest** (name, icons,
+scope) needs internet again. Code and service-worker updates do not.
+
+### Installing without internet at all — TWA
+
+Where the fleet never has an internet path, or where sending the manifest to Google is not
+acceptable, the alternative is to wrap this PWA in a **Trusted Web Activity** and install a real
+APK you build and sign yourself. It reuses Chrome's engine *and its storage for this origin*,
+which is the property that matters here: the operator's IndexedDB, service worker and unsynced
+drafts survive the switch, where a WebView wrapper would strand them in a separate partition.
+
+Mentioned as an option, not a procedure. The pieces it needs are `@bubblewrap/cli` (or
+PWABuilder) on a machine with internet to build, a signing key kept for the life of the app, and
+`/.well-known/assetlinks.json` served from this origin carrying that key's SHA-256 fingerprint —
+Chrome fetches it from your server on the device, so verification itself works offline.
+
 ---
 
 ## Authentication and Roles
