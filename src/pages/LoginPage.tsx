@@ -91,84 +91,160 @@ export function LoginPage() {
 
   return (
     <Box
+      component="main"
       sx={{
-        minHeight: '100vh',
+        minHeight: '100dvh',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: 'background.default',
-        p: 2
+        bgcolor: '#f3f6f9',
+        backgroundImage:
+          'radial-gradient(circle at 12% 8%, rgba(21, 101, 192, 0.07), transparent 30%), radial-gradient(circle at 88% 92%, rgba(0, 137, 123, 0.055), transparent 28%)',
+        px: { xs: 2, sm: 3 },
+        pt: 'max(20px, env(safe-area-inset-top))',
+        pb: 'max(20px, env(safe-area-inset-bottom))'
       }}
     >
-      <Card sx={{ width: '100%', maxWidth: 420 }}>
-        <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, p: 3 }}>
+      <Card
+        variant="outlined"
+        sx={{
+          width: '100%',
+          maxWidth: 390,
+          borderColor: '#dde5ed',
+          borderRadius: 3,
+          boxShadow: '0 12px 34px rgba(28, 48, 69, 0.08)',
+          overflow: 'hidden'
+        }}
+      >
+        <Box sx={{ height: 3, bgcolor: 'primary.main' }} aria-hidden="true" />
+        <CardContent
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            p: { xs: 2.5, sm: 3.25 },
+            '&:last-child': { pb: { xs: 2.5, sm: 3.25 } }
+          }}
+        >
           <Box sx={{ textAlign: 'center' }}>
+            <Box
+              sx={{
+                width: 42,
+                height: 42,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                mb: 1.25,
+                color: 'primary.main',
+                border: '1px solid #d7e5f5',
+                borderRadius: 2.5,
+                bgcolor: '#eef5fd'
+              }}
+              aria-hidden="true"
+            >
+              <LoginIcon fontSize="small" />
+            </Box>
             <Typography
-              variant="subtitle2"
+              variant="caption"
               color="primary"
               fontWeight={600}
-              sx={{ letterSpacing: 0.3 }}
+              sx={{ display: 'block', mb: 0.35, letterSpacing: 0.2 }}
             >
               {t.app.name}
             </Typography>
-            <Typography variant="h5" fontWeight={700} gutterBottom>
+            <Typography variant="h5" fontWeight={750} sx={{ mb: 0.5, color: '#24384d' }}>
               {t.auth.loginTitle}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.82rem' }}>
               {t.auth.loginSubtitle}
-            </Typography>
-            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }} dir="ltr">
-              {settings.serverUrl}
             </Typography>
           </Box>
 
-          {sessionNotice && <Alert severity="warning">{sessionNotice}</Alert>}
-          {error && <Alert severity="error">{error}</Alert>}
+          {sessionNotice && <Alert severity="warning" sx={{ py: 0.25 }}>{sessionNotice}</Alert>}
+          {error && <Alert severity="error" sx={{ py: 0.25 }}>{error}</Alert>}
 
-          <Controller
-            name="username"
-            control={control}
-            rules={{ required: true }}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label={t.auth.username}
-                fullWidth
-                autoComplete="username"
-                autoFocus
-                disabled={submitting}
-              />
-            )}
-          />
-
-          <Controller
-            name="password"
-            control={control}
-            rules={{ required: true }}
-            render={({ field }) => (
-              <TextField
-                {...field}
-                label={t.auth.password}
-                type="password"
-                fullWidth
-                autoComplete="current-password"
-                disabled={submitting}
-              />
-            )}
-          />
-
-          <Button
-            variant="contained"
-            size="large"
-            fullWidth
-            onClick={() => void handleSubmit(onSubmit)()}
-            disabled={submitting}
-            startIcon={
-              submitting ? <CircularProgress size={18} color="inherit" /> : <LoginIcon />
-            }
+          <Box
+            component="form"
+            onSubmit={handleSubmit(onSubmit)}
+            noValidate
+            sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}
           >
-            {submitting ? t.auth.loggingIn : t.auth.login}
-          </Button>
+            <Controller
+              name="username"
+              control={control}
+              rules={{ required: true }}
+              render={({ field }) => (
+                <TextField
+                  {...field}
+                  label={t.auth.username}
+                  fullWidth
+                  autoComplete="username"
+                  autoFocus
+                  disabled={submitting}
+                  size="small"
+                  inputProps={{ enterKeyHint: 'next' }}
+                />
+              )}
+            />
+
+            <Controller
+              name="password"
+              control={control}
+              rules={{ required: true }}
+              render={({ field }) => (
+                <TextField
+                  {...field}
+                  label={t.auth.password}
+                  type="password"
+                  fullWidth
+                  autoComplete="current-password"
+                  disabled={submitting}
+                  size="small"
+                  inputProps={{ enterKeyHint: 'go' }}
+                />
+              )}
+            />
+
+            <Button
+              type="submit"
+              variant="contained"
+              size="large"
+              fullWidth
+              disabled={submitting}
+              startIcon={
+                submitting ? <CircularProgress size={18} color="inherit" /> : <LoginIcon />
+              }
+              sx={{ minHeight: 48, mt: 0.25, borderRadius: 2.25, boxShadow: 'none' }}
+            >
+              {submitting ? t.auth.loggingIn : t.auth.login}
+            </Button>
+          </Box>
+
+          <Box
+            sx={{
+              minWidth: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 0.75,
+              px: 1,
+              py: 0.7,
+              border: '1px solid #e5eaf0',
+              borderRadius: 2,
+              bgcolor: '#fafbfd'
+            }}
+          >
+            <Box sx={{ width: 6, height: 6, flex: '0 0 auto', borderRadius: '50%', bgcolor: 'success.main' }} />
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              dir="ltr"
+              noWrap
+              sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.65rem' }}
+            >
+              {settings.serverUrl}
+            </Typography>
+          </Box>
         </CardContent>
       </Card>
     </Box>

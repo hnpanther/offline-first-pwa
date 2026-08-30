@@ -440,7 +440,8 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 3. **Online** + expired JWT → session cleared, redirect to login.
 4. **Offline** + expired JWT → session still accepted (offline-first).
 5. **Login** always redirects to `/` (never restores a previous user’s deep link).
-6. **User switch** on a shared tablet clears inbox cache and isolates other users’ local work (`sessionContext.ts`). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
+6. The login form submits through its button or the keyboard’s **Enter / Go** action.
+7. **User switch** on a shared tablet clears inbox cache and isolates other users’ local work (`sessionContext.ts`). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
 
 ### Roles (frontend checks)
 
