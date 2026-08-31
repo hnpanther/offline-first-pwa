@@ -18,6 +18,9 @@ import {
 } from '@/services/storage/attachments'
 import type { LocalAttachment } from '@/types'
 
+/** Whoever is holding the tablet. Captured media is owned per row, not per sheet. */
+const OWNER = '9'
+
 /**
  * Exercises the attachment table against a real IndexedDB implementation.
  *
@@ -75,7 +78,7 @@ describe('basic persistence', () => {
     await saveAttachment(attachment({ id: 'other-field', fieldKey: 'other' }))
     await saveAttachment(attachment({ id: 'other-asset', assetId: '9' }))
 
-    const rows = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')
+    const rows = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)
     expect(rows.map(r => r.id)).toEqual(['first', 'second'])
   })
 
@@ -83,7 +86,7 @@ describe('basic persistence', () => {
     // Ids arrive as numbers from the server bundle and as strings from the form tree; the
     // lookup has to see those as the same asset or an operator's photo goes missing.
     await saveAttachment(attachment({ id: 'n', assetId: 7 as unknown as string }))
-    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')).toHaveLength(1)
+    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)).toHaveLength(1)
   })
 
   it('deletes one attachment', async () => {

@@ -17,6 +17,9 @@ import { saveLogSheet } from '@/services/storage'
 import { syncPendingAttachments } from '@/services/sync/attachmentSync'
 import type { LocalAttachment, LogSheet } from '@/types'
 
+/** Whoever is holding the tablet. Captured media is owned per row, not per sheet. */
+const OWNER = '9'
+
 const uploadAttachment = vi.fn()
 const deleteRemoteAttachment = vi.fn()
 vi.mock('@/services/api', () => ({
@@ -103,7 +106,7 @@ describe('marking a file for deletion', () => {
     await markAttachmentPendingDelete('att-1')
 
     expect(await getAttachmentsByIds(['att-1'])).toEqual([])
-    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')).toEqual([])
+    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)).toEqual([])
   })
 
   it('takes it out of the upload queue', async () => {
@@ -357,11 +360,11 @@ describe('the counted state after a delete', () => {
     await saveAttachment(attachment({ id: 'a' }))
     await saveAttachment(attachment({ id: 'b' }))
     await saveAttachment(attachment({ id: 'c' }))
-    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')).toHaveLength(3)
+    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)).toHaveLength(3)
 
     await markAttachmentPendingDelete('b')
 
-    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')).toHaveLength(2)
+    expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)).toHaveLength(2)
   })
 
   it('counts attachments this form value never referenced', async () => {
@@ -371,7 +374,7 @@ describe('the counted state after a delete', () => {
     await saveAttachment(attachment({ id: 'mine' }))
     await saveAttachment(attachment({ id: 'from-elsewhere' }))
 
-    const forField = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')
+    const forField = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)
 
     expect(forField.map(r => r.id).sort()).toEqual(['from-elsewhere', 'mine'])
   })
@@ -381,7 +384,7 @@ describe('the counted state after a delete', () => {
     await saveAttachment(attachment({ id: 'note', fieldKey: 'pump_audio', kind: 'AUDIO' }))
     await saveAttachment(attachment({ id: 'other-asset', assetId: '99' }))
 
-    const forField = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo')
+    const forField = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)
 
     expect(forField.map(r => r.id)).toEqual(['photo'])
   })

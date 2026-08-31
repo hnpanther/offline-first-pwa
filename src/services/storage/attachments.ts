@@ -1,4 +1,5 @@
 import { db } from '@/services/storage/db'
+import { parseArchivedLogSheetViewId } from '@/services/storage/logSheetArchive'
 import { toIdString } from '@/utils/ids'
 import type { AttachmentKind, AttachmentRef, LocalAttachment } from '@/types'
 
@@ -18,6 +19,28 @@ export async function saveAttachment(attachment: LocalAttachment): Promise<void>
   await db.attachments.put(attachment)
 }
 
+/**
+ * Whether this captured file belongs to the signed-in operator.
+ *
+ * The row-level twin of `isLogSheetOutboundOwnedByUser` and
+ * `isNfcFaultReportOutboundOwnedByUser`. It is deliberately **not** derived from the sheet: a
+ * reassignment reuses the same local sheet row, so the sheet's owner is the *new* operator while
+ * the media on it is still the previous one's. See `LocalAttachment.createdByUserId`.
+ *
+ * A row with no owner predates the field. It is treated as the current user's, matching the
+ * legacy rule `isNfcFaultReportOutboundOwnedByUser` already uses — refusing instead would strand
+ * media captured before the upgrade, which is evidence of work that cannot be repeated. The
+ * `stampAttachmentOwners` backfill exists so that this fallback applies to almost nothing.
+ */
+export function isAttachmentOwnedByUser(
+  attachment: Pick<LocalAttachment, 'createdByUserId'>,
+  userId: string | null
+): boolean {
+  if (!userId) return false
+  if (!attachment.createdByUserId) return true
+  return attachment.createdByUserId === userId
+}
+
 export async function getAttachment(id: string): Promise<LocalAttachment | undefined> {
   return db.attachments.get(id)
 }
@@ -28,14 +51,41 @@ export async function getAttachmentsByIds(ids: string[]): Promise<LocalAttachmen
   return rows.filter((r): r is LocalAttachment => r != null && !r.pendingDelete)
 }
 
+/**
+ * The signed-in operator's captured files for one field of one asset.
+ *
+ * <p><b>Scoped by owner, not only by sheet.</b> The local sheet row is reused when a supervisor
+ * reassigns the round, so `logSheetLocalId` alone answers "what is on this device for this
+ * field" — which is a different question from "what is *mine*", and answering the first where
+ * the second was meant is what handed one operator's photographs to the next. See
+ * `LocalAttachment.createdByUserId`.
+ *
+ * <p><b>An archived view is resolved through the snapshot's own key.</b> A previous owner's work
+ * is read at `archive:<serverId>:<userId>`, which is a route id and never a stored
+ * `logSheetLocalId` — so looking it up as one found nothing and the operator's own media
+ * appeared to have vanished. Here it is unpacked and matched on `logSheetServerId` plus that
+ * snapshot's user, which is where those rows actually live.
+ *
+ * @param ownerUserId the signed-in operator. `null` yields nothing: media with no provable owner
+ *        must not be shown to somebody who might not be entitled to it.
+ */
 export async function getAttachmentsForEntry(
   logSheetLocalId: string,
   assetId: string,
-  fieldKey: string
+  fieldKey: string,
+  ownerUserId: string | null
 ): Promise<LocalAttachment[]> {
-  const rows = await db.attachments.where('logSheetLocalId').equals(logSheetLocalId).toArray()
+  const archived = parseArchivedLogSheetViewId(logSheetLocalId)
+  const rows = archived
+    ? await db.attachments.where('logSheetServerId').equals(archived.serverId).toArray()
+    : await db.attachments.where('logSheetLocalId').equals(logSheetLocalId).toArray()
+  // An archived snapshot is that user's own record, so it is read as them rather than as
+  // whoever is holding the tablet — the route id already names whose snapshot it is, and it is
+  // only reachable from their own list.
+  const owner = archived ? archived.userId : ownerUserId
   return rows
     .filter(r => !r.pendingDelete)
+    .filter(r => isAttachmentOwnedByUser(r, owner))
     .filter(r => toIdString(r.assetId) === toIdString(assetId) && r.fieldKey === fieldKey)
     .sort((a, b) => a.createdAt - b.createdAt)
 }

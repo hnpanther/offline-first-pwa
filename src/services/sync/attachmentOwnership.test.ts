@@ -306,6 +306,42 @@ describe('who may send a file', () => {
     expect(isAttachmentUploadableByUser(sheet(), OP1)).toBe(true)
   })
 
+  /**
+   * The row's own owner is checked first and can veto the sheet.
+   *
+   * <p>After a reassignment the local sheet row is reused, so `localOwnerUserId` names the *new*
+   * operator while the media on it is still the previous one's. Judging by the sheet alone would
+   * put a colleague's photographs in this operator's outbound queue, under their token — the
+   * exact trespass this predicate exists to stop, reached from the other direction.
+   */
+  it('refuses a file a colleague captured, whatever the sheet now says', () => {
+    expect(
+      isAttachmentUploadableByUser(sheet(), OP1, { createdByUserId: OP2 })
+    ).toBe(false)
+  })
+
+  it('accepts a file this operator captured on their own sheet', () => {
+    expect(
+      isAttachmentUploadableByUser(sheet(), OP1, { createdByUserId: OP1 })
+    ).toBe(true)
+  })
+
+  /** A row captured before the field existed falls back rather than being stranded. */
+  it('accepts a row with no owner', () => {
+    expect(isAttachmentUploadableByUser(sheet(), OP1, {})).toBe(true)
+  })
+
+  /**
+   * Owning the file is necessary, not sufficient. A sheet the operator has lost still refuses
+   * it, because the server would too.
+   */
+  it('still refuses their own file on a sheet that is no longer theirs', () => {
+    expect(
+      isAttachmentUploadableByUser(sheet({ localOwnerUserId: OP2, assigneeUserId: OP2 }), OP1,
+        { createdByUserId: OP1 })
+    ).toBe(false)
+  })
+
   it('accepts a sheet assigned to them even before anything was saved locally', () => {
     expect(isAttachmentUploadableByUser(sheet({ localOwnerUserId: undefined }), OP1)).toBe(true)
   })

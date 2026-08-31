@@ -184,8 +184,10 @@ async function reviveOwnedParkedAttachmentsOnLogin(userId: string): Promise<void
       sheets.set(row.logSheetLocalId, await getLogSheet(row.logSheetLocalId))
     }
     // Judged by the same rule the queue uses, so reviving can never hand somebody a file the
-    // very next pass would refuse again.
-    if (!isAttachmentUploadableByUser(sheets.get(row.logSheetLocalId), userId)) continue
+    // very next pass would refuse again. The row goes in too: after a reassignment the sheet
+    // names the new operator while the media on it is still the previous one's, and reviving
+    // on the sheet alone would put a colleague's file back in this operator's queue.
+    if (!isAttachmentUploadableByUser(sheets.get(row.logSheetLocalId), userId, row)) continue
     await retryFailedAttachment(row.id)
   }
 }

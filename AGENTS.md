@@ -111,6 +111,33 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   leaves the row queued and **stops the pass**, so one undeliverable deletion wedges every
   deletion behind it. Regression tests: `attachmentDelete.test.ts`.
 
+### Captured media
+
+- **An attachment's owner lives on the attachment row (`createdByUserId`), never on its sheet.**
+  There is one local row per server sheet and it is **reused** when a supervisor reassigns:
+  `reset-draft` empties the readings but leaves `localId` alone and never touches
+  `db.attachments`. So the sheet's `localOwnerUserId` becomes the *new* operator while the media
+  on it is still the previous one's — and every read that keys on `logSheetLocalId` alone
+  silently changes hands with it.<br><br>
+  What that produced in the field: operator A worked offline, photographed the equipment, final
+  submitted and signed out; the round was reassigned; operator B signed in on the same tablet and
+  the fill page **adopted A's photographs into B's own reading** (`AttachmentFieldInput`'s orphan
+  repair, which had no notion of whose orphan it was), counted them against B's field ceiling so
+  B could not capture their own, and would have submitted them as B's evidence — while deleting
+  one queued a server-side delete of A's. A's own media, meanwhile, was archived behind a
+  synthetic `archive:<serverId>:<userId>` id that is not a stored `logSheetLocalId`, so it was
+  invisible to them too.<br><br>
+  `getAttachmentsForEntry` therefore takes the signed-in operator and filters on it, and
+  `isAttachmentUploadableByUser` checks the **row** before the sheet. Adoption still rescues an
+  operator's own duplicated capture — that is why it exists — it just cannot cross people any
+  more. A row with no owner predates the field and falls back to the current user, the same rule
+  `isNfcFaultReportOutboundOwnedByUser` uses; the Dexie `version(3)` backfill exists so that
+  fallback applies to almost nothing.<br><br>
+  This is the **third** outbound-syncable local table to need this, after `logSheets` and
+  `nfcFaultReports`, and it is the one that was missed — which is the point of the warning in the
+  shared-tablets section above. Regression tests: `attachmentHandover.test.ts`,
+  `attachmentOwnerMigration.test.ts`.
+
 ### Server statuses
 
 - **Never compare `serverStatus` to `'SUBMITTED'`. Use `isCompletedServerStatus` (`src/types`).**

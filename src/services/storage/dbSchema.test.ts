@@ -65,11 +65,17 @@ describe('IndexedDB schema', () => {
     // `locallyEditedAt` on entries that hold work but predate the marker — which needed a
     // version because Dexie has no other place to run one. See the block in `db.ts`.
     //
+    // Version 3 likewise adds no store and no index. It exists for one data migration —
+    // stamping `createdByUserId` on captured media that predates the field — and it needed a
+    // version for the same reason: the read-time fallback for an unstamped row is "treat it as
+    // the current user's", which is exactly wrong for a colleague's photographs already sitting
+    // on the device when the app updates.
+    //
     // This assertion is deliberately a hard-coded number rather than a range. Adding a version
     // block is a decision with consequences on every tablet — a forced upgrade that cannot be
     // rolled back — so it should take a deliberate edit here, in a file whose whole subject is
     // the schema, rather than passing silently because the check said "1 or more".
-    expect(db.verno).toBe(2)
+    expect(db.verno).toBe(3)
   })
 
   it('declares exactly the stores the app uses', () => {

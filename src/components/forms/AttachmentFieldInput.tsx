@@ -39,6 +39,7 @@ import {
   endReasonMessage
 } from '@/utils/mediaCapture'
 import { getSettings } from '@/services/storage'
+import { getSessionUserId } from '@/services/auth/sessionContext'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import type { AttachmentLimits } from '@/types'
 import { downloadAttachment } from '@/services/api'
@@ -199,7 +200,8 @@ export function AttachmentFieldInput({
     // over **every** attachment of this (sheet, asset, field) — including ones another device
     // or the web panel added, which this form value has never heard of. Counting the displayed
     // rows is what let the device believe a slot was free while the server refused it.
-    const forField = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey)
+    const forField = await getAttachmentsForEntry(
+      logSheetLocalId, assetId, fieldKey, await getSessionUserId())
     const counted = new Set(rows.map(r => r.id))
     forField.forEach(r => counted.add(r.id))
     setFieldCount(counted.size)
@@ -208,6 +210,12 @@ export function AttachmentFieldInput({
     // rather than left out — see {@link fieldReferenceFor}. Repairing it here is the only route
     // by which a tablet already carrying an orphan can be freed, and it happens the moment the
     // field is opened.
+    //
+    // `forField` is scoped to the signed-in operator, and that scoping is what makes adoption
+    // safe. Unscoped it adopted the *previous* operator's media after a reassignment — the local
+    // sheet row is reused, so their rows were still keyed to this field — and wrote them into
+    // this operator's reading as if they had taken them. An orphan is only ever adopted by the
+    // person who captured it.
     const repaired = fieldReferenceFor(forField, ids)
     if (repaired.changed && !readOnly) {
       setItems(forField)
@@ -333,8 +341,14 @@ export function AttachmentFieldInput({
    * construction: the counter has always been the device's answer, and now so is the value.
    */
   const persist = async (attachment: LocalAttachment) => {
-    await saveAttachment(attachment)
-    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey)
+    // Stamped here, in the one place every capture path funnels through, rather than in
+    // `saveAttachment`: the storage layer would have to reach back into `sessionContext` for the
+    // id, and `sessionContext` already imports this module's storage — a cycle for no gain.
+    // A capture with no resolvable session is still stored: refusing would lose the shot, and an
+    // unowned row is handled by `isAttachmentOwnedByUser`'s legacy fallback.
+    const capturedBy = await getSessionUserId()
+    await saveAttachment(capturedBy ? { ...attachment, createdByUserId: capturedBy } : attachment)
+    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, capturedBy)
     onChange(buildAttachmentRef(fieldReferenceFor(onDevice, ids).ids))
   }
 
@@ -545,7 +559,8 @@ export function AttachmentFieldInput({
     // Rebuilt from the device for the same reason as `persist`: subtracting from the id
     // list this render closed over means two deletes in quick succession disagree, and
     // the loser's list resurrects a reference to a row that is already gone.
-    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey)
+    const onDevice = await getAttachmentsForEntry(
+      logSheetLocalId, assetId, fieldKey, await getSessionUserId())
     onChange(buildAttachmentRef(fieldReferenceFor(onDevice, ids).ids))
     await refresh()
   }

@@ -56,6 +56,8 @@ vi.mock('@/services/api', () => ({
 const SHEET = 'local-1'
 const ASSET = '7'
 const FIELD = 'Audio'
+/** Whoever is holding the tablet in these cases. Media is owned per row, not per sheet. */
+const ME = '9'
 
 function clip(id: string, overrides: Partial<LocalAttachment> = {}): LocalAttachment {
   return {
@@ -71,20 +73,21 @@ function clip(id: string, overrides: Partial<LocalAttachment> = {}): LocalAttach
     blob: new Blob(['x'], { type: 'audio/webm' }),
     syncStatus: 'pending',
     createdAt: Date.now(),
+    createdByUserId: ME,
     ...overrides
   } as LocalAttachment
 }
 
 /** What the component now publishes after a capture, and what it counts. */
 async function publishedReference(currentIds: string[]): Promise<string[]> {
-  const onDevice = await getAttachmentsForEntry(SHEET, ASSET, FIELD)
+  const onDevice = await getAttachmentsForEntry(SHEET, ASSET, FIELD, ME)
   return fieldReferenceFor(onDevice, currentIds).ids
 }
 
 async function counterFor(value: unknown): Promise<number> {
   const ids = attachmentIdsOf(value)
   const rows = await getAttachmentsByIds(ids)
-  const forField = await getAttachmentsForEntry(SHEET, ASSET, FIELD)
+  const forField = await getAttachmentsForEntry(SHEET, ASSET, FIELD, ME)
   const counted = new Set(rows.map(r => r.id))
   forField.forEach(r => counted.add(r.id))
   return counted.size
@@ -171,7 +174,7 @@ describe('the published field reference', () => {
     await saveAttachment(clip('orphan', { createdAt: Date.now() + 1 }))
 
     const repaired = fieldReferenceFor(
-      await getAttachmentsForEntry(SHEET, ASSET, FIELD),
+      await getAttachmentsForEntry(SHEET, ASSET, FIELD, ME),
       ['named']
     )
 
@@ -183,7 +186,7 @@ describe('the published field reference', () => {
     await saveAttachment(clip('a'))
     await saveAttachment(clip('b', { createdAt: Date.now() + 1 }))
 
-    expect(fieldReferenceFor(await getAttachmentsForEntry(SHEET, ASSET, FIELD), ['a', 'b']).changed)
+    expect(fieldReferenceFor(await getAttachmentsForEntry(SHEET, ASSET, FIELD, ME), ['a', 'b']).changed)
       .toBe(false)
   })
 
@@ -191,7 +194,7 @@ describe('the published field reference', () => {
     await saveAttachment(clip('a'))
 
     const repaired = fieldReferenceFor(
-      await getAttachmentsForEntry(SHEET, ASSET, FIELD),
+      await getAttachmentsForEntry(SHEET, ASSET, FIELD, ME),
       ['a', 'vanished']
     )
 
@@ -294,5 +297,65 @@ describe('record, delete, record again on a one-clip field', () => {
     const afterDelete = buildAttachmentRef(await publishedReference(attachmentIdsOf(repaired)))
 
     expect(await counterFor(afterDelete)).toBe(0)
+  })
+})
+
+/**
+ * A tablet that changed hands mid-round.
+ *
+ * <p>The local sheet row is **reused** when a supervisor reassigns: same `localId`, readings
+ * emptied by `reset-draft`, and `db.attachments` untouched. So the previous operator's rows are
+ * still keyed to this exact (sheet, asset, field) — and every read here used to find them.
+ *
+ * <p>What that produced in the field: the new operator opened the fill form and the previous
+ * operator's photographs were **adopted** into their own reading, displayed as theirs, and
+ * submitted under their name; the counter said the field was full so they could not capture
+ * their own; and deleting one queued a server-side delete of somebody else's evidence.
+ */
+describe('media captured by a colleague on the same device', () => {
+  const THEM = '4'
+
+  it('is not adopted into this operator\'s reading', async () => {
+    await saveAttachment(clip('theirs', { createdByUserId: THEM }))
+
+    // The reading is empty — `reset-draft` cleared it when the sheet changed hands.
+    expect(await publishedReference([])).toEqual([])
+  })
+
+  it('does not fill this operator\'s field counter', async () => {
+    await saveAttachment(clip('theirs-1', { createdByUserId: THEM }))
+    await saveAttachment(clip('theirs-2', { createdByUserId: THEM }))
+
+    expect(await counterFor(buildAttachmentRef([]))).toBe(0)
+  })
+
+  it('leaves this operator free to capture their own, which is all they then hold', async () => {
+    await saveAttachment(clip('theirs', { createdByUserId: THEM }))
+    await saveAttachment(clip('mine'))
+
+    expect(await publishedReference([])).toEqual(['mine'])
+    expect(await counterFor(buildAttachmentRef(['mine']))).toBe(1)
+  })
+
+  /**
+   * The reason adoption exists at all — a duplicated capture leaving a row nothing references —
+   * still works. Narrowing it to the owner must not disarm it.
+   */
+  it('still adopts this operator\'s own orphan', async () => {
+    await saveAttachment(clip('mine-orphan'))
+
+    expect(await publishedReference([])).toEqual(['mine-orphan'])
+  })
+
+  /**
+   * Rows captured before `createdByUserId` existed. Refusing them would strand media that cannot
+   * be re-recorded, so they fall back to the current user — the same rule
+   * `isNfcFaultReportOutboundOwnedByUser` already uses. The Dexie v3 backfill is what keeps this
+   * fallback applying to almost nothing.
+   */
+  it('treats a row with no owner as this operator\'s', async () => {
+    await saveAttachment(clip('legacy', { createdByUserId: undefined }))
+
+    expect(await publishedReference([])).toEqual(['legacy'])
   })
 })

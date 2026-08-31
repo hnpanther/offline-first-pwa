@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie'
 import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment } from '@/types'
 import type { FieldDefinition, SyncMeta } from '@/types/sync'
+import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import type { LogSheetEntryData } from '@/types'
 import { hasEntryFormData } from '@/utils/entryTimestamps'
 
@@ -144,7 +145,71 @@ class AppDatabase extends Dexie {
       nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
       attachments: 'id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt'
     }).upgrade(tx => tx.table('logSheets').toCollection().modify(markPreMarkerEntriesAsLocal))
+
+    /**
+     * Version 3 — every captured file learns who captured it.
+     *
+     * <p>No store or index changes: `createdByUserId` is a plain property, like `pendingDelete`
+     * and `permanentFailure`. The version exists **only** to run the backfill, because the
+     * fallback for an unstamped row ("treat it as the current user's") is exactly wrong for the
+     * case this fixes — a colleague's media already on the device when the app updates.
+     *
+     * <p>The owner is taken from the sheet the row hangs off, which is the best answer available
+     * and the correct one at this instant: reassignment is what breaks that inference, and it has
+     * not happened yet for anything still sitting here. Rows whose sheet is gone are left
+     * unstamped and fall back at read time.
+     *
+     * <p>Idempotent and per row, so an upgrade interrupted halfway can simply run again.
+     */
+    this.version(3).stores({
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
+      attachments: 'id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt'
+    }).upgrade(async tx => {
+      const sheets = await tx.table('logSheets').toArray()
+      const ownerByLocalId = new Map<string, string>()
+      for (const sheet of sheets) {
+        const owner = resolveLocalWorkOwner(sheet)
+        if (sheet.localId && owner) ownerByLocalId.set(sheet.localId, owner)
+      }
+      await tx.table('attachments').toCollection().modify(row => {
+        stampAttachmentOwner(row, ownerByLocalId)
+      })
+    })
   }
+}
+
+/**
+ * Gives one attachment row the owner of the log sheet it was captured on.
+ *
+ * <p>Exported for the migration test, which runs it against rows rather than through a Dexie
+ * upgrade — what is worth pinning is which rows get an owner and which are deliberately left
+ * alone, not that Dexie calls it.
+ *
+ * <p>Mutates in place: Dexie's `modify` writes back the object it hands you.
+ */
+export function stampAttachmentOwner(
+  row: { logSheetLocalId?: string; createdByUserId?: string },
+  ownerByLocalId: ReadonlyMap<string, string>
+): void {
+  // Never re-stamp. A row that already names its owner is the honest answer; the sheet's owner
+  // may since have moved to somebody else, which is the whole reason this field exists.
+  if (row.createdByUserId) return
+  if (!row.logSheetLocalId) return
+  const owner = ownerByLocalId.get(row.logSheetLocalId)
+  if (owner) row.createdByUserId = owner
 }
 
 /**

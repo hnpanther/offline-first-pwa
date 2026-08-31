@@ -1,6 +1,7 @@
 import { isRevokedAssignment, isSupersededSyncError } from '@/utils/logSheetStatus'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
-import type { LogSheet } from '@/types'
+import { isAttachmentOwnedByUser } from '@/services/storage/attachments'
+import type { LocalAttachment, LogSheet } from '@/types'
 
 /**
  * Whether the signed-in operator may send an attachment belonging to this log sheet.
@@ -30,12 +31,24 @@ import type { LogSheet } from '@/types'
  * - **A sheet the operator has lost is excluded.** Once a sheet is revoked or superseded the
  *   server will refuse its files however long the queue retries, so a row that would loop
  *   forever is left alone instead.
+ *
+ * <p><b>The row's own owner decides, and the sheet only says whether the server will take it.</b>
+ * `resolveLocalWorkOwner(sheet)` used to be the whole test, which is wrong the moment a
+ * supervisor reassigns: the local sheet row is reused, so its owner becomes the *new* operator
+ * while the media on it is still the previous one's — and the queue would then upload somebody
+ * else's photographs under this operator's token. `createdByUserId` on the row is the fact;
+ * the sheet is context. See `LocalAttachment.createdByUserId`.
  */
 export function isAttachmentUploadableByUser(
   sheet: LogSheet | undefined,
-  userId: string | null
+  userId: string | null,
+  attachment?: Pick<LocalAttachment, 'createdByUserId'>
 ): boolean {
   if (!userId || !sheet) return false
+
+  // Checked first: a row this operator did not capture is not theirs to send, whatever the
+  // sheet now says about who owns it.
+  if (attachment && !isAttachmentOwnedByUser(attachment, userId)) return false
 
   const owner = resolveLocalWorkOwner(sheet)
   if (!owner || owner !== userId) return false

@@ -19,7 +19,7 @@ Dexie sits on top because raw IndexedDB's cursor API is unusable at this scale.
 
 ## The stores
 
-Current version: **2**.
+Current version: **3**.
 
 ### Server-owned reference data
 
@@ -50,7 +50,7 @@ This is the data that matters. Losing it loses field readings.
 | Store | Key + indexes | Holds |
 |---|---|---|
 | `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts |
-| `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs |
+| `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. `createdByUserId` is a **plain, unindexed** property — see below |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
 
@@ -148,6 +148,37 @@ entries that **hold data** (by `hasEntryFormData`, so blanks and emptied attachm
 skipped), only in sheets that are **not** already `submitted` + `synced`, and never over a marker
 that is already there. A wrong marker is not a harmless over-approximation — it hands the device
 that entry on every future merge, which is how a supervisor's later edits go invisible.
+
+### `version(3)` — no schema change, one data migration
+
+Also identical stores. It exists to stamp **`attachments.createdByUserId`** on media captured
+before that field existed.
+
+**Why captured media needs an owner of its own.** There is one local row per server sheet and it
+is *reused* when a supervisor reassigns the round: `reset-draft` empties the readings but leaves
+`localId` alone and never touches `db.attachments`. Ownership used to be inferred from the sheet
+(`isAttachmentUploadableByUser` read `localOwnerUserId`), and that inference is exactly what
+reassignment breaks — the sheet's owner becomes the new operator while the media on it is still
+the previous one's. Every read keyed on `logSheetLocalId`, so on a shared tablet the previous
+operator's photographs were counted against the new operator's field ceiling and **adopted into
+their reading** the moment the field was opened. See [sync.md](sync.md#whose-files-these-are).
+
+`logSheets` has `localOwnerUserId` and `nfcFaultReports` has `createdByUserId`; attachments were
+the third outbound-syncable store and the one that never got it — which is what AGENTS.md means
+by "this invariant has to be applied to every new outbound-syncable local table **separately**".
+
+**Why it needs a version rather than a read-time default.** An unstamped row falls back to "it
+belongs to whoever is signed in", the same rule `isNfcFaultReportOutboundOwnedByUser` uses and
+the right default, because refusing would strand evidence of work that cannot be repeated. But
+that fallback is precisely wrong for a colleague's media already on the tablet when the app
+updates — so those rows are stamped once, from the sheet they hang off, while that answer is
+still true. Reassignment is what makes it false, and it has not happened yet for anything still
+sitting there.
+
+`attachmentOwnerMigration.test.ts` pins the scope: the owner comes from the row's own sheet, an
+owner already present is **never** overwritten (the sheet's may since have moved), a row whose
+sheet is gone is left unstamped for the read-time fallback, and the whole thing is idempotent so
+an interrupted upgrade can simply run again.
 
 It is idempotent and writes per sheet, so an upgrade interrupted halfway leaves every row readable
 and can simply run again.

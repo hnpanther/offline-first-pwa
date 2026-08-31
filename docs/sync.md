@@ -692,12 +692,18 @@ as one cost a round of evidence in the plant:
 > the refusal was read as permanent, so the files were **parked** — and when operator 1 signed
 > back in, the queue no longer offered them at all.
 
+**The file's own owner is the fact; the sheet is context.** `LocalAttachment.createdByUserId` is
+stamped at capture, and it has to be, because the sheet cannot answer the question after a
+reassignment — see *A round that changes hands* below.
+
 `isAttachmentUploadableByUser` is the gate, on uploads and on server-side deletions alike:
 
 | Situation | Sent? |
 |---|---|
-| The sheet is this operator's work | Yes |
+| The sheet is this operator's work, and they captured the file | Yes |
 | Assigned to them, nothing saved locally yet | Yes |
+| **A colleague captured the file**, whatever the sheet now says | No — checked first, and it vetoes the sheet |
+| The file carries no owner (captured before the field existed) | Yes — falls back rather than stranding it; the `version(3)` backfill keeps this rare |
 | Belongs to another operator | No — left untouched for them |
 | No sheet row to prove ownership by | No — uploading on a guess is what caused the defect |
 | Sheet already delivered (`synced`) but photos still queued | Judged by ownership like any other; this is the case shared-tablet isolation deliberately leaves alone, and it is what leaked |
@@ -712,6 +718,39 @@ predates the field and is exactly the stranded population.
 The pending badge counts the same filtered set. A shared tablet must never show a number that
 cannot reach zero: it reads as broken sync, and invites someone to "fix" it by clearing the
 device, which is how the evidence would actually be lost.
+
+### A round that changes hands
+
+The failure this cost, reported from the plant:
+
+> Operator A takes a round, goes offline, photographs the equipment and hits final submit — all
+> without a link. Still offline, they sign out. A supervisor reassigns the round to operator B,
+> who signs in on the **same tablet**. B opens the fill page and sees A's photographs as if they
+> had taken them. And when the round goes back to A, A's own media appears to be gone.
+
+**Why.** One local row per server sheet, reused across operators: reassignment takes the
+`reset-draft` path, which empties the readings but leaves `localId` alone and never touches
+`db.attachments`. So A's rows were still "this field's attachments" for B — counted against B's
+ceiling, and **adopted** into B's own reading by `AttachmentFieldInput`'s orphan repair, which
+had no notion of whose orphan it was. B would then submit them as their own evidence, and
+deleting one would queue a server-side delete of A's.
+
+Meanwhile A's work is archived under a synthetic `archive:<serverId>:<userId>` route id, which is
+not a stored `logSheetLocalId` — so looking it up as one found nothing and A's own media appeared
+to have vanished.
+
+**The fix is at the data level, not a special case in `reset-draft`.** With an owner on the row:
+
+- `getAttachmentsForEntry` is scoped to the signed-in operator, so the counter, the list and the
+  adoption repair all see only their own — adoption still rescues an operator's own duplicated
+  capture, which is the reason it exists;
+- an archived view is resolved through the snapshot's own key (`logSheetServerId` + that
+  snapshot's user), so A sees their media again;
+- the upload and delete queues judge the row, not the sheet.
+
+Nothing is deleted and no row moves: a colleague's media stays on the device, owned by them,
+until their own sync or the ordinary cleanup pass. Regression tests:
+[`attachmentHandover.test.ts`](../src/services/sync/attachmentHandover.test.ts).
 
 ---
 

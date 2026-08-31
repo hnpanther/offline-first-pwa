@@ -88,7 +88,7 @@ async function ownWork(
     if (!sheets.has(row.logSheetLocalId)) {
       sheets.set(row.logSheetLocalId, await getLogSheet(row.logSheetLocalId))
     }
-    if (isAttachmentUploadableByUser(sheets.get(row.logSheetLocalId), userId)) out.push(row)
+    if (isAttachmentUploadableByUser(sheets.get(row.logSheetLocalId), userId, row)) out.push(row)
   }
   return out
 }
@@ -168,8 +168,10 @@ async function drainPendingDeletes(
       continue
     }
 
-    // From here a request goes out under the signed-in operator's token.
-    if (!isAttachmentUploadableByUser(sheet, userId)) continue
+    // From here a request goes out under the signed-in operator's token. The row is passed too:
+    // telling the server to delete a file a colleague captured is the same trespass as
+    // uploading one, and after a reassignment the sheet alone no longer says whose it is.
+    if (!isAttachmentUploadableByUser(sheet, userId, row)) continue
 
     try {
       await deleteRemoteAttachment(row.id, signal)

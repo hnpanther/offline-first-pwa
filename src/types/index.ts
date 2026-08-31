@@ -339,6 +339,36 @@ export type AttachmentKind = 'IMAGE' | 'AUDIO' | 'VIDEO'
 export interface LocalAttachment {
   /** UUID minted here. It is also the server's primary key, which is what makes upload idempotent. */
   id: string
+  /**
+   * The operator who captured this file.
+   *
+   * **Media is not the sheet's, it is the person's.** Ownership used to be inferred from the
+   * log sheet the row hangs off (`isAttachmentUploadableByUser` read `localOwnerUserId`), which
+   * holds only while the sheet keeps the same owner. It does not survive a reassignment: the
+   * local sheet row is **reused** — same `localId` — and a `reset-draft` empties its readings
+   * without touching `db.attachments`. Every read path here keys on `logSheetLocalId`, so the
+   * previous operator's photographs silently became the next one's:
+   *
+   * - the field's counter included them, so the new operator's field read «۳/۳» and refused a
+   *   capture;
+   * - `AttachmentFieldInput`'s orphan **adoption** wrote them into the new operator's own form
+   *   value the moment the field was opened — displayed, submitted, and attributed to somebody
+   *   who never took them;
+   * - and deleting one from there queued a server-side delete, destroying the first operator's
+   *   evidence.
+   *
+   * Meanwhile the first operator's archived snapshot is keyed by a synthetic
+   * `archive:<serverId>:<userId>` id, so their own media was invisible to them.
+   *
+   * AGENTS.md says this invariant has to be applied to **every** outbound-syncable local table
+   * separately and is not automatic. `logSheets` has `localOwnerUserId`, `nfcFaultReports` has
+   * `createdByUserId`; this is the third table, and it is the one that was missed.
+   *
+   * Optional only for rows captured before this field existed — see `stampAttachmentOwners`,
+   * which backfills them, and `isAttachmentOwnedByUser`, which falls back for anything the
+   * backfill could not attribute.
+   */
+  createdByUserId?: string
   logSheetLocalId: string
   /** Server id of the sheet — null until the sheet itself has one, which gates upload. */
   logSheetServerId?: string
