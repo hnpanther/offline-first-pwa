@@ -1,8 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        allowBackup="false": the app's data must not leave the tablet by any route but sync.
+
+        Left at true, `adb backup` copies the whole of /data/data out over USB with no root and no
+        unlock - the session JWT, every unsynced reading, and every photograph and voice note in
+        IndexedDB - and on a device with a Google account, the same data is eligible for cloud
+        backup. Neither is a route this app's data is meant to travel: the server is the only
+        intended destination, and a tablet is shared, carried around a plant, and occasionally
+        lost.
+
+        Nothing is lost by switching it off. A restore was never part of how a device is recovered
+        here: the operator's work belongs on the server, and a tablet that has to be rebuilt is
+        rebuilt by installing the APK and signing in. What a backup would preserve is exactly what
+        must not be preserved outside the device.
+    -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

@@ -17,6 +17,26 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // This is a debug build only in the sense that it is signed with the local debug key -
+            // which is right for a fleet installed by hand from a USB stick. It is a *production*
+            // build in every other sense: it runs a whole shift in a plant, on a shared tablet, and
+            // it is the only copy of an operator's readings until they sync.
+            //
+            // Left at its default of true, `debuggable` hands anyone with a USB cable a debugger
+            // attached to that: the session JWT, and every reading, photograph and voice note in
+            // IndexedDB. Nothing needs to be unlocked and no password is asked for.
+            //
+            // Turning it off also turns off two things worth knowing about, because Capacitor keys
+            // both to the same flag (CapConfig: `isDebug` reads FLAG_DEBUGGABLE):
+            //   - chrome://inspect can no longer see the WebView
+            //   - Capacitor's own logging goes quiet
+            //
+            // When a device genuinely has to be inspected, put `android.webContentsDebuggingEnabled
+            // = true` in capacitor.config.ts and build - do not turn this back on, which would
+            // reopen the debugger as well. Take that build off the tablet again afterwards.
+            debuggable false
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

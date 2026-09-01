@@ -203,6 +203,95 @@ decision about where the number comes from (a counter in the repo, the commit co
 not a quick increment. Whoever takes it should treat it as the sibling of the keystore decision
 above.
 
+> Under the **uninstall-and-reinstall** update procedure (§10), the monotonic requirement does not
+> apply at all — a fresh install accepts any `versionCode`. What remains is only the inability to
+> see which build a tablet holds, which is a `versionName` problem, not a `versionCode` one.
+
+### What the build hardens, and what that turns off
+
+`assembleDebug` names the *signing key*, not the audience. This APK runs a whole shift in a plant,
+on a shared tablet, holding the only copy of an operator's readings until they sync — so two of
+the debug build type's defaults are wrong here and are overridden.
+
+| Setting | Where | Why |
+|---|---|---|
+| `debuggable false` | `app/build.gradle`, `buildTypes.debug` | The default `true` hands anyone with a USB cable a debugger attached to the session JWT and every reading, photograph and voice note in IndexedDB. No unlock, no password |
+| `android:allowBackup="false"` | `AndroidManifest.xml` | The default `true` lets `adb backup` copy all of `/data/data` off the device with no root, and makes the same data eligible for cloud backup on a device with a Google account |
+
+Nothing is lost by either. A restore was never how a tablet is recovered here — the work belongs
+on the server, and a rebuilt device is rebuilt by installing the APK and signing in.
+
+**`debuggable` controls three things, not one.** Capacitor reads the same
+`ApplicationInfo.FLAG_DEBUGGABLE` (`CapConfig`: `isDebug`) to decide two more, so turning it off
+also means:
+
+- `chrome://inspect` can no longer see the WebView
+- Capacitor's own logging goes quiet
+
+#### Inspecting a tablet that is misbehaving
+
+When a device genuinely has to be looked at, reach for the WebView inspector — **not** for
+`debuggable`. Add an `android` block to `capacitor.config.ts`:
+
+```ts
+const config: CapacitorConfig = {
+  appId: 'com.hnp.mfdcs',
+  appName: 'MFDCS',
+  webDir: 'dist',
+  android: {
+    // TEMPORARY - remove before this build goes near a tablet in service.
+    webContentsDebuggingEnabled: true
+  }
+}
+```
+
+Then `npm run build:apk`, install, and the WebView appears in `chrome://inspect` on a machine with
+the tablet plugged in — the full DevTools: console, network, and IndexedDB with the operator's
+readings in it.
+
+Why this and not `debuggable true`, when both make the app inspectable:
+
+| | `webContentsDebuggingEnabled` | `debuggable true` |
+|---|---|---|
+| Opens | the WebView inspector | the WebView inspector **and** a JDWP debugger on the process |
+| Reaches | what the page can reach | app memory, arbitrary code execution in the app's context |
+| Also flips | nothing | Capacitor logging, and every AGP optimisation this build type gets |
+
+The second column is the one that reads the session JWT out of memory. The first is enough to
+diagnose a page, and cannot do more than the page itself could.
+
+Two rules hold whichever you use:
+
+1. **Take the build off the tablet again afterwards.** `capacitor.config.ts` is compiled into
+   `android/app/src/main/assets/capacitor.config.json` by `cap sync`, so the flag is baked into
+   the APK — there is no runtime switch, and an inspectable build left on a tablet in service is
+   an inspectable tablet.
+2. **Never commit it enabled.** It is one line in a file nothing else changes, and it produces no
+   symptom whatsoever on a working device, so nothing will remind you.
+
+#### The side effect that will confuse you at the unzip prompt
+
+A non-debuggable build turns on AGP's **resource path shortening**. Every file under `res/` is
+renamed, so the APK you unzip looks like this:
+
+```
+res/GT.crt      ← this is res/raw/plant_ca.crt
+res/8G.xml      ← this is res/xml/network_security_config.xml
+```
+
+Nothing is missing and nothing is broken: `resources.arsc` maps `raw/plant_ca` → `res/GT.crt`, and
+the compiled network config still references it by resource id, so `@raw/plant_ca` resolves at
+runtime exactly as before. The APK also gets about 0.9 MB smaller, which is the same optimisation.
+
+It is written down because the obvious check — *"is the CA in the APK?"* — now answers **no** if
+you grep the file listing for `plant_ca`, and that is the single most alarming wrong answer this
+project can give you. Verify it by size or through the resource table instead:
+
+```bash
+unzip -l app-debug.apk | awk '$1==1744'          # the CA, by its byte count
+aapt2 dump resources app-debug.apk | grep -A1 raw/plant_ca
+```
+
 ---
 
 ## 4. What the app talks to
@@ -427,6 +516,48 @@ produced — no error, no mismatch check, and both apps working. That is the "ou
 and it is silent by construction. Run `build:apk` too whenever a change is meant to reach the
 tablets — it re-runs `build:mobile` on the way, so it is never wasted work, and it is the only one
 of the two that updates both.
+
+### Getting a new APK onto the tablets
+
+The current procedure is **uninstall, then install** — chosen deliberately, and it is what makes
+the debug signing key (§3) an acceptable arrangement rather than a liability: Android only compares
+signatures when updating an *existing* install, so a fresh install accepts any key from any
+machine.
+
+The price is that **uninstalling deletes IndexedDB**, and IndexedDB is the app. Everything below
+exists because of that one fact:
+
+- log sheets filled but not yet synced
+- photographs, voice notes and video still in the upload queue
+- `logSheetUserArchives`, which is exempt from every retention rule and is the **only copy in
+  existence** of work belonging to an operator whose round was reassigned
+- locally-filed NFC fault reports, and every signed-in session
+
+None of it is recoverable, and none of it leaves a trace on the server.
+
+**The procedure:**
+
+1. Bring the tablet **online** and let it sync.
+2. **Confirm delivery against the server** — not against the tablet. See the warning below.
+3. Uninstall the app.
+4. Install the new APK.
+5. Each operator signs in again.
+
+> **The device's own "pending" badge cannot answer step 2.** `SyncManager.getPendingCount()` is
+> scoped to the **signed-in user** — `isLogSheetOutboundOwnedByUser`, `getOwnPendingAttachments`,
+> and an archive query that returns nothing at all without a `userId`. That scoping is correct and
+> deliberate (a shared tablet would otherwise show a badge that can never reach zero), but it means
+> the badge answers *"does this operator have undelivered work?"*, **never** *"does this tablet?"*
+>
+> So: operator A works offline, does not sync, signs out. Operator B signs in. **B's badge reads
+> zero.** The tablet looks clean, and uninstalling at that moment destroys A's readings for good.
+>
+> There is no device-wide indicator in the app today. Confirm from the **server**, which knows what
+> it actually received and does not depend on the memory of the device you are about to wipe.
+
+Do this while the fleet is small enough to sweep in one sitting. A tablet that is missed keeps the
+old build and, with `versionCode`/`versionName` fixed at `1`/`1.0` (§3), looks identical to an
+updated one in Settings → Apps.
 
 ### The server address changed
 

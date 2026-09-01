@@ -906,6 +906,32 @@ callback new on reconnect) and one reserved empty interface in the store.
   `@capacitor/cli/dist` produces a byte-for-byte identical platform without the guard. Do not
   hand-scaffold the directory instead; the template is the thing that must match the CLI version.
 
+- **`debuggable false` renames every file under `res/`, and the CA looks like it vanished.** Setting
+  `debuggable false` on the debug build type (which this project does — the debug key names the
+  signing arrangement, not the audience; see `docs/apk.md` §3) switches on AGP's resource path
+  shortening. `res/raw/plant_ca.crt` becomes `res/GT.crt`, `res/xml/network_security_config.xml`
+  becomes `res/8G.xml`, and the APK sheds ~0.9 MB. **Nothing is broken** — `resources.arsc` maps
+  `raw/plant_ca` to the new path and the compiled network config references it by resource id, so
+  trust resolves at runtime exactly as before. It is here because the obvious verification,
+  `unzip -l app-debug.apk | grep plant_ca`, now returns **nothing**, which reads as "the CA is
+  missing from the APK" — the one failure this project spent an afternoon on (§5 of `docs/apk.md`),
+  and the wrong answer to be handed while checking for it. Verify by size
+  (`unzip -l … | awk '$1==1744'`) or through `aapt2 dump resources … | grep -A1 raw/plant_ca`.
+  Hit exactly this way while confirming the hardening change, before anything shipped.
+
+- **`debuggable` gates three things, and two of them are Capacitor's.** Turning it off closes the
+  USB debugger, and — because `CapConfig` derives `isDebug` from `ApplicationInfo.FLAG_DEBUGGABLE`
+  — also stops `chrome://inspect` seeing the WebView and silences Capacitor's logging. That is the
+  intended trade for a tablet in a plant, but it means the way back for a device that genuinely
+  needs inspecting is `android.webContentsDebuggingEnabled: true` in `capacitor.config.ts`, **not**
+  re-enabling `debuggable`. The two are not equivalent: the first opens the WebView inspector and
+  can reach no more than the page already could; the second additionally attaches a JDWP debugger
+  to the process, where the session JWT and every unsynced reading live. Recipe and the rest of the
+  comparison in `docs/apk.md` §3. Both are **baked into the APK** — `cap sync` compiles
+  `capacitor.config.ts` into `assets/capacitor.config.json`, there is no runtime switch — so an
+  inspectable build left on a tablet in service is an inspectable tablet, and the flag produces no
+  symptom on a working device to remind anyone it is still on.
+
 - **`npm error could not determine executable to run` from `npx cap sync android` means
   `node_modules` has drifted from the lockfile, not that Capacitor is broken.** `@capacitor/cli` is
   a real `package.json`/`package-lock.json` dependency, but on a machine where `node_modules` was
