@@ -178,6 +178,31 @@ Copy it to the tablet and open it. Android will ask to allow installing from tha
 > before it can install the update. When that day comes, make the keystore a deliberate,
 > documented artefact.
 
+### Every build calls itself version 1
+
+`android/app/build.gradle` has `versionCode 1` and `versionName "1.0"` written in, and nothing
+moves them. Every APK this project has ever produced claims to be the same version as every other
+one.
+
+Installing still works — Android accepts an APK over an equal `versionCode`, so a tablet updates
+normally from a USB stick. What is lost is the ability to answer *"which build is this tablet
+on?"* from the tablet. Settings → Apps shows `1.0` on a device flashed this morning and `1.0` on
+one nobody has touched since the first build, so a fleet that is half-updated looks identical to
+one that is fully updated, and the only way to tell is to trust whoever did the copying.
+
+That is survivable while the fleet is small and updated in one sitting, and it stops being
+survivable the moment a tablet is missed. The browser side does not have this problem — the
+service worker updates the fleet on its own within minutes of a deploy (see
+[deployment.md](deployment.md#publishing-a-new-build)) — so the two deliveries drift in exactly
+the way §10 warns about, with only the APK side unable to report where it stands.
+
+Deliberately left alone rather than wired to a counter: a `versionCode` that changes has to change
+*monotonically* and be recorded, or a tablet refuses a genuine update as a downgrade — a worse
+failure than the one it fixes, and one that strands a device holding unsynced readings. It wants a
+decision about where the number comes from (a counter in the repo, the commit count, the date),
+not a quick increment. Whoever takes it should treat it as the sibling of the keystore decision
+above.
+
 ---
 
 ## 4. What the app talks to
@@ -356,8 +381,18 @@ no rear camera; they must still be able to open a log sheet and type readings in
 `src/services/device/nativeApp.ts` — `isNativeApp()`, `currentPlatform()`, `nativePlugin<T>()`.
 
 It reads the `window.Capacitor` global rather than importing `@capacitor/core`, which keeps that
-package out of the web bundle entirely: **the `dist/` that goes on nginx is what it was before the
-packaged app existed.**
+package out of the web bundle entirely — the only trace of Capacitor in `dist/` is the one
+`window.Capacitor` read itself.
+
+What that costs the browser build, measured against the build before the packaged app existed:
+
+| | |
+|---|---|
+| Byte-identical | every vendor chunk, every font, the stylesheet, every icon, `manifest.webmanifest` |
+| Changed | the app chunk, **+~1.5 KiB** (this module and the native NFC reader), and with it `index.html` and `sw.js`, which name that chunk by its content hash |
+
+Nothing a PWA install depends on moves, which is the point. But the app chunk does change, so
+**`dist/` still has to be redeployed** — and a diff there is expected, not a regression.
 
 `display-mode: standalone` does **not** answer this question. A Capacitor WebView reports
 `display-mode: browser` — no manifest is applied and there is no browser UI to hide — so every
@@ -380,6 +415,18 @@ npm run build:apk        # → APK, rebuilds dist/ on the way
 
 Put `dist/` where nginx serves it; copy the APK to the tablets. **Both**, or the two go out of
 step.
+
+**The two commands do not interfere.** `build:mobile` writes `dist/` and *only* `dist/` — it never
+touches `android/`, and the APK on disk is exactly as it was. Copying `dist/` into the Android
+project is `npx cap sync android`, which `build:apk` runs and `build:mobile` does not. So a browser
+deploy is safe to do on its own, as often as you like.
+
+The consequence is the one worth holding on to: **nothing warns you.** After a `build:mobile` the
+browsers are on the new build and the tablets are still on whatever the last `build:apk`
+produced — no error, no mismatch check, and both apps working. That is the "out of step" above,
+and it is silent by construction. Run `build:apk` too whenever a change is meant to reach the
+tablets — it re-runs `build:mobile` on the way, so it is never wasted work, and it is the only one
+of the two that updates both.
 
 ### The server address changed
 

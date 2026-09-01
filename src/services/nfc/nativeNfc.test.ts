@@ -51,6 +51,28 @@ function installBrowser(withWebNfc: boolean): void {
   ;(globalThis as { window?: unknown }).window = win
 }
 
+/**
+ * A browser whose Web NFC reader records what the app asked of it.
+ *
+ * <p>`startNFCScan` builds the reader itself through `window.NDEFReader`, so the instance is
+ * handed back from here rather than returned by the call — there is no other handle on it.
+ */
+function installWebNfcBrowser() {
+  const reader = {
+    listeners: {} as Record<string, ((event: unknown) => void) | undefined>,
+    addEventListener(type: string, handler: (event: unknown) => void) {
+      reader.listeners[type] = handler
+    },
+    scan: vi.fn(async (_options?: { signal?: AbortSignal }) => {})
+  }
+  ;(globalThis as { window?: unknown }).window = {
+    NDEFReader: function NDEFReader() {
+      return reader
+    }
+  }
+  return reader
+}
+
 /** base64 of the given bytes, the way the Java side encodes a payload. */
 function b64(...bytes: number[]): string {
   return Buffer.from(Uint8Array.from(bytes)).toString('base64')
@@ -118,6 +140,71 @@ describe('choosing a reader', () => {
     await startNFCScan(r => seen.push(r))
 
     expect(seen).toEqual([{ success: false, error: 'NFC is off' }])
+  })
+})
+
+/**
+ * The browser route, on the far side of the native guard.
+ *
+ * <p>`startNFCScan` opens with one line — `if (hasNativeNfcPlugin()) return startNativeNfcScan(…)`
+ * — and **everything a browser does with NFC is past it**. Nothing above pins that: `isNFCSupported()`
+ * answering true says the app believes it can scan, not that it reached Web NFC, so the two
+ * support cases would still pass with the browser path unreachable.
+ *
+ * <p>What that would look like if the guard ever answered wrongly in a browser — a stray global, a
+ * shim, a future `window.Capacitor` on the web — is the failure this whole module exists to
+ * prevent, pointing the other way: every scan in Chrome routed into a plugin that is not there,
+ * `startNativeNfcScan` finding none, and tag reading gone from the browser build with nothing
+ * logged. `dist/` and the APK ship from one bundle, so a browser-only regression reaches every
+ * tablet on nginx.
+ */
+describe('a browser with Web NFC', () => {
+  it('reaches Web NFC, not the native reader', async () => {
+    const reader = installWebNfcBrowser()
+
+    await startNFCScan(() => {})
+
+    expect(hasNativeNfcPlugin()).toBe(false)
+    expect(reader.scan).toHaveBeenCalledOnce()
+  })
+
+  /**
+   * The same tag, the same id, down the other route — `ASSET-42` read through Web NFC must equal
+   * `ASSET-42` read through the plugin (the case above in *a tag delivered by the plugin*). One
+   * decoder serves both, and this is the half of that claim the native tests cannot make.
+   */
+  it('decodes a tag to the same id the plugin route produces', async () => {
+    const reader = installWebNfcBrowser()
+    const seen: { success: boolean; tagData?: { message?: string } }[] = []
+
+    await startNFCScan(r => seen.push(r))
+    reader.listeners.reading?.({
+      serialNumber: '04:a2:24',
+      message: { records: [{ recordType: 'mime', mediaType: 'text/plain', data: Uint8Array.from(text('ASSET-42')) }] }
+    })
+
+    expect(seen[0].success).toBe(true)
+    expect(seen[0].tagData?.message).toBe('ASSET-42')
+  })
+
+  it('reports an unreadable tag as a failed read', async () => {
+    const reader = installWebNfcBrowser()
+    const seen: unknown[] = []
+
+    await startNFCScan(r => seen.push(r))
+    reader.listeners.readingerror?.(new Event('readingerror'))
+
+    expect(seen).toEqual([{ success: false, error: 'خطا در خواندن تگ NFC' }])
+  })
+
+  /** A browser with no Web NFC at all still gets the message, not a thrown constructor. */
+  it('reports no support in a browser without Web NFC, rather than throwing', async () => {
+    installBrowser(false)
+    const seen: unknown[] = []
+
+    await startNFCScan(r => seen.push(r))
+
+    expect(seen).toEqual([{ success: false, error: 'NFC در این دستگاه پشتیبانی نمی‌شود.' }])
   })
 })
 

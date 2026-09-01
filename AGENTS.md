@@ -843,7 +843,11 @@ callback new on reconnect) and one reserved empty interface in the store.
   false — and `InstallPwaPrompt` told operators who had installed the APK a minute earlier to go
   and install the app. The test for "packaged app" is `isNativeApp()` in
   `services/device/nativeApp.ts`, which reads the `window.Capacitor` global rather than importing
-  `@capacitor/core`, so the `dist/` nginx serves is unchanged by the APK existing.
+  `@capacitor/core` — so the packaged app costs the browser build ~1.5 KiB in the app chunk and
+  nothing else: every vendor chunk, font, icon and `manifest.webmanifest` builds byte-identical to
+  the build before the APK existed, so no PWA install criterion moved. Do not upgrade that into
+  "`dist/` is unchanged": the app chunk *does* change, `index.html` and `sw.js` follow its content
+  hash, and `dist/` still has to be redeployed alongside every APK (see `docs/apk.md` §9, §10).
 
 - **A permission missing from `AndroidManifest.xml` is denied with no prompt and no error.**
   Capacitor's `BridgeWebChromeClient` maps a `getUserMedia` request onto the matching Android

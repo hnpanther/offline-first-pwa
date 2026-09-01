@@ -16,9 +16,16 @@
  * <h2>Read from the global, not imported</h2>
  *
  * Capacitor injects `window.Capacitor` into the WebView it creates, and defines it nowhere else.
- * Reading the global keeps `@capacitor/core` out of the web bundle entirely, so the `dist/` that
- * goes on nginx is byte-for-byte what it was before the packaged app existed — worth more than
- * the typing an import would buy.
+ * Reading the global keeps `@capacitor/core` out of the web bundle entirely — worth more than the
+ * typing an import would buy, because that library is the whole runtime and it would ship to every
+ * browser to answer a question a global already answers.
+ *
+ * <p>Measured against the build before the packaged app existed: every vendor chunk, font,
+ * stylesheet, icon and `manifest.webmanifest` comes out **byte-identical**, so nothing an install
+ * depends on moved. What changes is the app chunk, by about 1.5 KiB — this module and the native
+ * NFC reader — and with it `index.html` and `sw.js`, which name that chunk by its content hash.
+ * That is the whole footprint on nginx. It is not nothing, and claiming it were would make a real
+ * diff look like a regression the next time somebody checks.
  */
 
 interface CapacitorPluginMap {
