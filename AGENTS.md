@@ -863,6 +863,13 @@ callback new on reconnect) and one reserved empty interface in the store.
   from `certs/` by `npm run ca:apk` on every build (never committed — a stale second copy is the
   failure this prevents). Bundling it also removes the per-tablet CA install entirely.
 
+  **The source path is hardcoded, not configured: `scripts/bundle-site-ca.mjs` always reads
+  `certs/rootCA.crt` and always writes `res/raw/plant_ca.crt`.** To bundle a different CA (a
+  different site, a re-issued root), overwrite `certs/rootCA.crt` in place — same filename, new
+  content — then `npm run ca:apk` (or the full `build:apk`, which runs it first). There is no
+  setting for a different source filename or a second CA; two CAs would need
+  `network_security_config.xml` extended by hand. See `docs/apk.md` §5.
+
 - **`registerPlugin()` must run before `super.onCreate`.** The bridge is built there and the plugin
   registry frozen. Registered after, `window.Capacitor.Plugins.Nfc` is undefined, `isNFCSupported()`
   answers false, and scanning disappears from the app with nothing logged anywhere — the same
@@ -894,3 +901,22 @@ callback new on reconnect) and one reserved empty interface in the store.
   followed by `editProjectSettingsAndroid` and a normal `cap sync`. Calling those two directly from
   `@capacitor/cli/dist` produces a byte-for-byte identical platform without the guard. Do not
   hand-scaffold the directory instead; the template is the thing that must match the CLI version.
+
+- **`npm error could not determine executable to run` from `npx cap sync android` means
+  `node_modules` has drifted from the lockfile, not that Capacitor is broken.** `@capacitor/cli` is
+  a real `package.json`/`package-lock.json` dependency, but on a machine where `node_modules` was
+  never fully installed against the current lockfile — a fresh clone, an interrupted install, a
+  dependency added without a follow-up install — the `cap` binary is simply absent and `npx` has
+  nothing to resolve. `npm run build:apk` does not run `npm install` for it; it assumes the install
+  already happened, the same as every other npm script here. The fix is a plain `npm install`, not
+  a Capacitor reinstall or a `cap` version pin. See `docs/apk.md` §2.3.
+
+- **Gradle's own daemon cannot start on JDK 25, and the error points at the wrong file.** This
+  project's JDK note ("21 or 25, both verified") is about the JDK that *compiles this project's
+  Java* — not the JDK that launches Gradle 8.14.3's daemon, which fails on 25 with `BUG!
+  exception in phase 'semantic analysis' ... Unsupported class file major version 69`, reported
+  against `android/settings.gradle` even though that file is not the cause. "69" is JDK 25's class
+  file version; Gradle 8.14.3 does not run on it yet. If the machine's default `JAVA_HOME` points
+  at JDK 25 (likely if it is the most recently installed one), point the build at a JDK 21 install
+  instead — per-command (`$env:JAVA_HOME = "..."; npm run build:apk`) or permanently if APK builds
+  are routine on that machine. See `docs/apk.md` §2.2.
