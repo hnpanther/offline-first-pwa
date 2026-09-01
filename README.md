@@ -493,15 +493,27 @@ stick and it carries everything with it.
 | **Talks to** | the **same nginx** the browsers use (`VITE_SERVER_URL` in `.env.mobile`) — never the backend directly |
 | **Web assets** | bundled into the APK, so it opens with no network at all |
 | **Permissions** | camera, microphone, location, NFC — every `<uses-feature>` optional, so a tablet without one still works |
+| **Signing** | the local **debug key**, deliberately — see the update procedure below |
+| **Hardened** | `debuggable` and `allowBackup` are both **off**: no USB debugger over the operator's readings, no `adb backup` of the database |
 
 **It trusts this site's certificate authority out of the box.** An Android app ignores a CA the
 user installed by hand — it trusts only the system store — so the CA is bundled into the APK by
 the build. The practical effect is that a tablet needs the APK and nothing else: no certificate
 installation step per device.
 
-The full account — the payload contract with the NFC plugin, the manifest, what is committed, and
-**exactly what to rebuild when the address, the certificate, an icon or the app itself changes** —
-is in **[docs/apk.md](docs/apk.md)**.
+That bundled copy is **separate from the CA installed on the tablet for Chrome**. The app reads
+only its own; the browser reads only the device's. Rotating the CA means updating both.
+
+**Updating a tablet is uninstall, then install** — not an update in place. That is what makes the
+debug signing key sound: a fresh install compares no signatures, so it does not matter which key
+or which machine built the APK. The price is that **uninstalling deletes the local database**, so a
+tablet must be online and confirmed fully synced *against the server* before it is wiped. The
+device's own pending badge is scoped to the signed-in operator and cannot answer that question for
+the tablet — [docs/apk.md §10](docs/apk.md) explains why, and it is the step to get right.
+
+The full account — the payload contract with the NFC plugin, the manifest, what is committed, the
+keystore decision, and **exactly what to rebuild when the address, the certificate, an icon or the
+app itself changes** — is in **[docs/apk.md](docs/apk.md)**.
 
 > The APK and `dist/` are two deliveries of one codebase. Change the app and both need rebuilding,
 > or the tablets and the browsers are running different versions.

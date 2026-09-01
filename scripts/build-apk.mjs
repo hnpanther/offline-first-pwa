@@ -42,6 +42,24 @@ if (!/^[A-Za-z0-9:._-]+$/.test(task)) {
   process.exit(1)
 }
 
+// A release task would succeed and produce nothing installable. `buildTypes.release` has no
+// `signingConfig` — this project has no release keystore, deliberately (docs/apk.md section 3) —
+// and Gradle's answer to that is not an error: it writes `app-release-unsigned.apk`, reports
+// BUILD SUCCESSFUL, and leaves a file that every device refuses with a message that never
+// mentions signing. That is the exact failure this script exists to prevent, arriving by a
+// different door, so it is refused here rather than explained afterwards.
+if (/release/i.test(task)) {
+  console.error(
+    `Refusing to run "${task}": this project has no release signing key.\n\n` +
+    'Gradle would still report success and write an unsigned APK that installs nowhere.\n' +
+    'The fleet is signed with the local debug key on purpose — see docs/apk.md section 3,\n' +
+    '"Debug, not release" and "Why this is not a release build".\n\n' +
+    'If you are deliberately moving to a signed release build, add a signingConfig first;\n' +
+    'that decision is documented in the same section, including what it costs every tablet.'
+  )
+  process.exit(1)
+}
+
 if (!fs.existsSync(wrapper)) {
   console.error(
     `No Gradle wrapper at ${path.relative(root, wrapper)}.\n` +

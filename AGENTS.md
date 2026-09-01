@@ -51,6 +51,13 @@ npm run build:apk              # CA + build:mobile + cap sync + gradlew assemble
 npm run icons:apk              # launcher icons and splash, from the project SVGs
 ```
 
+**`assembleDebug` is the shipping build, and `release` is refused.** The debug name covers only the
+signing key: `debuggable` is off, so the APK is not inspectable and AGP treats it as an optimised
+build. There is no release keystore — `buildTypes.release` has no `signingConfig`, so Gradle would
+report success and write an unsigned APK that installs nowhere — and `scripts/build-apk.mjs`
+rejects any task matching `release` rather than letting that happen. Full reasoning, and what
+moving to a signed release build would cost every tablet, in `docs/apk.md` §3.
+
 | Goal | Command |
 |------|---------|
 | Tablet / nginx deploy | `npm run build:mobile` → copy `dist/` |
@@ -521,6 +528,8 @@ By role, the resulting UI is unchanged:
 | A device capability (NFC, camera, mic, GPS) | `docs/device-features.md`, **and** whether the packaged app can do it at all — a browser API is not automatically in a WebView, and a permission not in `AndroidManifest.xml` fails with no prompt. See `docs/apk.md` |
 | The server address | `.env.mobile` only — the APK and nginx read the same file. Then rebuild **both** (`npm run build:mobile`, `npm run build:apk`) or they go out of step |
 | Anything under `android/` | `docs/apk.md`, and rebuild — Gradle picks it up, no `cap add` needed |
+| The signing key, `versionCode`, or how a tablet is updated | `docs/apk.md` §3 and §10 **and** the README's APK section. These three are one decision: the fleet is updated by **uninstall and reinstall**, which is what makes the debug key sound, and which is why `versionCode` never has to move. Change any one of them and the other two stop being true |
+| The bundled CA, or `network_security_config.xml` | `docs/apk.md` §5 **and** `docs/deployment.md`. The APK's CA and the CA installed on a tablet for Chrome are separate stores — a change to one is not a change to the other |
 
 ---
 
@@ -887,7 +896,13 @@ callback new on reconnect) and one reserved empty interface in the store.
 - **`android/local.properties` needs forward slashes.** It is a Java `.properties` file, where `\`
   starts an escape, so `sdk.dir=C:\Android\Sdk` fails with *"The filename, directory name, or
   volume label syntax is incorrect"* — which reads like a Gradle or PATH problem and is neither.
-  Write `sdk.dir=C\:/Android/Sdk`.
+  Write `sdk.dir=C\:/Android/Sdk`. **This file is committed**, against the Capacitor template's own
+  gitignore and against the usual convention, so that a fresh clone builds rather than failing on a
+  file nobody knew to create; the working default and the other platforms' forms are in its
+  comments. A machine needing a different path keeps the edit out of git with
+  `git update-index --skip-worktree android/local.properties` — do not commit a personal SDK path,
+  and do not "tidy" the file back into `.gitignore` without reading `docs/apk.md` §11, which states
+  the trade and the condition for reversing it.
 
 - **A build script that cannot fail is worse than no build script.** `build:apk` was once
   `cd android && gradlew.bat assembleDebug`. npm does not hand a script the shell you are typing

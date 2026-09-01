@@ -199,6 +199,11 @@ Do this once per device, before handing it out.
 > store, so the CA had to go inside the APK. The side effect is that an app-only tablet needs the
 > APK and nothing else. See [apk.md §5](apk.md#5-certificates-the-trap-that-costs-an-afternoon).
 > A tablet that also uses Chrome still needs the steps below.
+>
+> **The two copies are independent, and both are needed on a tablet that runs both.** Installing
+> the CA here does nothing for the app, and the app's bundled copy does nothing for Chrome. When
+> the CA is rotated, a dual-use tablet needs the new CA installed *and* a rebuilt APK — miss either
+> and that half stops working with the same «ارتباط با سرور برقرار نشد» as a dead network.
 
 The file to transfer is the **CA**, never the server certificate and never a private key:
 
