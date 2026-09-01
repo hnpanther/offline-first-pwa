@@ -46,6 +46,53 @@ the app, because there is only one of it.
 None of this needs Android Studio. A machine with nothing but Node and a JDK gets there with the
 steps below.
 
+### 2.0 A fresh clone, start to finish
+
+The whole sequence in order, so nothing is discovered by failing. Each step links to its own
+section for the detail and the traps.
+
+```bash
+git clone <repo> && cd offline-first-pwa
+
+# 1. Dependencies. build:apk does NOT do this for you (§2.3)
+npm install
+
+# 2. The server address. Gitignored, so a clone has no copy — the build now refuses
+#    rather than silently shipping http://localhost:8081 (§4)
+cp .env.mobile.example .env.mobile
+#    edit it: the address the tablets open, https, the nginx origin — not the Spring host/port
+
+# 3. Certificates. Needs mkcert on PATH first:  winget install FiloSottile.mkcert
+#    Writes certs/cert.pem, key.pem, rootCA.pem and rootCA.crt — that last one is what
+#    the APK bundles (§5), and ca:apk fails the build if it is absent
+.\scripts\setup-mkcert.ps1 -Ip 192.168.1.4
+
+# 4. Android SDK — §2.1. Unzip to C:\Android\Sdk, then:
+& "C:\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "platforms;android-36" "build-tools;35.0.0"
+& "C:\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat" --licenses
+
+# 5. The JDK that runs Gradle must be 21, not 25 (§2.2)
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot"
+
+# 6. Both deliveries, one command
+npm run build:apk
+```
+
+`android/local.properties` is **committed** and already points at `C:/Android/Sdk`, so there is
+nothing to create — only something to edit if your SDK is elsewhere (§2.1, §11).
+
+That last command produces both artefacts:
+
+```
+build:apk → sync:apk → ca:apk          copy certs/rootCA.crt into the Android project
+                     → build:mobile    dist/  ← the PWA, for nginx
+                     → cap sync        copy dist/ into the Android project
+          → gradlew assembleDebug      the APK
+```
+
+One bundle, two deliveries — the `index-*.js` inside the APK is byte-identical to the one in
+`dist/`. `dist/` still has to be copied to nginx separately (§10).
+
 ### 2.1 Android SDK command-line tools, from zero
 
 1. Download **"Command line tools only"** for Windows from
@@ -508,6 +555,38 @@ setting.
 
 The web assets themselves are **bundled into the APK**, not fetched. The app opens instantly with
 no network, which is the whole point of an offline-first system; only API calls go over the wire.
+
+### `.env.mobile` is gitignored, and the build refuses to guess
+
+The file holds one site's address, so it is **not committed** — only `.env.mobile.example` is. A
+fresh clone therefore does not have it, and that used to be a silent, expensive failure:
+`VITE_SERVER_URL` came back undefined, `services/storage/db.ts` fell back to
+`http://localhost:8081`, and the build **succeeded**. `dist/` looked right, the APK installed and
+opened, and the first sign of trouble was an operator in the plant reading «ارتباط با سرور برقرار
+نشد» — the same words a dead network produces.
+
+`vite.config.ts` now refuses the mobile production build outright when the address is missing or
+is not `https://`:
+
+```
+[mobile] VITE_SERVER_URL is not set, so this build would ship pointing at
+         http://localhost:8081 — the fallback in services/storage/db.ts.
+```
+
+**Cleartext is refused rather than warned about**, because it cannot work in either delivery: the
+APK blocks it before the request leaves the device (`network_security_config.xml`,
+`cleartextTrafficPermitted="false"`, §5), and `getUserMedia` needs a secure context, so camera and
+microphone fail silently in the browser build.
+
+Only `vite build --mode mobile` is gated. `dev:mobile` and `preview:mobile` are deliberately left
+alone — they serve a developer at a desk who may be pointing somewhere odd on purpose, and neither
+produces an artefact that reaches a tablet.
+
+So, on a new machine:
+
+```bash
+cp .env.mobile.example .env.mobile     # then set the address the tablets actually open
+```
 
 ---
 

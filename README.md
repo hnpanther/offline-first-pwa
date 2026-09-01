@@ -320,6 +320,12 @@ VITE_SERVER_URL=https://192.168.1.101:4173
 - Port **4173** is for the installed offline PWA (`preview:mobile`).
 - This becomes the default `serverUrl` in IndexedDB. When the app origin matches this URL, the API client uses relative paths `/api/...` (proxied by Vite in dev/preview mobile mode).
 
+> **`.env.mobile` is gitignored, so a fresh clone does not have one — and the build will stop
+> until you create it.** `npm run build:mobile` and `npm run build:apk` both refuse to build when
+> `VITE_SERVER_URL` is missing, or is not `https://`. Without that check the build succeeded and
+> quietly shipped `http://localhost:8081`, which reaches an operator as «ارتباط با سرور برقرار
+> نشد» — indistinguishable from a dead network. `dev:mobile` and `preview:mobile` are not gated.
+
 ### Step 4 — mkcert (trusted HTTPS)
 
 ```powershell

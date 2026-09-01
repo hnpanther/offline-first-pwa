@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import basicSsl from '@vitejs/plugin-basic-ssl'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -15,11 +15,75 @@ function loadMkcertHttps(certDir: string) {
   }
 }
 
-export default defineConfig(({ mode }) => {
+/**
+ * Refuses a mobile production build that has no server address, or a cleartext one.
+ *
+ * <h2>Why this has to fail the build</h2>
+ *
+ * `.env.mobile` is gitignored — it holds one site's address — so a fresh clone does not have it.
+ * Without it `VITE_SERVER_URL` is simply undefined, and the app falls back to
+ * `http://localhost:8081` (`services/storage/db.ts`). Nothing about that is loud: the build
+ * succeeds, `dist/` looks right, the APK installs and opens, and the failure surfaces to an
+ * operator holding a tablet against a pipe as «ارتباط با سرور برقرار نشد» — indistinguishable from
+ * the network being down, and a long way to trace back to a missing file on the build machine.
+ *
+ * <h2>And why `http://` is refused too, not warned about</h2>
+ *
+ * It cannot work, in either delivery:
+ *
+ * <ul>
+ *   <li>The APK's `network_security_config.xml` sets `cleartextTrafficPermitted="false"`, so every
+ *       request is blocked before it leaves the device — localhost included.</li>
+ *   <li>`getUserMedia` needs a secure context, so camera and microphone die silently in the
+ *       browser build.</li>
+ * </ul>
+ *
+ * Only the production build is gated. `dev:mobile` and `preview:mobile` are left alone: they serve
+ * a developer at a desk who may well be pointing somewhere odd on purpose, and neither produces an
+ * artefact that reaches a tablet.
+ */
+function assertMobileServerUrl(serverUrl: string | undefined): void {
+  const fix =
+    'Set it in .env.mobile (gitignored, one per site):\n\n' +
+    '    cp .env.mobile.example .env.mobile\n\n' +
+    'then put the address the tablets actually open — the nginx origin, never the Spring\n' +
+    'host/port. See docs/apk.md section 4 and README "Production Deployment".'
+
+  if (!serverUrl) {
+    console.error(
+      '\n[mobile] VITE_SERVER_URL is not set, so this build would ship pointing at\n' +
+      '         http://localhost:8081 — the fallback in services/storage/db.ts.\n\n' +
+      '         It would build, install and open, and then fail every request with\n' +
+      '         «ارتباط با سرور برقرار نشد», which looks exactly like a dead network.\n\n' +
+      fix + '\n'
+    )
+    process.exit(1)
+  }
+
+  if (!serverUrl.startsWith('https://')) {
+    console.error(
+      `\n[mobile] VITE_SERVER_URL must be https. Got: ${serverUrl}\n\n` +
+      '         Cleartext cannot work in either delivery: the APK blocks it outright\n' +
+      '         (network_security_config.xml, cleartextTrafficPermitted="false"), and\n' +
+      '         getUserMedia needs a secure context, so camera and microphone fail silently\n' +
+      '         in the browser.\n\n' +
+      fix + '\n'
+    )
+    process.exit(1)
+  }
+}
+
+export default defineConfig(({ mode, command }) => {
   const mobileDev = mode === 'mobile'
   const certDir = path.resolve(__dirname, 'certs')
   const mkcertHttps = loadMkcertHttps(certDir)
   const useTrustedCert = mkcertHttps != null
+
+  // Only the production build — see the note on assertMobileServerUrl for why dev and preview
+  // are deliberately left alone.
+  if (command === 'build' && mobileDev) {
+    assertMobileServerUrl(loadEnv(mode, __dirname, 'VITE_').VITE_SERVER_URL)
+  }
 
   if (mobileDev) {
     if (useTrustedCert) {

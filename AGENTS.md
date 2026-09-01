@@ -893,6 +893,18 @@ callback new on reconnect) and one reserved empty interface in the store.
   launcher icons all day and the icon will not change until that file is deleted —
   `scripts/generate-apk-assets.mjs` deletes it, and that deletion is load-bearing, not tidying.
 
+- **`.env.mobile` is gitignored, and a missing one used to build a working-looking, unreachable
+  app.** Only `.env.mobile.example` is committed, so a fresh clone has no `VITE_SERVER_URL`;
+  `services/storage/db.ts` falls back to `http://localhost:8081`, and **the build succeeds**. The
+  APK installs, opens, and fails every request with «ارتباط با سرور برقرار نشد» — the same words a
+  dead network produces, traced back eventually to a file that was never on the build machine.
+  `vite.config.ts` (`assertMobileServerUrl`) now exits non-zero on `vite build --mode mobile` when
+  the value is absent **or not `https://`**. Cleartext is refused rather than warned about because
+  it cannot work either way: the APK blocks it (`cleartextTrafficPermitted="false"`) and
+  `getUserMedia` needs a secure context. `dev:mobile` and `preview:mobile` are deliberately not
+  gated — they produce nothing that reaches a tablet. Do not soften this to a warning; the whole
+  point is that the failure it replaces was silent until it reached the plant.
+
 - **`android/local.properties` needs forward slashes.** It is a Java `.properties` file, where `\`
   starts an escape, so `sdk.dir=C:\Android\Sdk` fails with *"The filename, directory name, or
   volume label syntax is incorrect"* — which reads like a Gradle or PATH problem and is neither.
