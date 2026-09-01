@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Trusting the plant's own certificate authority.
+
+    The PWA is served by nginx over HTTPS with a certificate this site issued itself. A browser can
+    be taught to trust it by installing the CA, but an Android app cannot: since API 24 an app
+    trusts only the *system* CA store, and a CA the user installs lands in the *user* store, which
+    apps ignore unless they opt in. Without this file every request from the app fails with
+    CertPathValidatorException - which surfaces to the operator as "could not reach the server",
+    indistinguishable from the network being down.
+
+    Bundling the CA here also removes the per-tablet installation step: a device needs the APK and
+    nothing else.
+
+    The system store stays trusted alongside it, so any ordinary public certificate still works.
+    Replacing the certificate later does not require rebuilding, as long as it is issued by this
+    same CA; replacing the *CA* does - see docs/apk.md.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/plant_ca" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

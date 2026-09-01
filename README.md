@@ -26,6 +26,7 @@ same commit.
 | **[docs/storage.md](docs/storage.md)** | The Dexie/IndexedDB schema, every store and index, what survives what, and the rules for changing it. |
 | **[docs/deployment.md](docs/deployment.md)** | Putting it on a plant network: the build, nginx as a service (WinSW on Windows, systemd on Linux), certificates with mkcert or openssl, and getting the CA onto every tablet. |
 | **[docs/device-features.md](docs/device-features.md)** | NFC, camera/microphone, GPS and screen orientation — what each requires, and how each degrades. |
+| **[docs/apk.md](docs/apk.md)** | The Android app: building it without Android Studio, the native NFC plugin, manifest permissions, bundling the site CA, and exactly what to rebuild when something changes. |
 | **[AGENTS.md](AGENTS.md)** | Conventions and the traps found the hard way. |
 | **[CLAUDE.md](CLAUDE.md)** | Entry point for AI agents working in this repository. |
 
@@ -46,6 +47,7 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 8. [Mobile & PWA Testing (Full Guide)](#mobile--pwa-testing-full-guide)
 9. [HTTPS and mkcert (Development Only)](#https-and-mkcert-development-only)
 10. [Installing the PWA on a Phone](#installing-the-pwa-on-a-phone)
+10. [The Android App (APK)](#the-android-app-apk)
 11. [Authentication and Roles](#authentication-and-roles)
 12. [Navigation and Permissions](#navigation-and-permissions)
 13. [Device Configuration (Settings)](#device-configuration-settings)
@@ -230,6 +232,9 @@ scripts/
 | `npm run preview:mobile` | **4173** | Yes (mkcert) | **Real PWA test and install** | **Yes** |
 | `npm run setup:mkcert` | — | — | Create trusted dev certificates | — |
 | `npm run icons` | — | — | Regenerate every icon PNG from the SVG sources (see [App Icon](#app-icon)) | — |
+| `npm run build:apk` | — | — | **Android app** → `android/app/build/outputs/apk/debug/app-debug.apk` (see [docs/apk.md](docs/apk.md)) | **Yes — bundled** |
+| `npm run icons:apk` | — | — | Android launcher icons and splash, from the same SVG sources | — |
+| `npm run ca:apk` | — | — | Copy `certs/rootCA.crt` into the Android project so the app trusts this site's nginx | — |
 | `npm run lint` | — | — | ESLint | — |
 | `npm test` | — | — | Vitest unit tests (`src/**/*.test.ts`; TypeScript via `tsconfig.vitest.json`) | — |
 
@@ -462,6 +467,44 @@ Mentioned as an option, not a procedure. The pieces it needs are `@bubblewrap/cl
 PWABuilder) on a machine with internet to build, a signing key kept for the life of the app, and
 `/.well-known/assetlinks.json` served from this origin carrying that key's SHA-256 fingerprint —
 Chrome fetches it from your server on the device, so verification itself works offline.
+
+---
+
+## The Android App (APK)
+
+The same app, packaged with Capacitor. It exists for two things a browser on a plant network
+cannot do.
+
+**NFC on a device that is not Chrome.** Web NFC is a Chrome API — and, the part that surprises
+people, it is not in Android's WebView either. The APK ships a native NFC plugin that reads tags
+through `NfcAdapter` and hands them to the *same* decoder the browser path uses, so a tag reads
+identically either way.
+
+**Installing with no internet.** Chrome's install path works, but the WebAPK behind it is minted
+on Google's servers at install time. A tablet with no route outside cannot install a PWA properly
+and silently ends up with something closer to a bookmark. An APK is a file: copy it from a USB
+stick and it carries everything with it.
+
+| | |
+|---|---|
+| **App name / package** | MFDCS · `com.hnp.mfdcs` |
+| **Build** | `npm run build:apk` — no Android Studio needed, just the SDK command-line tools |
+| **Output** | `android/app/build/outputs/apk/debug/app-debug.apk` |
+| **Talks to** | the **same nginx** the browsers use (`VITE_SERVER_URL` in `.env.mobile`) — never the backend directly |
+| **Web assets** | bundled into the APK, so it opens with no network at all |
+| **Permissions** | camera, microphone, location, NFC — every `<uses-feature>` optional, so a tablet without one still works |
+
+**It trusts this site's certificate authority out of the box.** An Android app ignores a CA the
+user installed by hand — it trusts only the system store — so the CA is bundled into the APK by
+the build. The practical effect is that a tablet needs the APK and nothing else: no certificate
+installation step per device.
+
+The full account — the payload contract with the NFC plugin, the manifest, what is committed, and
+**exactly what to rebuild when the address, the certificate, an icon or the app itself changes** —
+is in **[docs/apk.md](docs/apk.md)**.
+
+> The APK and `dist/` are two deliveries of one codebase. Change the app and both need rebuilding,
+> or the tablets and the browsers are running different versions.
 
 ---
 
@@ -2113,6 +2156,7 @@ Should show **Completed — pending sync** if local `status: submitted`. Refresh
 - **[`docs/sync.md`](docs/sync.md)** — synchronisation in full
 - **[`docs/storage.md`](docs/storage.md)** — the local database
 - **[`docs/device-features.md`](docs/device-features.md)** — NFC, camera, GPS, orientation
+- **[`docs/apk.md`](docs/apk.md)** — the Android app, end to end
 - **Backend** — `backend-offline-first`, whose `docs/` covers the schema, the log-sheet lifecycle, the background jobs and the reports
 
 ---

@@ -16,9 +16,15 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
-    "test": "vitest run"
+    "test": "vitest run",
+    "icons:apk": "node scripts/generate-apk-assets.mjs",
+    "sync:apk": "npm run ca:apk && npm run build:mobile && npx cap sync android",
+    "build:apk": "npm run sync:apk && node scripts/build-apk.mjs",
+    "ca:apk": "node scripts/bundle-site-ca.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
     "@emotion/cache": "^11.13.1",
     "@emotion/react": "^11.13.3",
     "@emotion/styled": "^11.13.0",
@@ -41,6 +47,8 @@
     "zustand": "^5.0.1"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.1",
     "@types/node": "^22.7.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",

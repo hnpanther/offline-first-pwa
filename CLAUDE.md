@@ -24,6 +24,7 @@ Read, in this order:
 | [docs/sync.md](docs/sync.md) | How data moves to and from the server, in what order, and what each failure means. **The most delicate code in the app.** |
 | [docs/storage.md](docs/storage.md) | The Dexie schema, every store, and the rules for changing it |
 | [docs/device-features.md](docs/device-features.md) | NFC, camera, GPS, screen orientation — support and fallbacks |
+| [docs/apk.md](docs/apk.md) | **The packaged Android app.** Building it without Android Studio, the native NFC plugin and the payload contract it keeps with the web decoder, manifest permissions, why the app cannot use a hand-installed CA, and exactly what to rebuild when what changes. |
 
 ## The rule that keeps this useful
 
@@ -37,7 +38,8 @@ person — or the next agent — will trust it.
 |---|---|
 | The Dexie schema or a store | [docs/storage.md](docs/storage.md) |
 | Sync order, an outcome, or the attachment queue | [docs/sync.md](docs/sync.md) |
-| NFC, camera, GPS or orientation | [docs/device-features.md](docs/device-features.md) |
+| NFC, camera, GPS or orientation | [docs/device-features.md](docs/device-features.md) — and check it still works **inside the APK**: a browser API is not a WebView API, and a permission absent from `AndroidManifest.xml` is denied with no prompt |
+| Anything under `android/`, or the native NFC contract | [docs/apk.md](docs/apk.md) |
 | A trap you only found by debugging | **[AGENTS.md](AGENTS.md)** — add an entry with the *why* |
 | A user-visible feature or setting | [README.md](README.md) |
 | Anything touching the API contract | the backend's `README.md`, `AGENTS.md` and `docs/` too |
@@ -51,6 +53,11 @@ person — or the next agent — will trust it.
 - **Assume no network.** Code that requires a `serverId` to exist will break on exactly the path
   this app is built for.
 - **All UI text is Persian and lives in `src/i18n/fa.ts`.** No hardcoded strings in components.
+- **One codebase, two deliveries.** `dist/` for nginx and the APK are the same app. A change ships
+  to both or the tablets and the browsers are running different versions.
+- **One NFC decoder.** The native plugin normalises a tag's payload exactly as Web NFC does and
+  stops there; every heuristic stays in `decodeRecordData`. Two decoders would drift, and a tag
+  would read differently in Chrome than in the app.
 
 ## Verifying
 
@@ -60,3 +67,7 @@ npm run test && npx tsc --noEmit && npm run build
 
 A device feature cannot be proven in a unit test. NFC, camera and orientation need a real
 Android device, and the orientation lock needs the app **installed**, not a browser tab.
+
+For the packaged app, `npm run build:apk` and install the result — a green suite says nothing
+about whether the WebView has the API, whether the permission was declared, or whether the app
+trusts the certificate. Each of those has already shipped as a silent failure once.

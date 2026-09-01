@@ -1,0 +1,379 @@
+# The Android app
+
+The same PWA, packaged as an APK with [Capacitor](https://capacitorjs.com). One codebase, one
+`dist/`, two ways of reaching an operator: a browser pointed at nginx, or an app installed on a
+tablet.
+
+This file covers what the packaging adds, why each piece is there, and — the part you will come
+back for — **exactly what to rebuild when something changes**.
+
+---
+
+## 1. Why an app at all
+
+The PWA installs from Chrome and works offline. For most sites that is enough. Two things are
+not reachable from a browser on a plant network:
+
+- **Reading NFC tags on a device that is not running Chrome.** Web NFC is a Chrome API. It is not
+  in Firefox, not in Samsung Internet, and — the reason this matters — not in Android's WebView.
+- **Getting installed at all, on a tablet with no internet.** Chrome's "install app" path is
+  reliable; Google's WebAPK minting is not, because it happens on Google's servers at install
+  time. A tablet in a plant with no route to the outside cannot install a PWA properly, and the
+  result silently degrades to a bookmark.
+
+An APK is a file. It can be copied onto a tablet from a USB stick, and it carries everything with
+it.
+
+### What the app is *not*
+
+It is **not** a second frontend. `android/` contains no application logic: the web assets are
+copied in by `npx cap sync`, and the only hand-written code is one NFC plugin (§7), the manifest,
+and the network configuration. Anything that changes behaviour changes it for both the browser and
+the app, because there is only one of it.
+
+---
+
+## 2. What you need installed
+
+| | |
+|---|---|
+| **Android SDK command-line tools** | `C:\Android\Sdk\cmdline-tools\latest\bin` — Android Studio is **not** required |
+| **Platform + build tools** | `platforms;android-36`, `build-tools;35.0.0` (install with `sdkmanager`) |
+| **JDK** | 21 or 25, both verified against this project |
+| **Node** | as for the PWA |
+
+`android/local.properties` points Gradle at the SDK:
+
+```
+sdk.dir=C\:/Android/Sdk
+```
+
+Forward slashes. It is a Java `.properties` file, where `\` starts an escape — a Windows path with
+backslashes fails with *"The filename, directory name, or volume label syntax is incorrect"*,
+which does not sound like a quoting problem at all. The file is gitignored; it is per-machine.
+
+---
+
+## 3. Building it
+
+```bash
+npm run build:apk
+```
+
+That is four steps, and each is available on its own:
+
+| Script | Does |
+|---|---|
+| `npm run ca:apk` | Copies `certs/rootCA.crt` into the Android project (§5) |
+| `npm run build:mobile` | `tsc` + `vite build --mode mobile` → `dist/` |
+| `npm run sync:apk` | The two above, then `npx cap sync android` — copies `dist/` into the app |
+| `npm run build:apk` | `sync:apk`, then the Gradle wrapper via `scripts/build-apk.mjs` |
+| `npm run icons:apk` | Regenerates launcher icons and splash from the project SVGs (§6) |
+
+The APK lands at:
+
+```
+android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+The last step goes through a Node script rather than a shell one-liner for two reasons, both
+learned here: the wrapper differs by platform (`gradlew.bat` / `gradlew`) and npm does not hand
+the script the shell you are typing in, and — the one that matters — **the script exits with
+Gradle's status**. The one-liner it replaced printed `'gradlew.bat' is not recognized` and still
+exited 0, so the build reported success while producing no APK at all. On Windows the wrapper has
+to go through `cmd.exe`: Node 20 refuses to spawn a `.bat` directly (CVE-2024-27980) and fails
+with a bare `EINVAL` that says nothing about why.
+
+Copy it to the tablet and open it. Android will ask to allow installing from that source once.
+
+> **Debug, not release.** `assembleDebug` signs with the local debug key, which is right for a
+> fleet installed by hand from a USB stick and wrong for anything distributed. A release build
+> needs a keystore that is kept, backed up, and never regenerated — Android identifies an app by
+> its signature, and a new key means every tablet must uninstall (losing its local database)
+> before it can install the update. When that day comes, make the keystore a deliberate,
+> documented artefact.
+
+---
+
+## 4. What the app talks to
+
+**The app never talks to the backend directly.** It talks to the same nginx the browsers talk to,
+over HTTPS, and nginx reverse-proxies to Spring Boot. One address, one certificate, one set of
+access rules.
+
+The address comes from `.env.mobile`, the same file `npm run preview:mobile` uses:
+
+```
+VITE_SERVER_URL=https://192.168.0.101:4173
+```
+
+There is no separate environment file for the APK. There was, briefly, and it was one more place
+for the address to go stale — the app and the browser reach the same server, so they read the same
+setting.
+
+The web assets themselves are **bundled into the APK**, not fetched. The app opens instantly with
+no network, which is the whole point of an offline-first system; only API calls go over the wire.
+
+---
+
+## 5. Certificates: the trap that costs an afternoon
+
+The PWA is served over HTTPS with a certificate this site issued itself (mkcert). Installing that
+CA on a tablet makes Chrome trust it. **It does not make the app trust it.**
+
+Since API 24, an Android app trusts only the **system** CA store. A CA installed by hand lands in
+the **user** store, which apps ignore unless they opt in. So the app — with the CA visibly
+installed on the device, working in Chrome on the same tablet — fails every request with
+`CertPathValidatorException`, which reaches the operator as *"ارتباط با سرور برقرار نشد"*: exactly
+what a down network looks like.
+
+Two files fix it:
+
+- `android/app/src/main/res/xml/network_security_config.xml` — trusts `system` **and**
+  `@raw/plant_ca`, and keeps cleartext off.
+- `android/app/src/main/res/raw/plant_ca.crt` — the CA itself, copied from `certs/rootCA.crt` by
+  `npm run ca:apk` on every build.
+
+That copy is deliberate, and so is the fact that it is **gitignored**. `certs/` is machine- and
+site-specific; a committed copy would be a second one that quietly goes stale, and a rebuilt-CA
+mismatch shows up only when somebody tries to log in. Regenerating it on every build means the two
+cannot disagree.
+
+**A useful side effect:** bundling the CA removes the per-tablet CA installation step entirely. A
+device needs the APK and nothing else.
+
+The certificate is public — it is the CA's certificate, not its key. Bundling it discloses
+nothing.
+
+---
+
+## 6. Icons and splash
+
+Generated from the two SVGs the PWA already uses, by `npm run icons:apk`:
+
+```
+public/icons/icon.svg           full-bleed, rounded  → legacy launcher icon, splash logo
+public/icons/icon-maskable.svg  inside the safe zone → adaptive icon foreground
+```
+
+The maskable variant exists because a PWA icon on Android faces the same problem an adaptive icon
+does — the launcher applies its own mask and crops what falls outside — so the same artwork serves
+both, and there is nothing extra to keep in step. The brand colour is **read out of** `icon.svg`
+rather than written down again.
+
+Two template files are deleted by the script, and that deletion is load-bearing:
+`drawable-v24/ic_launcher_foreground.xml` is a vector that wins over the generated PNG on API 24+
+— which is every device this app runs on — so leaving it means the icon never changes no matter
+what you generate.
+
+Run it after editing either SVG, and after `npx cap add android` ever regenerates the platform.
+It is **not** part of the build: the PNGs are committed under `android/`, and the build must not
+depend on `sharp` being installable on the machine running it.
+
+---
+
+## 7. NFC
+
+Web NFC (`window.NDEFReader`) is a Chrome API. **Android's WebView does not implement it.** Inside
+the packaged app it is simply absent — not denied, not broken, missing — so tag scanning would
+disappear from the app with no error anywhere.
+
+`android/app/src/main/java/com/hnp/mfdcs/NfcPlugin.java` puts `NfcAdapter` behind the same door.
+`services/nfc` picks a reader; nothing above it changed.
+
+### The contract, which is the part worth understanding
+
+The plugin sends each record as **base64 bytes** with a `recordType` from Web NFC's vocabulary,
+and those bytes are **what Web NFC would have handed the page** — not what is physically on the
+tag. Web NFC normalises two well-known record types before the page sees them, and the plugin does
+the same:
+
+| Record | Raw NDEF | What crosses the bridge |
+|---|---|---|
+| `text` | status byte, language code, then the text | just the text, UTF-8 |
+| `uri` | prefix byte (`0x04` = `https://`), then the rest | the expanded URL |
+
+Everything else passes through untouched.
+
+Those two rules are fixed by the NFC Forum spec and cannot drift. **Everything else** — records
+that are mislabelled, media types that lie, which of several records holds the asset id — is
+heuristics learned from tags in this plant, and lives once, in TypeScript, in `decodeRecordData`.
+
+Get this wrong in the obvious direction (send the raw payload, let the shared decoder sort it out)
+and it fails quietly: the decoder offers itself both the raw bytes and its own header-stripping
+attempt, prefers the *longer*, and reads `ASSET-42` as `\u0002enASSET-42` — an id that matches no
+asset, with nothing on screen to say why. `src/services/nfc/nativeNfc.test.ts` pins both halves,
+including that failure, so a regression on the Java side is legible instead of mysterious.
+
+### Registration
+
+`MainActivity.onCreate` calls `registerPlugin(NfcPlugin.class)` **before** `super.onCreate`.
+Capacitor auto-registers plugins that arrive as npm packages; one living in the app's own source is
+invisible to that. Registered after `super.onCreate`, the bridge is already built and the registry
+frozen — `window.Capacitor.Plugins.Nfc` is undefined, `isNFCSupported()` answers false, and
+scanning vanishes silently.
+
+### Reader mode and the lifecycle
+
+The plugin uses `enableReaderMode`, not foreground dispatch: the tag stays inside this activity
+instead of being broadcast where another app could take it, or bouncing our own activity through
+`onNewIntent` and tearing down the WebView mid-shift.
+
+Android only permits reader mode on a **resumed** activity, so `handleOnPause`/`handleOnResume`
+reconcile the hardware to what the page asked for. Without them a scan running when the screen
+locks comes back dead — after a call, a notification, or a screen timeout — and looks to the
+operator like a tag that will not read.
+
+---
+
+## 8. Camera, microphone and location
+
+These are `getUserMedia` and `navigator.geolocation`, the same calls the browser makes. Capacitor's
+`BridgeWebChromeClient` maps each onto the matching Android permission and prompts at the moment of
+use.
+
+**But the WebView cannot grant itself anything the app has not declared.** A permission missing
+from `AndroidManifest.xml` is refused outright — no prompt, no error the page can see. That is
+exactly how camera and microphone came to do nothing at all in the first build: the page asked,
+Android declined silently, and the operator saw a dead button.
+
+Declared, with the reason:
+
+| Permission | For |
+|---|---|
+| `CAMERA` | photographing a reading or a fault, and video evidence |
+| `RECORD_AUDIO`, `MODIFY_AUDIO_SETTINGS` | voice notes, and a video's audio track |
+| `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION` | stamping where a reading was taken |
+| `NFC` | tag identification (normal permission — granted at install, never prompts) |
+| `INTERNET` | reaching nginx |
+
+Every corresponding `<uses-feature>` is `android:required="false"`, and that matters: a hardware
+feature used through a permission is *implicitly required* unless said otherwise, and a required
+feature keeps the app off every device that lacks it. Some tablets here have no NFC and some have
+no rear camera; they must still be able to open a log sheet and type readings in.
+
+---
+
+## 9. Telling the app apart from a browser
+
+`src/services/device/nativeApp.ts` — `isNativeApp()`, `currentPlatform()`, `nativePlugin<T>()`.
+
+It reads the `window.Capacitor` global rather than importing `@capacitor/core`, which keeps that
+package out of the web bundle entirely: **the `dist/` that goes on nginx is what it was before the
+packaged app existed.**
+
+`display-mode: standalone` does **not** answer this question. A Capacitor WebView reports
+`display-mode: browser` — no manifest is applied and there is no browser UI to hide — so every
+check written for "is this an installed PWA" comes back false inside the app. That is why the
+install banner appeared to operators who had installed the APK a minute earlier;
+`InstallPwaPrompt` now checks `isNativeApp()` first.
+
+---
+
+## 10. What to rebuild, when
+
+The question this file exists for.
+
+### I changed the web app (a page, a fix, anything under `src/`)
+
+```bash
+npm run build:mobile     # → dist/, for nginx
+npm run build:apk        # → APK, rebuilds dist/ on the way
+```
+
+Put `dist/` where nginx serves it; copy the APK to the tablets. **Both**, or the two go out of
+step.
+
+### The server address changed
+
+Edit **`.env.mobile`** — one file, both targets:
+
+```
+VITE_SERVER_URL=https://<new-address>:<port>
+```
+
+Then rebuild both as above. Also re-issue the certificate for the new address
+(`npm run setup:mkcert -- -Ip <new-ip>`) and reconfigure nginx.
+
+### I regenerated the certificate for the same CA
+
+Nothing to do in the app. It trusts the **CA**, not the leaf certificate. Update nginx and reload.
+
+### I regenerated the **CA** itself
+
+`npm run build:apk` picks up the new `certs/rootCA.crt` automatically — that is what `ca:apk` is
+for. Reinstall the APK on every tablet, or they will keep trusting the old CA and fail to log in.
+
+### I changed an icon SVG
+
+```bash
+npm run icons        # PWA icons
+npm run icons:apk    # Android launcher + splash
+npm run build:apk
+```
+
+### I changed something native (manifest, plugin, network config)
+
+```bash
+npm run build:apk
+```
+
+Gradle picks it up. No `cap add`, no regeneration.
+
+### `android/` needs to be recreated from scratch
+
+Rare, and it costs the hand-written files. Save `NfcPlugin.java`, `MainActivity.java`,
+`AndroidManifest.xml` and `res/xml/network_security_config.xml` first — or take them back out of
+git, which is why they are committed.
+
+```bash
+npx cap add android
+# restore the four files above, then:
+npm run icons:apk
+npm run build:apk
+```
+
+---
+
+## 11. What is committed and what is not
+
+`android/` **is** committed: it holds the plugin, the manifest, the network configuration and the
+generated icons — all of it either hand-written or reproducible only with `sharp`.
+
+Not committed (`android/.gitignore` and the root `.gitignore`):
+
+| | Why |
+|---|---|
+| `android/app/src/main/assets/public/` | the copied `dist/`; regenerated by every sync |
+| `android/app/src/main/assets/capacitor.config.json` | generated |
+| `android/local.properties` | this machine's SDK path |
+| `android/**/build/`, `.gradle/` | build output |
+| `android/app/src/main/res/raw/plant_ca.crt` | this site's CA — copied in by `ca:apk`, see §5 |
+| `*.apk` | build output |
+
+`eslint.config.js` ignores `android/**`. Nothing in it is hand-written JavaScript — it is the
+minified bundle plus Gradle's output — and linting a minified bundle produces about fifteen hundred
+`no-undef`s for `self` and `URL`, which drowns every real finding and turns the gate into noise.
+
+---
+
+## 12. iOS
+
+Not built yet, and the groundwork is deliberate. `nativeApp.ts` reports the platform rather than
+answering "is this Android"; `services/nfc` chooses a reader by capability, not by platform;
+nothing above the service layer knows a native app exists. Adding iOS means `npx cap add ios`, an
+NFC plugin against Core NFC emitting the same record shape as §7, and the equivalent of §5 for
+certificate trust — not a second frontend.
+
+This is the reason Capacitor was chosen over a Trusted Web Activity: a TWA is Android-only, and its
+Digital Asset Links verification is done by the OS against the **system** trust store, which a
+self-signed site certificate cannot satisfy.
+
+---
+
+## See also
+
+- [`device-features.md`](device-features.md) — NFC, camera, GPS and orientation from the app's side,
+  and how each degrades
+- [`deployment.md`](deployment.md) — nginx, certificates, and getting the CA onto a tablet
+- [`sync.md`](sync.md) — what actually crosses the wire once the app is talking

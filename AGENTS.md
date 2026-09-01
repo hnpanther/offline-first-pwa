@@ -12,6 +12,7 @@ This file is conventions and traps. The references below are kept current with t
 | **[docs/storage.md](docs/storage.md)** | The Dexie schema, every store and index, and the rules for changing it. |
 | **[docs/deployment.md](docs/deployment.md)** | nginx as a service (WinSW / systemd), TLS with mkcert or openssl, tablet CA install, and why TLS is not optional here. |
 | **[docs/device-features.md](docs/device-features.md)** | NFC, camera, GPS, screen orientation — requirements and fallbacks. |
+| **[docs/apk.md](docs/apk.md)** | The packaged Android app: the native NFC plugin and its payload contract, manifest permissions, CA trust, and what to rebuild when what changes. |
 | **[README.md](README.md)** | Setup, mobile testing, deployment, troubleshooting. |
 | **[CLAUDE.md](CLAUDE.md)** | The short entry point, and the rule below. |
 
@@ -44,11 +45,16 @@ npm run preview:mobile         # :4173 HTTPS — real PWA + offline test
 npm test                       # vitest run (src/**/*.test.ts)
 npm run lint
 npx tsc --noEmit               # same as build typecheck (tests excluded)
+
+# Android app — see docs/apk.md
+npm run build:apk              # CA + build:mobile + cap sync + gradlew assembleDebug
+npm run icons:apk              # launcher icons and splash, from the project SVGs
 ```
 
 | Goal | Command |
 |------|---------|
 | Tablet / nginx deploy | `npm run build:mobile` → copy `dist/` |
+| Android app | `npm run build:apk` → `android/app/build/outputs/apk/debug/app-debug.apk` |
 | Typecheck app only | `tsc` via build scripts; tests use `tsconfig.vitest.json` |
 | Trusted HTTPS dev | `npm run setup:mkcert` then `preview:mobile` |
 
@@ -512,6 +518,9 @@ By role, the resulting UI is unchanged:
 | Recording ceilings | `utils/mediaCapture.ts` (`beginRecording`), `AttachmentFieldInput`'s auto-save effect, `recordingLimits.test.ts`, and the server's `AttachmentService.enforceDuration` — the two must agree or a capped clip is refused |
 | Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
 | Production deploy | `.env.mobile.example`, README nginx section |
+| A device capability (NFC, camera, mic, GPS) | `docs/device-features.md`, **and** whether the packaged app can do it at all — a browser API is not automatically in a WebView, and a permission not in `AndroidManifest.xml` fails with no prompt. See `docs/apk.md` |
+| The server address | `.env.mobile` only — the APK and nginx read the same file. Then rebuild **both** (`npm run build:mobile`, `npm run build:apk`) or they go out of step |
+| Anything under `android/` | `docs/apk.md`, and rebuild — Gradle picks it up, no `cap add` needed |
 
 ---
 
@@ -810,3 +819,78 @@ callback new on reconnect) and one reserved empty interface in the store.
 
 - **`main.tsx` interpolates into `innerHTML`, and it is safe only because of where the string comes from.** The database-version-mismatch screen is deliberately plain DOM — the database the app is built on is unavailable, so the failure screen must not depend on React. It builds its markup with a template literal that includes `${error.message}`. That message is constructed by this app inside `DatabaseVersionMismatchError`, never fetched, so there is nothing to escape today. It is listed here because the sink is real: the moment that screen shows text that came from the server, an API response, or a filename an operator chose, it becomes an XSS hole in the one code path that runs before any of the app's own defences.
 
+- **A browser API is not a WebView API — Web NFC is the one that bites.** `window.NDEFReader` is a
+  Chrome feature. Android's WebView does not implement it, so the moment the PWA was packaged with
+  Capacitor, tag scanning did not break: it *vanished*. `isNFCSupported()` answered false, the app
+  offered manual entry, and every reading came in through the fault-report path as though every
+  tag in the plant had failed. There is no error, no console warning, and nothing in the APK build
+  that hints at it. `services/nfc/nativeNfc.ts` + `NfcPlugin.java` put `NfcAdapter` behind the same
+  door; `isNFCSupported()` now asks the plugin first. Anything else the app reaches for should be
+  checked the same way before it is assumed to work inside the APK.
+
+- **The native NFC plugin must send what *Web NFC* would have sent, not what is on the tag.** The
+  shared decoder builds several candidate decodings and returns `pickLongest`. Hand it a raw NDEF
+  text payload and the raw UTF-8 read (`\u0002enASSET-42`, 12 chars) beats the correct one
+  (`ASSET-42`, 8) — so the language header rides into the asset id, matches nothing, and the
+  operator sees a tag that "does not scan". Web NFC strips a text record's status byte and language
+  code, and expands a URI record's prefix byte, before the page ever sees them; the Java side does
+  exactly those two things and nothing more. Everything past that is heuristics learned from tags
+  here and stays in `decodeRecordData` — two decoders would drift and a tag would read differently
+  in Chrome than in the app. `nativeNfc.test.ts` pins the contract *and* the failure mode.
+
+- **`display-mode: standalone` is false inside the packaged app.** A Capacitor WebView applies no
+  manifest and has no browser chrome to hide, so every "is this an installed PWA" check comes back
+  false — and `InstallPwaPrompt` told operators who had installed the APK a minute earlier to go
+  and install the app. The test for "packaged app" is `isNativeApp()` in
+  `services/device/nativeApp.ts`, which reads the `window.Capacitor` global rather than importing
+  `@capacitor/core`, so the `dist/` nginx serves is unchanged by the APK existing.
+
+- **A permission missing from `AndroidManifest.xml` is denied with no prompt and no error.**
+  Capacitor's `BridgeWebChromeClient` maps a `getUserMedia` request onto the matching Android
+  permission and asks at the moment of use — but only if the app declared it. Undeclared, the
+  request is refused outright: the page's promise rejects, and to the operator the button simply
+  does nothing. That was the entire cause of camera and microphone being dead in the first APK.
+  And the mirror trap: a `<uses-feature>` implied by a declared permission is **required** unless
+  you write `android:required="false"`, which would keep the app off every tablet here that has no
+  NFC or no rear camera.
+
+- **An Android app ignores a CA the user installed — including one Chrome on the same tablet
+  trusts.** Since API 24 an app trusts only the *system* store; a hand-installed CA lands in the
+  *user* store. So the packaged app failed every request with `CertPathValidatorException` against
+  the very nginx the browser was talking to happily, and the operator saw «ارتباط با سرور برقرار
+  نشد» — indistinguishable from a dead network, and a long way to chase from that symptom. Fixed by
+  `res/xml/network_security_config.xml` trusting `system` *and* `@raw/plant_ca`, with the CA copied
+  from `certs/` by `npm run ca:apk` on every build (never committed — a stale second copy is the
+  failure this prevents). Bundling it also removes the per-tablet CA install entirely.
+
+- **`registerPlugin()` must run before `super.onCreate`.** The bridge is built there and the plugin
+  registry frozen. Registered after, `window.Capacitor.Plugins.Nfc` is undefined, `isNFCSupported()`
+  answers false, and scanning disappears from the app with nothing logged anywhere — the same
+  symptom as the WebView trap above, from a different cause.
+
+- **The Capacitor template's `drawable-v24/ic_launcher_foreground.xml` beats any PNG you generate.**
+  It is a vector, and `-v24` wins on API 24+, which is every device this app runs on. Generate
+  launcher icons all day and the icon will not change until that file is deleted —
+  `scripts/generate-apk-assets.mjs` deletes it, and that deletion is load-bearing, not tidying.
+
+- **`android/local.properties` needs forward slashes.** It is a Java `.properties` file, where `\`
+  starts an escape, so `sdk.dir=C:\Android\Sdk` fails with *"The filename, directory name, or
+  volume label syntax is incorrect"* — which reads like a Gradle or PATH problem and is neither.
+  Write `sdk.dir=C\:/Android/Sdk`.
+
+- **A build script that cannot fail is worse than no build script.** `build:apk` was once
+  `cd android && gradlew.bat assembleDebug`. npm does not hand a script the shell you are typing
+  in, so it printed `'gradlew.bat' is not recognized as an internal or external command` — **and
+  exited 0**. `npm run build:apk` reported success, produced no APK, and anyone reading the tail of
+  that output would have shipped a stale file to the tablets. It is now `scripts/build-apk.mjs`,
+  which picks the wrapper from `process.platform` and exits with Gradle's own status. Note the
+  Windows detail if you touch it: Node 20 refuses to spawn a `.bat` directly (CVE-2024-27980) and
+  fails with a bare `EINVAL`, so the wrapper goes through `cmd.exe` — which is why the path is
+  quoted and the task name is pattern-checked before it is spliced into a command line.
+
+- **`npx cap add android` refuses whenever `android/` exists, even empty.** The guard is a bare
+  `pathExists`. If the directory cannot be removed — a shell sitting inside it is enough on Windows
+  — the escape hatch is that `cap add` is only `extractTemplate` (mkdir + untar, it never deletes)
+  followed by `editProjectSettingsAndroid` and a normal `cap sync`. Calling those two directly from
+  `@capacitor/cli/dist` produces a byte-for-byte identical platform without the guard. Do not
+  hand-scaffold the directory instead; the template is the thing that must match the CLI version.

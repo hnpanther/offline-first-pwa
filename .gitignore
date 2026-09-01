@@ -46,3 +46,6 @@ desktop.ini
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+
+# Android — the site CA is copied in from certs/ by npm run ca:apk, never committed
+android/app/src/main/res/raw/plant_ca.crt

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Typography, Collapse } from '@mui/material'
 import GetAppIcon from '@mui/icons-material/GetApp'
+import { isNativeApp } from '@/services/device/nativeApp'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 
 interface BeforeInstallPromptEvent extends Event {
@@ -43,6 +44,12 @@ export function InstallPwaPrompt() {
     window.addEventListener('beforeinstallprompt', onBip)
     return () => window.removeEventListener('beforeinstallprompt', onBip)
   }, [])
+
+  // Inside the packaged app the app IS installed, and every word below is wrong there.
+  // `isStandalone` does not catch it: a Capacitor WebView reports `display-mode: browser`,
+  // because no manifest is applied and there is no browser UI to hide. So the banner told an
+  // operator who had just installed the APK to go and install the app.
+  if (isNativeApp()) return null
 
   if (isStandalone || dismissed) return null
 

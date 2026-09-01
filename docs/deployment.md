@@ -194,6 +194,12 @@ openssl x509 -in nginx.crt -noout -text | grep -A1 "Subject Alternative Name"
 
 Do this once per device, before handing it out.
 
+> **Skippable if the tablet gets the APK instead of the browser.** The packaged app bundles this
+> site's CA — an Android app ignores a hand-installed CA anyway, since it trusts only the *system*
+> store, so the CA had to go inside the APK. The side effect is that an app-only tablet needs the
+> APK and nothing else. See [apk.md §5](apk.md#5-certificates-the-trap-that-costs-an-afternoon).
+> A tablet that also uses Chrome still needs the steps below.
+
 The file to transfer is the **CA**, never the server certificate and never a private key:
 
 | Source | File | Note |
@@ -218,6 +224,15 @@ monitored" notice. That is expected, and it is the price of a private CA on a pl
 > **A tablet without the CA gets an interstitial warning, and a service worker will not install
 > behind one.** The app appears to work when the operator clicks through, then fails offline —
 > the worst possible symptom, because it appears days later and looks unrelated.
+
+### The same thing in the app, which looks nothing like it
+
+The packaged app has no interstitial and nothing to click through. A missing or wrong CA fails
+every request with `CertPathValidatorException`, which reaches the operator as «ارتباط با سرور
+برقرار نشد» — identical to a dead network. If the app cannot log in on a tablet where Chrome
+reaches the same nginx happily, the CA in the APK is the first thing to check, not the network.
+It is copied in from `certs/rootCA.crt` at build time by `npm run ca:apk`; rebuilding the CA means
+rebuilding and reinstalling the APK.
 
 ## Renewal
 

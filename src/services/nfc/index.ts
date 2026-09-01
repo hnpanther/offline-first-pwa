@@ -1,4 +1,10 @@
 import type { NFCTagData, NFCScanResult } from '@/types'
+import {
+  decodeBase64,
+  hasNativeNfcPlugin,
+  startNativeNfcScan,
+  type NativeNfcTag
+} from '@/services/nfc/nativeNfc'
 
 /**
  * NFC abstraction layer.
@@ -85,7 +91,16 @@ const URL_PREFIXES = [
   'urn:nfc:'
 ]
 
+/**
+ * Whether tags can be read here, by either route.
+ *
+ * <p>Two implementations answer to this one question. In a browser it is **Web NFC**; inside the
+ * packaged app that API does not exist — Android's WebView does not implement it — and a native
+ * plugin stands in. Everything upstream asks only "can I scan", which is why adding the second
+ * route changed no page.
+ */
 export function isNFCSupported(): boolean {
+  if (hasNativeNfcPlugin()) return true
   return typeof window !== 'undefined' && 'NDEFReader' in window
 }
 
@@ -109,6 +124,16 @@ export function resolveNfcTagId(tag: NFCTagData): string {
 }
 
 export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void> {
+  // The native reader wins where it exists: inside the packaged app it is the only one that
+  // works, and it is never present in a browser.
+  if (hasNativeNfcPlugin()) {
+    return startNativeNfcScan(
+      parseNativeTag,
+      tagData => onRead({ success: true, tagData }),
+      error => onRead({ success: false, error })
+    )
+  }
+
   if (!isNFCSupported()) {
     onRead({
       success: false,
@@ -143,6 +168,38 @@ export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void>
 export function stopNFCScan(): void {
   activeAbortController?.abort()
   activeAbortController = null
+}
+
+/**
+ * A tag from the native plugin, decoded by the **same** rules as one from Web NFC.
+ *
+ * <p>That reuse is the whole point of the plugin sending **bytes**, and specifically the bytes
+ * Web NFC would have handed over: it normalises a text record's language header and a URI
+ * record's prefix byte exactly as the browser does, and stops there. Everything past that — the
+ * mislabelled records and lying media types real tags carry — is handled by `decodeRecordData`,
+ * tested against tags from the plant. A second copy of that in Java would drift from this one,
+ * and a tag would then read differently depending on whether the operator was in Chrome or in
+ * the app.
+ */
+export function parseNativeTag(tag: NativeNfcTag): NFCTagData {
+  const records = (tag.records ?? []).map(record => {
+    const decoded = decodeRecordData({
+      recordType: record.recordType,
+      mediaType: record.mediaType,
+      data: decodeBase64(record.payload)
+    })
+    return {
+      recordType: record.recordType,
+      mediaType: record.mediaType,
+      data: decoded || undefined
+    }
+  })
+
+  return {
+    serialNumber: tag.serialNumber ?? '',
+    message: pickLongest(records.map(r => r.data)),
+    records
+  }
 }
 
 function parseNDEFEvent(event: NDEFReadingEvent): NFCTagData {

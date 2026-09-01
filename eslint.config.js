@@ -20,7 +20,19 @@ import reactRefresh from 'eslint-plugin-react-refresh'
  */
 export default [
   {
-    ignores: ['dist/**', 'dev-dist/**', 'coverage/**', 'node_modules/**', '*.config.js', '*.config.ts']
+    // `android/` is the packaged app. Nothing in it is hand-written JavaScript: it is the built
+    // bundle that `npx cap sync` copies in, plus Gradle's own output. Linting a minified bundle
+    // produces about fifteen hundred `no-undef`s for `self` and `URL` and drowns every real
+    // finding, so the gate has to skip it or it stops being a gate.
+    ignores: [
+      'dist/**',
+      'dev-dist/**',
+      'coverage/**',
+      'node_modules/**',
+      'android/**',
+      '*.config.js',
+      '*.config.ts'
+    ]
   },
   js.configs.recommended,
   {

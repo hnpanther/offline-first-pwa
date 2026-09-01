@@ -15,9 +15,26 @@ Each is unevenly supported, and each degrades in a way that was chosen deliberat
 
 ## Availability
 
-Web NFC is **Chrome on Android only**. Not iOS, not desktop. On a device without it the app
-falls back to manual entry — with an NFC fault report, so the bypass is recorded rather than
-silent.
+Two implementations answer one question, `isNFCSupported()`:
+
+| Where | Reader |
+|---|---|
+| Chrome on Android | **Web NFC** (`window.NDEFReader`) |
+| The packaged app | a **native plugin** over `NfcAdapter` |
+| Everywhere else | nothing — manual entry |
+
+Web NFC is a Chrome API: not iOS, not desktop, and — the one that catches people — **not Android's
+WebView**. Inside the packaged app `NDEFReader` is simply absent, so without the plugin scanning
+would disappear from the app with no error anywhere. See [apk.md §7](apk.md#7-nfc) for the plugin
+and the payload contract it keeps.
+
+On a device with neither, the app falls back to manual entry — with an NFC fault report, so the
+bypass is recorded rather than silent.
+
+Both routes decode a tag through the **same** `decodeRecordData`. That is not tidiness: two
+decoders would drift the first time either was fixed, and a tag would then read differently
+depending on whether the operator was in Chrome or in the app — the worst way for this to fail,
+and the hardest to notice.
 
 ## What a valid tag contains
 
@@ -93,6 +110,13 @@ on the distinction.
 [`src/services/sync/attachmentSync.ts`](../src/services/sync/attachmentSync.ts)
 
 Three field types: `image`, `audio`, `video`.
+
+In a browser these are `getUserMedia`, and the browser prompts. **In the packaged app the prompt
+only happens if the permission is declared in `AndroidManifest.xml`** — Capacitor maps a
+`getUserMedia` request onto the matching Android permission and asks at the moment of use, but an
+undeclared permission is refused outright: no prompt, no error the page can see. That is exactly
+how camera and microphone came to do nothing at all in the first APK. The declarations, and why
+each `<uses-feature>` is `required="false"`, are in [apk.md §8](apk.md#8-camera-microphone-and-location).
 
 ## Capture and compression
 
@@ -323,17 +347,18 @@ which looks installed to whoever did it, and is not.
 
 # Support matrix
 
-| Feature | Chrome Android | Safari iOS | Desktop | Fallback |
-|---|---|---|---|---|
-| Web NFC | ✅ | ❌ | ❌ | Manual entry + fault report |
-| Camera / mic | ✅ | ✅ | ✅ (webcam) | Field left empty |
-| Geolocation | ✅ | ✅ | ✅ (coarse) | Clear error, field left empty |
-| Orientation lock | ✅ **installed only** | ❌ | ❌ | Free rotation, stated in Settings |
-| IndexedDB | ✅ | ✅ | ✅ | none — required |
-| Service worker | ✅ | ✅ | ✅ | none — required |
+| Feature | Chrome Android | Android app (APK) | Safari iOS | Desktop | Fallback |
+|---|---|---|---|---|---|
+| NFC | ✅ Web NFC | ✅ native plugin | ❌ | ❌ | Manual entry + fault report |
+| Camera / mic | ✅ | ✅ *declared permissions* | ✅ | ✅ (webcam) | Field left empty |
+| Geolocation | ✅ | ✅ *declared permissions* | ✅ | ✅ (coarse) | Clear error, field left empty |
+| Orientation lock | ✅ **installed only** | ✅ | ❌ | ❌ | Free rotation, stated in Settings |
+| IndexedDB | ✅ | ✅ | ✅ | ✅ | none — required |
+| Service worker | ✅ | ✅ *assets are bundled* | ✅ | ✅ | none — required |
 
 ## Related
 
+- **[apk.md](apk.md)** — the packaged app: the NFC plugin, the manifest permissions, CA trust
 - **[storage.md](storage.md)** — where captures are kept
 - **[sync.md](sync.md)** — how they reach the server
 - **[../AGENTS.md](../AGENTS.md)** — the traps
