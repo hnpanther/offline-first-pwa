@@ -962,6 +962,22 @@ VITE_SERVER_URL=https://<new-address>:<port>
 Then rebuild both as above. Also re-issue the certificate for the new address
 (`npm run setup:mkcert -- -Ip <new-ip>`) and reconfigure nginx.
 
+> **Rebuilding does not move a tablet that already has the app.** `VITE_SERVER_URL` is a *seed*,
+> not the address the app uses. The address lives in IndexedDB, and `getSettings()` reads
+> `{ ...DEFAULT_SETTINGS, ...stored }` — the stored value is spread second and wins. The build
+> value therefore applies only where there is no settings row yet: a genuinely fresh install.
+>
+> Installing a new APK over an existing one **does not clear app data**, so the old address
+> survives the update and the new build looks like it ignored `.env.mobile`. It did not; it was
+> overruled.
+>
+> Two ways out, per tablet: change it in the app's **Settings** page, or clear the app's data.
+> Settings is the one to reach for — see the uninstall warning in §10, because clearing data
+> destroys unsynced readings and queued media, and the device's own pending badge cannot tell you
+> whether another operator left work behind.
+>
+> To check what a device is actually using rather than guessing: the Settings page shows it.
+
 ### I regenerated the certificate for the same CA
 
 Nothing to do in the app, and nothing to do on any tablet. It trusts the **CA**, not the leaf
