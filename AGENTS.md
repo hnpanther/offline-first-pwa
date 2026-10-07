@@ -13,6 +13,7 @@ This file is conventions and traps. The references below are kept current with t
 | **[docs/deployment.md](docs/deployment.md)** | nginx as a service (WinSW / systemd), TLS with mkcert or openssl, tablet CA install, and why TLS is not optional here. |
 | **[docs/device-features.md](docs/device-features.md)** | NFC, camera, GPS, screen orientation — requirements and fallbacks. |
 | **[docs/apk.md](docs/apk.md)** | The packaged Android app: the native NFC plugin and its payload contract, manifest permissions, CA trust, and what to rebuild when what changes. |
+| **[docs/roadmap.md](docs/roadmap.md)** | **Deferred, not built.** Hardening what nginx serves (no CSP today, no SRI), noticing an odd session, and why proving a tablet runs the real app cannot be done from the device. Each entry carries the established facts; do not re-derive them. |
 | **[README.md](README.md)** | Setup, mobile testing, deployment, troubleshooting. |
 | **[CLAUDE.md](CLAUDE.md)** | The short entry point, and the rule below. |
 

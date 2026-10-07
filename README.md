@@ -27,6 +27,7 @@ same commit.
 | **[docs/deployment.md](docs/deployment.md)** | Putting it on a plant network: the build, nginx as a service (WinSW on Windows, systemd on Linux), certificates with mkcert or openssl, and getting the CA onto every tablet. |
 | **[docs/device-features.md](docs/device-features.md)** | NFC, camera/microphone, GPS and screen orientation — what each requires, and how each degrades. |
 | **[docs/apk.md](docs/apk.md)** | The Android app: building it without Android Studio, the native NFC plugin, manifest permissions, bundling the site CA, and exactly what to rebuild when something changes. |
+| **[docs/roadmap.md](docs/roadmap.md)** | Work thought through and **not done** — nginx hardening, session anomaly detection, device attestation. Nothing in it describes current behaviour. |
 | **[AGENTS.md](AGENTS.md)** | Conventions and the traps found the hard way. |
 | **[CLAUDE.md](CLAUDE.md)** | Entry point for AI agents working in this repository. |
 
