@@ -118,6 +118,12 @@ undeclared permission is refused outright: no prompt, no error the page can see.
 how camera and microphone came to do nothing at all in the first APK. The declarations, and why
 each `<uses-feature>` is `required="false"`, are in [apk.md §8](apk.md#8-camera-microphone-and-location).
 
+**A photo is not `getUserMedia`.** It is `<input type="file" capture="environment">`, which hands off
+to the device's camera app. Chrome does that by itself. In the APK it also needs a `<queries>` entry
+for `IMAGE_CAPTURE` in the manifest: without one, Android 11+ hides the camera app from this app and
+Capacitor silently opens the **file manager** instead. That is what the Hytera PNC460 did, while
+Chrome on the same tablet opened the camera fine.
+
 ## Capture and compression
 
 Images are compressed on the device before storage. A modern phone camera produces 5–10 MB per

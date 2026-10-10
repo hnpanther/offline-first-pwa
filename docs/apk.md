@@ -855,6 +855,34 @@ feature used through a permission is *implicitly required* unless said otherwise
 feature keeps the app off every device that lacks it. Some tablets here have no NFC and some have
 no rear camera; they must still be able to open a log sheet and type readings in.
 
+### The photo button is not `getUserMedia` — and needs a `<queries>` entry
+
+Video and voice notes record in-page. **A photo does not**: it is `<input type="file"
+accept="image/*" capture="environment">`, which hands off to the device's own camera app. In the
+WebView that lands in `BridgeWebChromeClient.onShowFileChooser`, which asks for `CAMERA` (declared
+above), then checks `resolveActivity(ACTION_IMAGE_CAPTURE)` — and if that returns null it **falls
+back to the generic file picker without a word**.
+
+Since Android 11 it returns null for any app that has not declared, in a `<queries>` block, that it
+wants to see camera apps. Package visibility hides them; the camera is there, this app just may not
+look at it. So until the manifest had
+
+```xml
+<queries>
+    <intent>
+        <action android:name="android.media.action.IMAGE_CAPTURE" />
+    </intent>
+</queries>
+```
+
+tapping «گرفتن عکس» on a Hytera PNC460 opened the file manager — Recent files, Gallery — instead of a
+viewfinder, and Chrome on the same tablet opened the camera fine, because Chrome is not subject to
+this app's manifest. No `<queries>` entry is needed for video or audio: neither leaves the page.
+
+The photo the camera app writes goes to `getExternalFilesDir(Pictures)` through the
+`${applicationId}.fileprovider` provider; `res/xml/file_paths.xml` already covers that path with its
+`external-path`. Remove that, and the capture fails the same silent way.
+
 ---
 
 ## 9. Telling the app apart from a browser

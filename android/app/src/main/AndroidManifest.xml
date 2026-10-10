@@ -93,4 +93,23 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.location" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <!--
+        The photo button must open the camera, not the file manager.
+
+        `<input type="file" capture>` reaches BridgeWebChromeClient.onShowFileChooser, which checks
+        `resolveActivity(ACTION_IMAGE_CAPTURE)` before launching the camera and quietly falls back
+        to the generic file picker when that returns null. Since Android 11 (API 30) package
+        visibility makes it return null for every app not declared here - the camera app exists,
+        this app is simply not allowed to see it. The operator got "Recent files / Gallery" instead
+        of a viewfinder, with no error anywhere.
+
+        Video and voice notes do not need an entry: they record in-page through getUserMedia and
+        never hand off to another app.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
 </manifest>

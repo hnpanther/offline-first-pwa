@@ -231,8 +231,14 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   are kept and `retryFailedAttachment` is the manual way back in.
 - Compress before storing (`utils/mediaCapture.ts`) and always `revokeObjectURL` — both are
   load-bearing on a tablet that sits on one screen for a whole shift.
-- **Photo and audio need different permissions.** `<input capture>` needs none (it hands off to
-  the OS camera app); `getUserMedia` needs the microphone permission. Once denied, Chrome never
+- **Photo and audio need different permissions.** In a browser `<input capture>` needs none (it
+  hands off to the OS camera app); `getUserMedia` needs the microphone permission. **In the APK the
+  photo path needs the manifest's `<queries>` entry for `IMAGE_CAPTURE`.** Without it, Android 11+
+  hides the camera app from us, Capacitor's `onShowFileChooser` gets null from `resolveActivity`,
+  and it falls back to the file manager with no error at all. On a Hytera PNC460 that looked like
+  "the photo button opens Recent files / Gallery". Do not remove the block as unused: nothing in
+  the code names it, and Chrome works without it, so nothing but a real tablet running the APK will
+  show that it is missing. See docs/apk.md §8. Once denied, Chrome never
   prompts again — so `utils/mediaPermissions.ts` checks the Permissions API *before* calling and
   shows how to re-enable it, instead of surfacing a raw `DOMException.message` with nothing to
   click. Never show `err.message` from a media call directly.
