@@ -109,6 +109,21 @@ type NFCReadCallback = (result: NFCScanResult) => void
 let activeAbortController: AbortController | null = null
 
 /**
+ * The native reader's stop, held here because callers stop through `stopNFCScan()`, not through
+ * the handle `startNFCScan` returns — `useNFC` discards that handle.
+ *
+ * <p>Before this existed `stopNFCScan()` only aborted Web NFC, so in the APK **nothing ever
+ * stopped the native reader**: reader mode stayed on after the first scan and its listener kept
+ * writing every tag the antenna saw into the store. A Hytera PNC460 re-reports a tag that is still
+ * near the antenna, so the asset just filled was stored again as "last tag" while its form was
+ * open, and the next «اسکن NFC» opened that asset instantly, with no tag anywhere near.
+ */
+let activeNativeStop: (() => void) | null = null
+
+/** Bumped on every stop, so a native start that resolves after it was cancelled stops itself. */
+let scanGeneration = 0
+
+/**
  * Asset tag id from NDEF payload — never the hardware UID.
  */
 export function resolveNfcTagId(tag: NFCTagData): string {
@@ -124,14 +139,30 @@ export function resolveNfcTagId(tag: NFCTagData): string {
 }
 
 export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void> {
+  // One reader at a time. A second start without a stop would leave the first one's listener
+  // attached, delivering every tag twice — once to a callback nobody is waiting on.
+  stopNFCScan()
+
   // The native reader wins where it exists: inside the packaged app it is the only one that
   // works, and it is never present in a browser.
   if (hasNativeNfcPlugin()) {
-    return startNativeNfcScan(
+    const generation = scanGeneration
+    const stop = await startNativeNfcScan(
       parseNativeTag,
       tagData => onRead({ success: true, tagData }),
       error => onRead({ success: false, error })
     )
+    // Stopped while the bridge was still starting — leaving a page right after tapping scan.
+    // Registering the reader now would bring back exactly the reader nobody can stop.
+    if (generation !== scanGeneration) {
+      stop()
+      return () => {}
+    }
+    activeNativeStop = stop
+    // A stale handle from an earlier scan must not stop the one running now.
+    return () => {
+      if (generation === scanGeneration) stopNFCScan()
+    }
   }
 
   if (!isNFCSupported()) {
@@ -165,7 +196,11 @@ export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void>
   }
 }
 
+/** Stops whichever reader is running — Web NFC in a browser, the native plugin in the APK. */
 export function stopNFCScan(): void {
+  scanGeneration++
+  activeNativeStop?.()
+  activeNativeStop = null
   activeAbortController?.abort()
   activeAbortController = null
 }

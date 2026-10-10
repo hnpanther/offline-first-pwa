@@ -827,6 +827,28 @@ reconcile the hardware to what the page asked for. Without them a scan running w
 locks comes back dead — after a call, a notification, or a screen timeout — and looks to the
 operator like a tag that will not read.
 
+### Stopping the reader, which for a while nothing did
+
+`useNFC` stops a scan through `stopNFCScan()`, not through the handle `startNFCScan` returns, and
+`stopNFCScan()` used to abort **Web NFC only**. In the APK the native reader was therefore never
+stopped: after the first scan, reader mode stayed on and its `nfcTag` listener kept writing every
+tag the antenna saw into the store as the "last tag".
+
+On a Samsung that was invisible: it reports a tag once per tap. A **Hytera PNC460** reports again a
+tag that is still near the antenna, so the tag just scanned was stored again while its asset's form
+was open, and the next «اسکن NFC» opened the **previous asset at once, with no tag in reach**. The
+fill page acts on the stored tag as soon as a scan starts.
+
+Three things now hold, and `nativeNfc.test.ts` pins the first:
+
+- `stopNFCScan()` stops whichever reader is running, native included, and a start that finishes
+  after a stop stops itself.
+- `useNFC` clears the stored tag when a scan starts. Only a tag read after the press can answer it.
+- `useNFC` ignores a tag that arrives while no scan was requested.
+
+If a scan ever opens an asset nobody scanned, check first that the native `stopScan` is actually
+reached.
+
 ---
 
 ## 8. Camera, microphone and location

@@ -36,6 +36,16 @@ decoders would drift the first time either was fixed, and a tag would then read 
 depending on whether the operator was in Chrome or in the app — the worst way for this to fail,
 and the hardest to notice.
 
+## One scan, one tag
+
+`stopNFCScan()` stops **whichever** reader is running. It used to stop Web NFC only, so in the APK
+the native reader stayed on after the first scan. A Hytera PNC460 reports a tag again while it is
+still near the antenna, so the next «اسکن NFC» opened the previous asset with no tag in reach.
+Samsung tablets report once per tap and never showed it.
+
+`useNFC` also clears the stored tag when a scan starts and ignores tags that arrive while no scan
+was requested. Details in [apk.md §7](apk.md#7-nfc).
+
 ## What a valid tag contains
 
 | | |

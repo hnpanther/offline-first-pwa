@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isNFCSupported, parseNativeTag, resolveNfcTagId, startNFCScan } from '@/services/nfc'
+import { isNFCSupported, parseNativeTag, resolveNfcTagId, startNFCScan, stopNFCScan } from '@/services/nfc'
 import { decodeBase64, hasNativeNfcPlugin } from '@/services/nfc/nativeNfc'
 
 /**
@@ -130,6 +130,68 @@ describe('choosing a reader', () => {
 
     expect(plugin.stopScan).toHaveBeenCalledOnce()
     expect(plugin.removed.sort()).toEqual(['nfcError', 'nfcTag'])
+  })
+
+  /**
+   * The way the app actually stops a scan. `useNFC` discards the handle above and calls
+   * `stopNFCScan()`, which used to abort Web NFC only — so in the APK the native reader was never
+   * stopped, kept writing tags into the store, and the next scan on a Hytera opened the previous
+   * asset with no tag in reach.
+   */
+  it('stops the native reader through stopNFCScan, the way useNFC stops it', async () => {
+    const plugin = fakePlugin()
+    installPlugin(plugin)
+
+    await startNFCScan(() => {})
+    stopNFCScan()
+    await Promise.resolve()
+
+    expect(plugin.stopScan).toHaveBeenCalledOnce()
+    expect(plugin.removed.sort()).toEqual(['nfcError', 'nfcTag'])
+  })
+
+  it('stops the previous native reader before starting another', async () => {
+    const plugin = fakePlugin()
+    installPlugin(plugin)
+
+    await startNFCScan(() => {})
+    await startNFCScan(() => {})
+    await Promise.resolve()
+
+    expect(plugin.stopScan).toHaveBeenCalledOnce()
+    expect(plugin.removed.sort()).toEqual(['nfcError', 'nfcTag'])
+  })
+
+  /** Leaving the page right after tapping scan: the stop lands while the bridge is starting. */
+  it('stops a native reader that finishes starting after it was cancelled', async () => {
+    let finishStart: () => void = () => {}
+    const plugin = fakePlugin({
+      startScan: vi.fn(() => new Promise<void>(resolve => { finishStart = resolve }))
+    })
+    installPlugin(plugin)
+
+    const starting = startNFCScan(() => {})
+    await vi.waitFor(() => expect(plugin.startScan).toHaveBeenCalled())
+    stopNFCScan()
+    finishStart()
+    await starting
+    await Promise.resolve()
+
+    expect(plugin.stopScan).toHaveBeenCalledOnce()
+    expect(plugin.removed.sort()).toEqual(['nfcError', 'nfcTag'])
+  })
+
+  it('does not let a stale stop handle stop the scan running now', async () => {
+    const plugin = fakePlugin()
+    installPlugin(plugin)
+
+    const staleStop = await startNFCScan(() => {})
+    await startNFCScan(() => {})
+    staleStop()
+    await Promise.resolve()
+
+    // Once, from the second start replacing the first — not again from the stale handle.
+    expect(plugin.stopScan).toHaveBeenCalledOnce()
   })
 
   it('reports a reader that will not start, rather than throwing', async () => {

@@ -22,6 +22,10 @@ export function useNFC(): UseNFCReturn {
 
   const handleScanResult = useCallback(
     (result: NFCScanResult) => {
+      // A tag read while no scan was requested must not become "the last tag": the fill page
+      // acts on the stored tag the moment the next scan starts, and would open that asset
+      // without the operator touching anything.
+      if (!useAppStore.getState().isScanning) return
       if (!result.success || !result.tagData) {
         setNFCError(result.error ?? 'خطا در خواندن تگ')
         return
@@ -34,10 +38,12 @@ export function useNFC(): UseNFCReturn {
 
   const startScan = useCallback(async () => {
     if (isScanning) return
+    // Only a tag read after this press may answer it.
+    setLastScannedTag(null)
     setScanning(true)
     setNFCError(null)
     await startNFCScan(handleScanResult)
-  }, [isScanning, setScanning, setNFCError, handleScanResult])
+  }, [isScanning, setScanning, setNFCError, setLastScannedTag, handleScanResult])
 
   const stopScan = useCallback(() => {
     stopNFCScan()

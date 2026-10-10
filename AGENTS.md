@@ -194,6 +194,15 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 
 - Tag id = **NDEF text payload** (`resolveNfcTagId`), not hardware UID.
 - Lookup is **within current log sheet entries** only (offline-safe), through the single matcher `services/nfc/matchLogSheetEntry.ts`.
+- **`stopNFCScan()` must stop the native reader too, because it is the only stop anything calls.**
+  `useNFC` discards the handle `startNFCScan` returns. `stopNFCScan()` used to abort Web NFC only,
+  so in the APK reader mode stayed on after the first scan and kept storing tags as "last tag".
+  A Hytera PNC460 reports a tag again while it is still near the antenna, so the next «اسکن NFC»
+  opened the previous asset without any scan. Samsung reports once per tap and hid the bug, and
+  Chrome never had it. The native stop is now held in the module (`activeNativeStop`). A start
+  that resolves after a stop stops itself (`scanGeneration`). `useNFC` clears `lastScannedTag` on
+  start and drops tags that arrive while `isScanning` is false. Never stop the native reader only
+  through the returned handle. Regression tests: `nativeNfc.test.ts`.
 - **The sync interval is stored in milliseconds and shown in seconds — convert on exactly one side.** The Settings field converted seconds→ms in its `onChange` *and* the submit handler converted again, so every save multiplied the stored interval by 1000, including a save where nobody touched the field: 30 seconds became 30,000 and grew from there until sync effectively stopped. Conversion now lives only in `services/settings/syncInterval.ts`, and `clampSyncInterval` runs on the way to storage — `<input type="number">` returns `''` for an empty box (`Number('') === 0`, a zero-delay sync loop) and the form carries `noValidate`, so `min`/`max` are never enforced by the browser.
 - **`screen.orientation.lock()` failures are reported, not swallowed.** The app still degrades to free rotation in every case, but an administrator who picks Landscape and watches the tablet keep rotating cannot otherwise tell a browser that refuses from a setting that did not save. `applyScreenOrientation` returns an outcome and Settings states it. The reason worth separating is `notInstalled`: Chrome refuses to lock a page in a normal tab regardless of the manifest, and "Add to Home screen" can produce a shortcut that still opens a tab — which looks installed to whoever did it. The lock is also re-applied on `visibilitychange`, because Android drops it when a PWA is backgrounded and restored from the task switcher, which is how the app is used all shift.
 - **Scan failures are deliberately opaque.** Missing Record 1, a serial mismatch and an asset with no recorded serial all show one message (`t.logSheet.nfcVerificationFailed`). Naming which check failed hands whoever is holding the tag a map of how verification works, and the operator's next step — tell an administrator — is the same in all three cases. Only "valid tag, not on this sheet" stays specific: that is a routing mistake the operator can fix and it reveals nothing. Keep that distinction if you add outcomes to `matchLogSheetEntryByTag`.
