@@ -245,6 +245,18 @@ Covered in [storage.md](storage.md#attachments-why-the-id-is-minted-on-the-devic
 - Attachments upload on a **separate queue** from sheets, so a large video never blocks a small
   set of readings.
 
+## Playing back what was captured
+
+Every photo, voice note and clip on screen gets **one** object URL from `utils/mediaUrls.ts`
+(`MediaUrlCache`). The URL is kept while the attachment stays in the field and revoked when it is
+deleted or the field closes. The same URL survives re-renders, so a clip being played back is not
+reloaded when the operator types elsewhere in the form or while another recording counts up.
+
+When the bytes have been reclaimed after sync (7 days), a photo is downloaded again, **once**, and
+only when the device is online. A voice note or clip is not downloaded: its player stays empty
+rather than pulling megabytes over the plant network just because a field was opened. The file is
+still on the server.
+
 ---
 
 # GPS — the `location` field

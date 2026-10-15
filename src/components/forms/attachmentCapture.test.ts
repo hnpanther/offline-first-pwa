@@ -1,6 +1,10 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createCaptureGuard, fieldReferenceFor } from '@/components/forms/AttachmentFieldInput'
+import {
+  createCaptureGuard,
+  fieldReferenceFor,
+  fieldReferenceForOwner
+} from '@/components/forms/AttachmentFieldInput'
 import { db } from '@/services/storage/db'
 import {
   attachmentIdsOf,
@@ -357,5 +361,68 @@ describe('media captured by a colleague on the same device', () => {
     await saveAttachment(clip('legacy', { createdByUserId: undefined }))
 
     expect(await publishedReference([])).toEqual(['legacy'])
+  })
+})
+
+/**
+ * Authenticated but unbound: `sessionUserId` is null because `/api/bootstrap` failed after login.
+ *
+ * <p>The fill page stays editable in that state, and the device query answers "nothing" for a
+ * null owner — so opening a media field holding two clips published an **empty** reference. The
+ * rows stayed in IndexedDB, but the saved reading named none of them, and once the session bound
+ * the server received a reading with no media (or refused a required field as missing).
+ */
+describe('a media field opened before the session is bound', () => {
+  async function unboundReference(
+    currentIds: string[],
+    edit?: { add?: string; remove?: string }
+  ): Promise<{ ids: string[]; changed: boolean }> {
+    const onDevice = await getAttachmentsForEntry(SHEET, ASSET, FIELD, null)
+    return fieldReferenceForOwner(null, onDevice, currentIds, edit)
+  }
+
+  it('the device query really is empty for a null owner — the premise of the defect', async () => {
+    await saveAttachment(clip('a'))
+    await saveAttachment(clip('b', { createdAt: Date.now() + 1 }))
+
+    expect(await getAttachmentsForEntry(SHEET, ASSET, FIELD, null)).toEqual([])
+  })
+
+  it('keeps the field\'s references when it is opened, rather than emptying them', async () => {
+    await saveAttachment(clip('a'))
+    await saveAttachment(clip('b', { createdAt: Date.now() + 1 }))
+
+    const opened = await unboundReference(['a', 'b'])
+
+    expect(opened.changed).toBe(false)
+    expect(opened.ids).toEqual(['a', 'b'])
+  })
+
+  it('names a capture taken while unbound alongside the existing ones', async () => {
+    await saveAttachment(clip('a'))
+    await saveAttachment(clip('new', { createdByUserId: undefined, createdAt: Date.now() + 1 }))
+
+    expect((await unboundReference(['a'], { add: 'new' })).ids).toEqual(['a', 'new'])
+  })
+
+  it('removes only the deleted id', async () => {
+    await saveAttachment(clip('a'))
+    await saveAttachment(clip('b', { createdAt: Date.now() + 1 }))
+    await removeAttachment('a')
+
+    expect((await unboundReference(['a', 'b'], { remove: 'a' })).ids).toEqual(['b'])
+  })
+
+  it('once bound, adopts what was captured meanwhile — the existing repair still applies', async () => {
+    // The unstamped capture falls back to the signed-in operator, so the first refresh after
+    // binding finds it even if the unbound path's reference missed it.
+    await saveAttachment(clip('a'))
+    await saveAttachment(clip('meanwhile', { createdByUserId: undefined, createdAt: Date.now() + 1 }))
+
+    const bound = fieldReferenceForOwner(
+      ME, await getAttachmentsForEntry(SHEET, ASSET, FIELD, ME), ['a'])
+
+    expect(bound.changed).toBe(true)
+    expect(bound.ids).toEqual(['a', 'meanwhile'])
   })
 })

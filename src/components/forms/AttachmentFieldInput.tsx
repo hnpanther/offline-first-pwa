@@ -40,10 +40,12 @@ import {
 } from '@/utils/mediaCapture'
 import { getSettings } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
+import { useAppStore } from '@/store'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import type { AttachmentLimits } from '@/types'
 import { downloadAttachment } from '@/services/api'
 import { getStorageStatus } from '@/utils/storageQuota'
+import { MediaUrlCache } from '@/utils/mediaUrls'
 import { ImageAnnotationDialog, type AnnotatedImage } from '@/components/forms/ImageAnnotationDialog'
 import {
   describeMediaError,
@@ -52,75 +54,105 @@ import {
 import { t } from '@/i18n'
 import type { AttachmentKind, LocalAttachment } from '@/types'
 
-
-/**
- * One recording, one saved row.
- *
- * <p>Every ending — the operator pressing stop, the duration cap, the byte cap — resolves the
- * recorder's {@code finished} promise, and the component deliberately routes all three through
- * the same stop handler so anything added to saving applies to all of them. A **manual** stop,
- * though, resolves {@code finished} from inside that handler: the effect watching it then fired
- * again in the same tick, before {@code setRecorder(null)} had run the cleanup that sets
- * {@code cancelled}, and the handler's own {@code if (!recorder) return} read the non-null value
- * its closure had captured. The recorder was already finished, so the second {@code stop()}
- * returned the same blob and wrote a second identical row.
- *
- * <p>Measured in a browser before this existed: one tap on «پایان ضبط» produced two
- * 5757-byte rows and a counter reading 2 / 1 against a ceiling of 1. Combined with the reference
- * being rebuilt only from the closure's ids, one of the two rows ended up named by nothing:
- * counted against the ceiling, absent from the list, and so impossible to delete.
- *
- * <p>A closure rather than React state, because both calls happen in a single tick — which is
- * exactly what a state guard cannot see.
- */
-export function createCaptureGuard() {
-  let saving = false
-  return {
-    /** True when the caller owns this save; false when one is already in flight. */
-    begin(): boolean {
-      if (saving) return false
-      saving = true
-      return true
-    },
-    /** Releases the guard, whether the save succeeded or threw. */
-    end(): void {
-      saving = false
-    }
-  }
-}
-
-/**
- * The ids a media field should reference, given what this device actually holds for it.
- *
- * <p>Two things are wrong with building this from the component's {@code ids} closure, and both
- * were reached in the field:
- *
- * <ul>
- *   <li><b>Two captures in one tick read the same stale list</b>, so the second {@code onChange}
- *       overwrote the first and one row was left referenced by nothing.</li>
- *   <li><b>A row referenced by nothing is invisible but still counted.</b> The list is built from
- *       the reference; the ceiling is counted from the device. So the field read as full with no
- *       item on screen to delete — a dead end the operator could not escape.</li>
- * </ul>
- *
- * <p>Answering from the device settles both: the reference becomes what the counter has always
- * measured, and an orphan is **adopted** rather than dropped — which is the only route by which
- * a tablet already carrying one can be freed. Deliberately narrow: the rows passed in are those
- * for exactly this (sheet, asset, field), which are this field's own captures by definition.
- * Nothing is invented and nothing is deleted.
- *
- * @returns the ids to publish, and whether that differs from what the field names today
- */
-export function fieldReferenceFor(
-  deviceRows: Pick<LocalAttachment, 'id'>[],
-  currentIds: string[]
-): { ids: string[]; changed: boolean } {
-  const ids = deviceRows.map(row => row.id)
-  const changed =
-    ids.length !== currentIds.length || ids.some((id, i) => id !== currentIds[i])
-  return { ids, changed }
-}
-
+
+/**
+ * One recording, one saved row.
+ *
+ * <p>Every ending — the operator pressing stop, the duration cap, the byte cap — resolves the
+ * recorder's {@code finished} promise, and the component deliberately routes all three through
+ * the same stop handler so anything added to saving applies to all of them. A **manual** stop,
+ * though, resolves {@code finished} from inside that handler: the effect watching it then fired
+ * again in the same tick, before {@code setRecorder(null)} had run the cleanup that sets
+ * {@code cancelled}, and the handler's own {@code if (!recorder) return} read the non-null value
+ * its closure had captured. The recorder was already finished, so the second {@code stop()}
+ * returned the same blob and wrote a second identical row.
+ *
+ * <p>Measured in a browser before this existed: one tap on «پایان ضبط» produced two
+ * 5757-byte rows and a counter reading 2 / 1 against a ceiling of 1. Combined with the reference
+ * being rebuilt only from the closure's ids, one of the two rows ended up named by nothing:
+ * counted against the ceiling, absent from the list, and so impossible to delete.
+ *
+ * <p>A closure rather than React state, because both calls happen in a single tick — which is
+ * exactly what a state guard cannot see.
+ */
+export function createCaptureGuard() {
+  let saving = false
+  return {
+    /** True when the caller owns this save; false when one is already in flight. */
+    begin(): boolean {
+      if (saving) return false
+      saving = true
+      return true
+    },
+    /** Releases the guard, whether the save succeeded or threw. */
+    end(): void {
+      saving = false
+    }
+  }
+}
+
+/**
+ * The ids a media field should reference, given what this device actually holds for it.
+ *
+ * <p>Two things are wrong with building this from the component's {@code ids} closure, and both
+ * were reached in the field:
+ *
+ * <ul>
+ *   <li><b>Two captures in one tick read the same stale list</b>, so the second {@code onChange}
+ *       overwrote the first and one row was left referenced by nothing.</li>
+ *   <li><b>A row referenced by nothing is invisible but still counted.</b> The list is built from
+ *       the reference; the ceiling is counted from the device. So the field read as full with no
+ *       item on screen to delete — a dead end the operator could not escape.</li>
+ * </ul>
+ *
+ * <p>Answering from the device settles both: the reference becomes what the counter has always
+ * measured, and an orphan is **adopted** rather than dropped — which is the only route by which
+ * a tablet already carrying one can be freed. Deliberately narrow: the rows passed in are those
+ * for exactly this (sheet, asset, field), which are this field's own captures by definition.
+ * Nothing is invented and nothing is deleted.
+ *
+ * @returns the ids to publish, and whether that differs from what the field names today
+ */
+export function fieldReferenceFor(
+  deviceRows: Pick<LocalAttachment, 'id'>[],
+  currentIds: string[]
+): { ids: string[]; changed: boolean } {
+  const ids = deviceRows.map(row => row.id)
+  const changed =
+    ids.length !== currentIds.length || ids.some((id, i) => id !== currentIds[i])
+  return { ids, changed }
+}
+
+/**
+ * {@link fieldReferenceFor}, unless the operator is not yet known.
+ *
+ * <p><b>An unbound session must not rebuild the reference from the device.</b> The device
+ * query is scoped to the operator, and `null` owns nothing — so the device answers "no rows"
+ * for a field that holds two clips, and publishing that answer **emptied the field**. The
+ * session can be authenticated but unbound (see AGENTS.md, "`sessionUserId` may be
+ * unresolved"), the fill page stays editable in that state, and merely opening the field was
+ * enough: the save then carried an empty reference to the server once the session bound —
+ * a reading with no media, or a VALIDATION_ERROR on a required field.
+ *
+ * <p>While unbound the field's own ids are the only evidence, so they are kept, and a capture
+ * or delete edits them directly. That gives up the stale-closure protection
+ * {@link fieldReferenceFor} exists for; an orphan left that way is adopted on the first refresh
+ * after the session binds, which is the repair that already exists for it.
+ *
+ * @param edit the id just captured (`add`) or removed (`remove`), if any
+ */
+export function fieldReferenceForOwner(
+  ownerUserId: string | null,
+  deviceRows: Pick<LocalAttachment, 'id'>[],
+  currentIds: string[],
+  edit: { add?: string; remove?: string } = {}
+): { ids: string[]; changed: boolean } {
+  if (ownerUserId) return fieldReferenceFor(deviceRows, currentIds)
+  const ids = currentIds.filter(id => id !== edit.remove)
+  if (edit.add && !ids.includes(edit.add)) ids.push(edit.add)
+  return fieldReferenceFor(ids.map(id => ({ id })), currentIds)
+}
+
 interface Props {
   kind: AttachmentKind
   label: string
@@ -140,9 +172,10 @@ interface Props {
  * uploaded, on the server. That separation is what keeps a log sheet's `formData` small enough
  * to sync as JSON no matter how many photos are attached to it.
  *
- * Object URLs are created for previews and revoked on every change and on unmount. Leaking them
- * is a real problem here rather than a theoretical one: a tablet stays on one screen for a whole
- * shift, and each leaked URL pins its whole blob in memory.
+ * Object URLs, for every kind, come from one {@link MediaUrlCache}: one per attachment, revoked
+ * when it leaves the field and on unmount. Leaking them is a real problem here rather than a
+ * theoretical one: a tablet stays on one screen for a whole shift, and each leaked URL pins its
+ * whole blob in memory.
  */
 export function AttachmentFieldInput({
   kind,
@@ -158,7 +191,8 @@ export function AttachmentFieldInput({
   const [items, setItems] = useState<LocalAttachment[]>([])
   /** Everything the device knows this field holds — the number the ceiling is judged against. */
   const [fieldCount, setFieldCount] = useState(0)
-  const [previews, setPreviews] = useState<Map<string, string>>(new Map())
+  /** Attachment id → object URL, for images, audio and video alike. */
+  const [mediaSrc, setMediaSrc] = useState<Map<string, string>>(new Map())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recorder, setRecorder] = useState<AudioRecorderHandle | null>(null)
@@ -180,16 +214,19 @@ export function AttachmentFieldInput({
   const [micBlocked, setMicBlocked] = useState(false)
   const [recordingMs, setRecordingMs] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const objectUrls = useRef<string[]>([])
+  /** Every object URL this field shows, for every kind — see {@link MediaUrlCache}. */
+  const mediaUrls = useRef<MediaUrlCache | null>(null)
+  mediaUrls.current ??= new MediaUrlCache({
+    create: blob => URL.createObjectURL(blob),
+    revoke: url => URL.revokeObjectURL(url),
+    download: id => downloadAttachment(id)
+  })
   /** One recording, one saved row — see {@link createCaptureGuard}. */
   const captureGuard = useRef(createCaptureGuard())
 
   const ids = attachmentIdsOf(value)
-
-  const releaseUrls = useCallback(() => {
-    objectUrls.current.forEach(url => URL.revokeObjectURL(url))
-    objectUrls.current = []
-  }, [])
+  /** Only a trigger: a session binding mid-form must re-run {@link refresh}'s adoption. */
+  const boundUserId = useAppStore(s => s.sessionUserId)
 
   const refresh = useCallback(async () => {
     const rows = await getAttachmentsByIds(ids)
@@ -200,8 +237,8 @@ export function AttachmentFieldInput({
     // over **every** attachment of this (sheet, asset, field) — including ones another device
     // or the web panel added, which this form value has never heard of. Counting the displayed
     // rows is what let the device believe a slot was free while the server refused it.
-    const forField = await getAttachmentsForEntry(
-      logSheetLocalId, assetId, fieldKey, await getSessionUserId())
+    const owner = await getSessionUserId()
+    const forField = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, owner)
     const counted = new Set(rows.map(r => r.id))
     forField.forEach(r => counted.add(r.id))
     setFieldCount(counted.size)
@@ -215,39 +252,27 @@ export function AttachmentFieldInput({
     // safe. Unscoped it adopted the *previous* operator's media after a reassignment — the local
     // sheet row is reused, so their rows were still keyed to this field — and wrote them into
     // this operator's reading as if they had taken them. An orphan is only ever adopted by the
-    // person who captured it.
-    const repaired = fieldReferenceFor(forField, ids)
+    // person who captured it — and with no operator bound yet, nothing is adopted and nothing is
+    // dropped: see {@link fieldReferenceForOwner}. `boundUserId` re-runs this once the session
+    // binds, so an orphan left in the meantime is adopted without the field being reopened.
+    const repaired = fieldReferenceForOwner(owner, forField, ids)
+    const shown = repaired.changed && !readOnly ? forField : rows
     if (repaired.changed && !readOnly) {
       setItems(forField)
       onChange(buildAttachmentRef(repaired.ids))
     }
 
-    releaseUrls()
-    const next = new Map<string, string>()
-    for (const row of rows) {
-      // Only images get an inline preview; audio is played from its own element on demand.
-      if (row.kind !== 'IMAGE') continue
-      let blob = row.blob
-      if (!blob) {
-        // The bytes were reclaimed after sync — fetch them back rather than showing a gap.
-        try {
-          blob = await downloadAttachment(row.id)
-        } catch {
-          continue
-        }
-      }
-      const url = URL.createObjectURL(blob)
-      objectUrls.current.push(url)
-      next.set(row.id, url)
-    }
-    setPreviews(next)
-  }, [ids.join(','), logSheetLocalId, assetId, fieldKey, releaseUrls]) // eslint-disable-line react-hooks/exhaustive-deps
+    // URLs for what is on screen, every kind. An image's reclaimed bytes are fetched back
+    // rather than shown as a gap. `null` means a newer refresh owns the URLs now.
+    const urls = await mediaUrls.current!.update(shown)
+    if (urls) setMediaSrc(urls)
+  }, [ids.join(','), logSheetLocalId, assetId, fieldKey, boundUserId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void refresh()
   }, [refresh])
 
-  useEffect(() => releaseUrls, [releaseUrls])
+  useEffect(() => () => mediaUrls.current?.release(), [])
 
   // Server-owned ceilings. Read once per mount from the copy the last bootstrap stored, so
   // capture still respects them with no connection at all.
@@ -349,7 +374,8 @@ export function AttachmentFieldInput({
     const capturedBy = await getSessionUserId()
     await saveAttachment(capturedBy ? { ...attachment, createdByUserId: capturedBy } : attachment)
     const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, capturedBy)
-    onChange(buildAttachmentRef(fieldReferenceFor(onDevice, ids).ids))
+    onChange(buildAttachmentRef(
+      fieldReferenceForOwner(capturedBy, onDevice, ids, { add: attachment.id }).ids))
   }
 
   /**
@@ -559,9 +585,9 @@ export function AttachmentFieldInput({
     // Rebuilt from the device for the same reason as `persist`: subtracting from the id
     // list this render closed over means two deletes in quick succession disagree, and
     // the loser's list resurrects a reference to a row that is already gone.
-    const onDevice = await getAttachmentsForEntry(
-      logSheetLocalId, assetId, fieldKey, await getSessionUserId())
-    onChange(buildAttachmentRef(fieldReferenceFor(onDevice, ids).ids))
+    const owner = await getSessionUserId()
+    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, owner)
+    onChange(buildAttachmentRef(fieldReferenceForOwner(owner, onDevice, ids, { remove: id }).ids))
     await refresh()
   }
 
@@ -743,10 +769,10 @@ export function AttachmentFieldInput({
               borderRadius: 1
             }}
           >
-            {item.kind === 'IMAGE' && previews.get(item.id) && (
+            {item.kind === 'IMAGE' && mediaSrc.get(item.id) && (
               <Box
                 component="img"
-                src={previews.get(item.id)}
+                src={mediaSrc.get(item.id)}
                 alt={label}
                 sx={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 1 }}
               />
@@ -758,7 +784,7 @@ export function AttachmentFieldInput({
                   controls
                   preload="metadata"
                   sx={{ width: '100%', maxWidth: 260, borderRadius: 1 }}
-                  src={item.blob ? URL.createObjectURL(item.blob) : undefined}
+                  src={mediaSrc.get(item.id)}
                 />
               </Box>
             )}
@@ -767,7 +793,9 @@ export function AttachmentFieldInput({
                 <audio
                   controls
                   style={{ width: '100%', maxWidth: 260 }}
-                  src={item.blob ? URL.createObjectURL(item.blob) : undefined}
+                  // Never `URL.createObjectURL` here: a render-time URL is a new one on every
+                  // render, never revoked, and reloads the player. See MediaUrlCache.
+                  src={mediaSrc.get(item.id)}
                 />
               </Box>
             )}

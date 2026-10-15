@@ -240,6 +240,22 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   are kept and `retryFailedAttachment` is the manual way back in.
 - Compress before storing (`utils/mediaCapture.ts`) and always `revokeObjectURL` — both are
   load-bearing on a tablet that sits on one screen for a whole shift.
+- **Never call `URL.createObjectURL` in a render. Every object URL for a media field comes from
+  `MediaUrlCache` (`utils/mediaUrls.ts`).** The video and audio players used to write
+  `src={item.blob ? URL.createObjectURL(item.blob) : undefined}` in the JSX, while images had a
+  revoked list beside them. That shape looks right and works in a short manual test. But it mints a
+  new URL on **every render** and never revokes any, and renders are frequent here: the recording
+  counter ticks four times a second, and a keystroke anywhere in the asset form re-renders the
+  field. Measured in a browser, twenty re-renders of one video and one audio field left forty live
+  URLs, each pinning its clip's bytes. The player's `src` also changed each time, so a clip being
+  played back jumped to the start. The cache keeps one URL per attachment id, revokes it when the
+  attachment leaves the field and on unmount, and lets a refresh overtaken mid-download revoke
+  what it made instead of publishing it. `release()` is deliberately not terminal, because
+  StrictMode runs the cleanup and then uses the component again. Regression:
+  `utils/mediaUrls.test.ts`. That file also scans every `.tsx` for the leaking shape, and it does
+  **not** strip comments first: a naive `/* … */` regex reads the `/*` in `accept="image/*"` as an
+  opening and hides exactly the JSX it exists to check. The first version of the scan passed
+  against the leaking code for that reason.
 - **Photo and audio need different permissions.** In a browser `<input capture>` needs none (it
   hands off to the OS camera app); `getUserMedia` needs the microphone permission. **In the APK the
   photo path needs the manifest's `<queries>` entry for `IMAGE_CAPTURE`.** Without it, Android 11+
@@ -608,7 +624,16 @@ to call on every sync tick and inbox refresh — that repetition *is* the recove
 **Never run `isolateSheetsNotOwnedBy` with a null id**: every owned sheet matches
 `owner !== userId`, so it would archive the whole device's work and fail its drafts on the
 strength of a bootstrap hiccup. `activateUserSession` now guards that, and the isolation is
-deferred into `ensureSessionUserId()` where the identity is actually known. Tests:
+deferred into `ensureSessionUserId()` where the identity is actually known. The same rule holds
+for a media field: **never rebuild its reference from `getAttachmentsForEntry(..., null)`**. That
+query returns nothing for a null owner, and the fill page stays editable while unbound, so
+`AttachmentFieldInput`'s adoption read "the device holds no rows" and published an *empty*
+reference the moment the field was opened — a capture or delete did the same. The rows stayed in
+IndexedDB, but the saved reading named none of them, and once the session bound the server got a
+reading with no media, or a "required field is missing" VALIDATION_ERROR. `fieldReferenceForOwner`
+keeps the field's own ids while unbound and edits them directly; the component re-runs its refresh
+when the store's `sessionUserId` changes, so adoption repairs anything missed as soon as the
+session binds (`components/forms/attachmentCapture.test.ts`). Tests:
 `services/auth/ensureSessionUserId.test.ts` and `utils/unboundSessionGuards.test.ts` (the latter
 is the tripwire — if either predicate ever returns true for a null id, the gating above becomes
 wrong).
