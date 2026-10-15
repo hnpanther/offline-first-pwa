@@ -274,3 +274,122 @@ linked document. Do not copy it here.*
 | Showing the last recorded value while a reading is taken, which needs the value in the bundle | backend `docs/roadmap.md` §9 |
 | The cost of rebuilding the inbox on every sync tick | backend `docs/roadmap.md` §3 |
 | `CLAUDE.md`, `AGENTS.md` and this file point to the backend at `D:\LocalStorage\Project\JavaProject\backend-offline-first` and link to it as `../../JavaProject/...`. On the current development machine the backend is the sibling directory `../backend-offline-first`, so those links do not resolve there | this file's header, `CLAUDE.md`, AGENTS.md |
+
+---
+
+# 7. A tablet whose clock is wrong
+
+*Found in a production-risk review on 2026-10-15. Nothing is built yet.*
+
+Every deadline and retention decision on the device is taken against the **device's** clock. The
+server already sends its own time, and the client stores it and uses it for nothing. On a plant
+network with no internet route, NTP cannot correct a tablet. After a full battery drain, the clock
+can be arbitrarily wrong.
+
+## What is true today
+
+| Fact | Where |
+|---|---|
+| `isLogSheetExpired` returns true once `dueAt <= now`, where `now` defaults to `Date.now()` | `utils/logSheetStatus.ts` |
+| `expireStaleLocalDrafts` uses that to mark an open draft `EXPIRED` locally, with no server involved | `services/sync/logSheetSync.ts` |
+| `cleanupLocalLogSheets` **deletes** an expired draft once `now − dueAt > 24h`, readings included, with no archive copy | `services/sync/cleanupLogSheets.ts` |
+| The inbox merge decides "extended" with `dueAt > Date.now()`, so a clock that is ahead also blocks the recovery path | `mergeInboxIntoLocalSheets` |
+| `isSessionValid` compares `now < expiresAt − 60s` while the server is reachable | `types/auth.ts` |
+| `completedAt` is the device's `Date.now()` at submit | `LogSheetFillPage.tsx` |
+| The server judges the deadline on that `completedAt` (`completedAt > dueAt` → expired), and nothing checks that it is not in the future or implausibly old | backend `LogSheetService` |
+| `serverTime` (epoch ms) arrives on `GET /api/bootstrap` and `GET /api/log-sheets/inbox`, is stored in the inbox snapshot and `lastBootstrapAt`, and drives no decision | `services/api/index.ts`, `pullInbox.ts`, `pullBootstrap.ts` |
+
+## What a wrong clock does
+
+| Clock | Effect |
+|---|---|
+| **Ahead by more than a day past a sheet's `dueAt`** | An open draft is marked `EXPIRED` here, then **deleted with its readings** while the server still has it open. This breaks the first non-negotiable in `CLAUDE.md`. |
+| Ahead by more than the token's remaining life | A fresh session is dropped the moment the server is reachable: an apparent sign-out loop |
+| **Behind** | `completedAt` is early, so late work is accepted as on time. This is an integrity problem rather than data loss. |
+
+## The design worked out
+
+1. **A server-clock offset.** Measure `offset = serverTime − (sentAt + receivedAt) / 2` on every
+   bootstrap and inbox pull. Persist it in `syncMeta`, so it survives going offline. Expose one
+   `serverNow() = Date.now() + offset`, with offset 0 until the first measurement, which is
+   exactly today's behaviour.
+2. **Absolute-time decisions use `serverNow()`:** expiry, extension, retention, the session
+   check, the "due in" display and `completedAt`. Durations (recording length, timers) stay on the
+   device clock, where only a difference matters.
+3. **A destructive guard that does not depend on any clock.** Cleanup never deletes a draft that
+   holds readings this device has not delivered (any entry with `locallyEditedAt`). It keeps the
+   draft instead. The offset can be stale after a clock jump while offline, so the guard is what
+   actually upholds "never discard local work".
+4. **Say so.** When `|offset|` exceeds a few minutes, show a Persian banner telling the operator
+   the tablet's clock is wrong. The root cause is fixed on the device, and today nothing reveals
+   it.
+5. **Backend, separately:** refuse or flag a `completedAt` later than server time plus a tolerance.
+   This belongs in the backend's roadmap, not here.
+
+## What would make it urgent
+
+Any report of a draft vanishing from a tablet. Also tablets kept on Wi-Fi with no internet route
+and no SIM, which is exactly the setup in which nothing corrects the clock.
+
+---
+
+# 8. A deploy reloads every browser tablet, mid-form
+
+*Found in the same review. Nothing is built yet. The APK is not affected: it fetches none of its
+assets.*
+
+## What is true today
+
+| Fact | Where |
+|---|---|
+| `registerType: 'autoUpdate'` with `skipWaiting` and `clientsClaim` | `vite.config.ts` |
+| In that mode, `vite-plugin-pwa`'s register code calls `window.location.reload()` on the workbox `controlling` event, **without asking** | `node_modules/vite-plugin-pwa/dist/client/build/register.js` |
+| `main.tsx` passes an `onNeedRefresh` that only logs | `main.tsx` |
+| Unsaved values in an open asset form live in memory: React state plus the page-owned `FormDraftCache`. A reload discards both | `LogSheetFillPage.tsx`, `utils/formDraftCache.ts` |
+| An update is noticed on the next full page load: opening the app, Android restoring a killed tab, any navigation that reloads. It is then applied seconds later | service worker lifecycle |
+
+So the first time each browser tablet opens the app after a deploy, it reloads a few seconds
+later. Anything typed into an open form in that window and not yet saved is lost, with nothing on
+screen to say why. Saved entries are safe.
+
+## The options, cheapest first
+
+1. **Operational rule, no code:** deploy outside shift hours, and say so in
+   `deployment.md § Publishing a new build`.
+2. **Prompt mode:** `registerType: 'prompt'`. Apply the waiting worker when no asset form is open,
+   or from a small "new version" chip the operator taps. The cost is that a tablet can run an old
+   build for longer, so `deployment.md`'s "the fleet updates within minutes" stops being true and
+   must be rewritten in the same change.
+3. **Persist the draft cache** to IndexedDB, so any reload, not only this one, restores what was
+   typed. The broadest fix, and the most work.
+
+## What would make it urgent
+
+Deploying during shifts, or a report of "the screen refreshed and my numbers disappeared".
+
+---
+
+# 9. Nothing tells anyone when a tablet stops working
+
+## What is true today
+
+| Fact | Where |
+|---|---|
+| Sync failures, attachment parking and database refusals are logged to the console only | `services/sync/*`, `main.tsx` |
+| `debuggable` is off, so the console of an APK is unreachable in service | `docs/apk.md` §3 |
+| The server records `last_seen_at` per session, which is the only remote signal | backend `api_sessions` |
+
+A tablet that silently stops delivering (unbound session, parked uploads, a stale CA in the APK)
+is discovered when an operator mentions it.
+
+## The options, cheapest first
+
+1. **A query, server-side**: sessions whose `last_seen_at` is old while their user has open
+   rounds. This overlaps §2.
+2. **A small client report**: on each sync pass, the counts the device already computes (pending,
+   parked attachments, unbound session, app version) sent with the next request, and shown in the
+   web panel per device.
+
+## What would make it urgent
+
+A fleet large enough that "an operator will mention it" stops being a monitoring strategy.
