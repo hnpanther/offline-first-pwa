@@ -189,3 +189,88 @@ Four reasons it adds no security property:
 
 The existing JWT *is* "an id the backend recognises, which expires and can be revoked". A second
 issuer in front of it adds moving parts without adding an answer.
+
+---
+
+# 4. User-visible text that does not live in `fa.ts`
+
+*Found in a full review on 2026-10-15. Nothing has been moved yet.*
+
+`CLAUDE.md` makes it a non-negotiable that all UI text is Persian and lives in `src/i18n/fa.ts`.
+The code does not fully keep that rule.
+
+## What is true today
+
+| Fact | Where |
+|---|---|
+| About **145** Persian string literals sit outside `fa.ts` and outside comments and tests, in **29** files | `grep -P` for Arabic-script literals over `src/`, excluding `i18n/fa.ts`, `*.test.ts` and comment lines |
+| The worst files are `utils/logSheetStatus.ts` (26), `pages/LogSheetFillPage.tsx` (24), `pages/LogSheetListPage.tsx` (11), `components/forms/DynamicClassForm.tsx` (9), `utils/mediaPermissions.ts` (8), `services/api/client.ts` (8), `utils/mediaCapture.ts` (7) | same scan |
+| Some messages mix English nouns into the Persian text: «Log Sheet یافت نشد», «Asset مربوط به تگ … وجود ندارد» | `LogSheetFillPage.tsx` |
+| `SYNC_OUTCOME_MESSAGES` is **stored**, not only displayed. It is written into `logSheets.syncError` and later **compared by value**: `local.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED` in `mergeInboxIntoLocalSheets` | `utils/logSheetStatus.ts`, `services/sync/logSheetSync.ts` |
+| The one in `main.tsx` is deliberate: the database-failure screen is plain DOM and must not depend on anything that could itself be broken | `main.tsx`, AGENTS.md |
+
+## The trap in moving them
+
+Moving a string into `fa.ts` is mechanical. **Changing its wording is not**, for any message that is
+persisted. Rows already on tablets hold the old text. A comparison against new text then fails, so a
+sheet rejected as `EXPIRED` stops being recognised and is no longer re-queued when the device can
+prove it finished in time. Any such move must keep the text byte-identical, or it must also move the
+comparison onto `serverStatus` / `lastSubmitOutcome`. `mergeInboxIntoLocalSheets` already prefers
+`serverStatus`.
+
+## Suggested order
+
+1. Components and pages first. They are display-only and carry no stored-text risk.
+2. Then `utils/` and `services/`, checking each message for a stored-and-compared use first.
+3. Last, a test like `noSystemFonts.test.ts` that fails when a new Arabic-script literal appears
+   outside `fa.ts`. It needs an allow-list for `main.tsx`. Without the test the count drifts back.
+
+---
+
+# 5. Dependencies — where they stand on 2026-10-15
+
+*Recorded so the next upgrade starts from facts rather than from a bare `npm audit` count.*
+
+## What is true today
+
+| Fact | Where |
+|---|---|
+| `npm audit` reports **16** findings: 3 critical, 4 high, 9 moderate | `npm audit`, 2026-10-15 |
+| Every one is **build tooling** (`vite`, `esbuild`, `vitest`, `tar` via `@capacitor/cli`, `sharp` via `@capacitor/assets`, `uuid` via `xcode`). The shipped bundle is clean | backend `docs/roadmap.md` §16 has the per-advisory analysis |
+| The two `react-router` advisories are unreachable here | AGENTS.md, the `npm audit` entry |
+| `npm audit fix --force` would install `vitest@5` and other breaking majors | `npm audit` |
+| These updates are **inside the declared ranges**: `@capacitor/android` and `@capacitor/core` 8.5.1 → 8.5.3, `dexie` 4.4.4 → 4.4.6, `react-hook-form` 7.80 → 7.90, `zustand` 5.0.14 → 5.0.15, `@typescript-eslint/*` 8.62 → 8.71 | `npm outdated` |
+| The main stack is one or more majors behind: React 18 (19), MUI 5 (9), Vite 5 (8), react-router 6 (7), vitest 2 (5), TypeScript 5 (7), vite-plugin-pwa 0.20 (2.0), zod 3 (4) | `npm outdated` |
+
+## The options, cheapest first
+
+1. **The in-range updates.** No API change. A Capacitor bump still means rebuilding the APK
+   (`docs/apk.md` §10), because the native side ships inside it.
+2. **The test and build toolchain** (`vitest`, `vite`, `vite-plugin-pwa`). This closes the build-machine
+   advisories. Risk: the service-worker output changes, so offline install must be re-verified on a
+   tablet from `preview:mobile`, not only by the test suite.
+3. **The UI stack** (React 19, MUI 9, router 7). This is its own project: RTL via `stylis-plugin-rtl`,
+   MUI's theme API, and every page.
+
+## What would make it urgent
+
+A runtime advisory in something that reaches a tablet: `dexie`, `react`, `@mui/*`, `zustand`,
+`react-hook-form` or `@capacitor/core`. Also anyone running `npm run dev` on a network they do not
+control, because the `esbuild` advisory exposes the dev server's responses.
+
+---
+
+# 6. Open items already recorded elsewhere
+
+*An index, so a reader looking for "what is left" finds all of it from here. Each fact lives in the
+linked document. Do not copy it here.*
+
+| Item | Recorded in |
+|---|---|
+| APK fleet decisions: release keystore, moving `versionCode`, a meaningful `versionName`, user-store CA, iOS. Each is cheapest before tablets carry real work | [apk.md §13](apk.md) |
+| A changed sync interval only takes effect on the next app launch | AGENTS.md, common pitfalls |
+| NFC fault reports filed elsewhere arrive in the bundle but do not unlock manual entry on this device | AGENTS.md, NFC fill page |
+| `ensureLocalLogSheet`'s offline fallback does not have the submitted-pending guard (not reachable from any current caller) | AGENTS.md, log sheet merge |
+| Showing the last recorded value while a reading is taken, which needs the value in the bundle | backend `docs/roadmap.md` §9 |
+| The cost of rebuilding the inbox on every sync tick | backend `docs/roadmap.md` §3 |
+| `CLAUDE.md`, `AGENTS.md` and this file point to the backend at `D:\LocalStorage\Project\JavaProject\backend-offline-first` and link to it as `../../JavaProject/...`. On the current development machine the backend is the sibling directory `../backend-offline-first`, so those links do not resolve there | this file's header, `CLAUDE.md`, AGENTS.md |
