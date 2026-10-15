@@ -326,9 +326,76 @@ can be arbitrarily wrong.
 5. **Backend, separately:** refuse or flag a `completedAt` later than server time plus a tolerance.
    This belongs in the backend's roadmap, not here.
 
+## When someone changes the clock on purpose
+
+Everything above assumes a clock that is wrong by accident. An operator holding the tablet can
+also move it on purpose. The offset does not survive that. It was measured when the clock was
+right, so after a deliberate change made while offline, `serverNow()` moves with the clock.
+
+| Deliberate change | Today | With the design above |
+|---|---|---|
+| **Forward, offline** | An open draft is marked `EXPIRED` and later **deleted with its readings** | Not deleted. The cleanup guard (item 3) depends on no clock |
+| **Forward, online** | The session may be dropped locally | The offset is re-measured on the next pull and the banner shows (item 4). See also "Sessions" below |
+| **Back, offline, after the deadline passed** | Late work is submitted with an early `completedAt` and **accepted as on time** | **Still accepted.** This is the case the offset cannot help with |
+
+### The limit, stated plainly
+
+**A device that is offline and entirely in its holder's hands cannot prove that something happened
+*before* a given moment.** This is the same conclusion §3 reaches for "is the tablet running the
+real app", for the same reason: whatever the device reports, the person controlling it can make it
+report. On the device the change can only be **detected**. It can only be **refused** on the
+server, and only for times the server itself witnessed.
+
+### Detection on the device
+
+1. **The clock must not run backwards.** Persist the latest time the app has seen. A
+   `Date.now()` below it means the clock was moved back.
+2. **Within one run of the app,** compare elapsed `Date.now()` against elapsed `performance.now()`,
+   which is monotonic and ignores clock changes. A divergence beyond a few seconds is a change.
+3. **In the APK, across restarts:** the native plugin can also return Android's
+   `SystemClock.elapsedRealtime()`. That counter runs from boot, and no user setting changes it.
+   Store the pair `(Date.now(), elapsedRealtime)` with each offset measurement. Later, the two
+   deltas must agree. If they do not, the wall clock was moved. A reboot resets the counter, and
+   the reset is itself visible, because the value is smaller than the stored one. The browser
+   build has no equivalent, so it gets rules 1 and 2 only.
+
+### Evidence with every submission
+
+Send, with each completion, the offset in force at `completedAt` and whether a clock change was
+detected since the last server contact. The server stores both and **flags** the round for the
+supervisor. It does not reject the round. Refusing on the device's own word would also refuse
+genuine work from a tablet whose clock merely drifted, and work lost is worse than work
+questioned.
+
+### Bounds on the server — the only part that cannot be bypassed
+
+- **`completedAt` must not be later than the time the server received it**, plus a small
+  tolerance. This catches a clock moved forward.
+- **`completedAt` must not be earlier than times the server itself recorded for that sheet:** when
+  it was claimed or assigned to this operator, and the server's `savedAt` of the latest progress
+  report. This catches part of a clock moved back. The device cannot claim to have finished before
+  the server saw it still working.
+- **Between the last time the server saw the device and the moment of receipt, the claim is
+  unverifiable.** There the server can only flag it, using the evidence above. These bounds belong
+  in the backend's roadmap (`backend-offline-first/docs/roadmap.md`).
+
+### Sessions
+
+While the server is reachable, the device should not end a session on its own clock at all. The
+server checks the token's expiry on its own clock and answers `401`, which already signs the
+operator out. Leaving the decision to the server removes every clock effect on sessions,
+accidental or deliberate. Offline, the session is already accepted regardless of expiry, by design.
+
+### Net result
+
+With the design and these additions, a deliberate clock change **loses no data and breaks no
+session**. Back-dating late work to make it look on time becomes **detectable and flagged**. It
+does not become impossible, and no client-side change can make it impossible.
+
 ## What would make it urgent
 
-Any report of a draft vanishing from a tablet. Also tablets kept on Wi-Fi with no internet route
+Any report of a draft vanishing from a tablet. Any dispute about whether a round was really
+completed on time. Also tablets kept on Wi-Fi with no internet route
 and no SIM, which is exactly the setup in which nothing corrects the clock.
 
 ---
