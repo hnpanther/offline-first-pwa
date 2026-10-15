@@ -924,6 +924,18 @@ callback new on reconnect) and one reserved empty interface in the store.
   setting for a different source filename or a second CA; two CAs would need
   `network_security_config.xml` extended by hand. See `docs/apk.md` §5.
 
+- **`setup:mkcert` on the wrong machine replaces the plant's CA with a stranger, and nothing
+  fails.** mkcert keeps its CA per Windows user (`mkcert -CAROOT`), not per project.
+  `setup-mkcert.ps1` runs `mkcert -install` first, and on a machine whose CAROOT is empty that
+  creates a new CA without a word. It then copies that CA over `certs/rootCA.crt`, and the next
+  `build:apk` bundles it: a green build of an app that trusts nothing nginx serves. The same
+  applies to renewing nginx's certificate there. This is live here, not hypothetical: the
+  development laptop's own mkcert CA is not the plant's CA that `certs/` holds. Building the APK
+  needs only `certs/rootCA.crt`. Copy it from the CA machine and check its `-subject` before a
+  build that reaches tablets. Never "fix" a missing `certs/` by running `setup:mkcert` on a build
+  machine. Full rules in `docs/apk.md` §5 *"Which CA ends up in the APK"* and
+  `docs/deployment.md` § Renewal.
+
 - **`registerPlugin()` must run before `super.onCreate`.** The bridge is built there and the plugin
   registry frozen. Registered after, `window.Capacitor.Plugins.Nfc` is undefined, `isNFCSupported()`
   answers false, and scanning disappears from the app with nothing logged anywhere — the same

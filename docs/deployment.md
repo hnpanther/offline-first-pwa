@@ -257,6 +257,31 @@ certutil -dump "D:\MyApp\nginx\ssl\pwa.hnp.com+1.pem" | Select-String "NotAfter"
 Re-issuing the **server** certificate from the same CA needs no change on the tablets: rerun the
 `mkcert` command (or the openssl signing step), replace the two files in `ssl\`, test, and reload.
 
+**"The same CA" is the whole condition, and mkcert will not warn you when it does not hold.**
+mkcert signs with whatever CA sits in *this Windows user's* `mkcert -CAROOT` folder. On a
+different machine, or as a different user, that is a different CA. If the folder is empty,
+`mkcert -install` (which `scripts/setup-mkcert.ps1` runs first) creates a new one without
+saying so. A certificate issued there is perfectly valid and is trusted by **nothing in the
+fleet**. Every APK and every browser tablet fails the morning it is deployed, with the same
+words a dead network produces. So:
+
+- Renew on the machine that holds the plant's CA. Otherwise, point mkcert at a copy of it first:
+  `set CAROOT=D:\path\to\plant-ca` (the folder holding the plant's `rootCA.pem` and
+  `rootCA-key.pem`) in the same shell, before running mkcert.
+- Before reloading nginx, check that the new certificate was issued by the CA the tablets
+  trust. Its `issuer` must equal the CA's `subject`:
+
+  ```bash
+  openssl x509 -in <new-server-cert>.pem -noout -issuer -enddate
+  openssl x509 -in rootCA.pem -noout -subject
+  ```
+
+**Back up `rootCA-key.pem` somewhere safe and offline**, beside its `rootCA.pem`. Without it no
+further certificate can be issued from this CA. The next renewal then becomes a new CA, an APK
+rebuild, and a visit to every tablet (see [apk.md §5](apk.md)). Keep it as a deliberate backup,
+not as stray copies: a copy left in a project folder such as `offline-first-pwa/certs/` travels
+with every zip and every disk image of that folder. The APK build needs only `rootCA.crt`.
+
 Replacing the **CA** means visiting every device again — which is why the openssl CA above is
 valid for ten years, and why mkcert's CA is worth leaving installed rather than reinstalling.
 

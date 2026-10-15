@@ -62,10 +62,15 @@ npm install
 cp .env.mobile.example .env.mobile
 #    edit it: the address the tablets open, https, the nginx origin — not the Spring host/port
 
-# 3. Certificates. Needs mkcert on PATH first:  winget install FiloSottile.mkcert
-#    Writes certs/cert.pem, key.pem, rootCA.pem and rootCA.crt — that last one is what
-#    the APK bundles (§5), and ca:apk fails the build if it is absent
-.\scripts\setup-mkcert.ps1 -Ip 192.168.1.4
+# 3. Certificates. The APK must bundle the PLANT's CA, the one that signed nginx's certificate.
+#    - On the machine that holds that CA (its `mkcert -CAROOT`), run:
+#        .\scripts\setup-mkcert.ps1 -Ip 192.168.1.4
+#      It writes certs/cert.pem, key.pem, rootCA.pem and rootCA.crt. The last is what the APK
+#      bundles (§5), and ca:apk fails the build if it is absent.
+#    - On ANY OTHER machine, do NOT run it. mkcert's CA is per Windows user, so the script would
+#      silently create a new CA and the APK would trust a stranger (§5, "Which CA ends up in the
+#      APK"). Copy just certs/rootCA.crt from the CA machine instead, then check its subject:
+#        openssl x509 -in certs/rootCA.crt -noout -subject -enddate
 
 # 4. Android SDK — §2.1. Unzip to C:\Android\Sdk, then:
 & "C:\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat" "platform-tools" "platforms;android-36" "build-tools;35.0.0"
@@ -728,6 +733,47 @@ package a different CA (a different site, a re-issued root):
 
 Then rebuild and reinstall on every tablet — see §10, *"I regenerated the CA itself."* A device
 still running the old APK keeps trusting the old CA and fails to log in.
+
+### Which CA ends up in the APK — and how a second machine silently changes it
+
+**mkcert keeps its CA per Windows user, not per project**, in the folder `mkcert -CAROOT`
+prints (`%LOCALAPPDATA%\mkcert`). `scripts/setup-mkcert.ps1` begins with `mkcert -install`. On a
+machine whose CAROOT is empty, that **creates a brand-new CA without a word**. The script then
+copies *that* CA over `certs/rootCA.crt`, and the next `npm run build:apk` bundles it.
+
+Nothing fails. The build is green, the APK installs, and every request it makes is refused with
+`CertPathValidatorException` → «ارتباط با سرور برقرار نشد», because nginx's certificate was
+signed by the plant's CA and the app now trusts a stranger. That is the exact failure §5 exists to
+prevent, reached by following §2.0 step 3 on any machine other than the one holding the plant's CA.
+
+This is not hypothetical. At the time of writing, the development laptop has its own mkcert CA
+(`OU=<laptop>\<user>`), and the CA in `certs/` is a different one, the plant's
+(`OU=<server>\Administrator`). Running `setup:mkcert` on the laptop would replace the plant CA in
+`certs/` with the laptop's.
+
+The rules that follow:
+
+1. **Building the APK needs only the CA's public certificate.** `ca:apk` reads
+   `certs/rootCA.crt` and nothing else. On a build machine, copy that one file from the machine
+   that holds the plant's CA and **do not run `setup:mkcert`**. The CA's private key
+   (`rootCA-key.pem`) is not needed to build anything.
+2. **Before every APK build that will reach a tablet, check that the CA is the plant's:**
+
+   ```bash
+   openssl x509 -in certs/rootCA.crt -noout -subject -fingerprint -sha256 -enddate
+   ```
+
+   Compare it with the CA that signed the certificate nginx actually serves:
+
+   ```bash
+   openssl s_client -connect <server-ip>:443 -showcerts </dev/null 2>/dev/null | openssl x509 -noout -issuer
+   ```
+
+   The `issuer` of the second must equal the `subject` of the first.
+3. **Issuing certificates (server renewal) happens only where the plant's CA lives.** That means
+   the CA machine itself, or a machine whose `CAROOT` environment variable points at a folder
+   holding the plant's `rootCA.pem` and `rootCA-key.pem`. See
+   [deployment.md § Renewal](deployment.md#renewal).
 
 ### Two expiry dates, two very different costs
 
