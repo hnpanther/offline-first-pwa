@@ -80,9 +80,13 @@ function applyAssetOverride(
 
   if (ownsFieldList) {
     const present = new Set(out.map(f => String(f.key ?? '').trim().toLowerCase()))
+    // The class id of the rows we are extending. Nothing downstream reads it today — the
+    // class filter has already run by this point — but a field carrying a blank one is a trap
+    // for the first caller that groups by class.
+    const classId = fields[0]?.classId ?? ''
     for (const [k, override] of byKey) {
       if (present.has(k) || override.removed) continue
-      out.push(added(k, override))
+      out.push(added(k, override, classId))
     }
   }
   return sortByDisplayOrder(out)
@@ -111,10 +115,10 @@ function merge(field: FieldDefinition, override: AssetFieldOverride, full: boole
 }
 
 /** A field the asset adds that its class does not have. FULL only. */
-function added(key: string, override: AssetFieldOverride): FieldDefinition {
+function added(key: string, override: AssetFieldOverride, classId: string): FieldDefinition {
   return {
     id: `asset-override:${key}`,
-    classId: '',
+    classId,
     key,
     label: override.label ?? key,
     dataType: (override.dataType ?? 'number') as FieldDefinition['dataType'],
