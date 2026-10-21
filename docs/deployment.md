@@ -9,6 +9,12 @@ The two must agree on one thing above all: **the origin the tablet loads the app
 origin its API calls go to.** Get that wrong and every request is cross-origin, which means CORS,
 which means the tablets work until they do not.
 
+> **Docker.** The same nginx, packaged as a container with the `dist/` from `npm run build:apk`:
+> TLS and site overrides on volumes, security headers (CSP included), a read-only filesystem.
+> Procedure: [docker/DEPLOY.md](../docker/DEPLOY.md). The reasoning for each nginx block below
+> applies to both. The Docker config is the only one that sends security headers today; the
+> systemd and WinSW configs in this file still send none ([roadmap.md §1](roadmap.md)).
+
 ---
 
 ## Why TLS is not optional here
@@ -358,7 +364,7 @@ server {
 
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For   $remote_addr;   # overwrite, never append: the backend logs the FIRST entry, so appending lets a client choose its recorded IP
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # A large attachment on plant Wi-Fi must not be cut off mid-request.
@@ -608,7 +614,7 @@ http {
 
             proxy_set_header Host              $host;
             proxy_set_header X-Real-IP         $remote_addr;
-            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For   $remote_addr;   # overwrite, never append: the backend logs the FIRST entry, so appending lets a client choose its recorded IP
             proxy_set_header X-Forwarded-Proto $scheme;
 
             proxy_read_timeout 300s;

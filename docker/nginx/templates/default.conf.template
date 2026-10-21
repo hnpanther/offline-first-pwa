@@ -1,0 +1,128 @@
+# The PWA site. Rendered at container start by the official image's envsubst step into
+# /etc/nginx/conf.d/default.conf. Only variables starting with PWA_ are substituted
+# (NGINX_ENVSUBST_FILTER in the Dockerfile), so nginx's own $host, $uri, … are left alone.
+#
+#   PWA_SERVER_NAME       the name or IP tablets type (default: _ = any)
+#   PWA_BACKEND_UPSTREAM  where Spring Boot listens, scheme + host + port, no path
+#                         (default: http://host.docker.internal:8081)
+#   PWA_MAX_BODY_SIZE     largest request body nginx forwards (default: 32m)
+#
+# To change more than these, mount your own copy of this file over
+# /etc/nginx/templates/default.conf.template (see docker/DEPLOY.md).
+#
+# Mirrors docs/deployment.md § "nginx as a service"; the reasoning for each block is there.
+
+server {
+    # IPv4 only: a host booted with IPv6 disabled would make [::] fail nginx at start.
+    listen 80;
+    server_name ${PWA_SERVER_NAME};
+
+    # Liveness for the container healthcheck. Plain HTTP so the check needs no certificate.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${PWA_SERVER_NAME};
+
+    # Mounted from the host (docker/ssl → /etc/nginx/ssl, read-only). The certificate must be
+    # issued by the plant's CA — the one bundled into the APK and installed on browser tablets.
+    # A certificate from any other CA is valid and trusted by nothing in the fleet.
+    ssl_certificate     /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    include /etc/nginx/snippets/security-headers.conf;
+
+    # First load and every service-worker update go over plant Wi-Fi: compress text.
+    # Already-compressed formats (woff2, png, webm) are deliberately absent.
+    gzip              on;
+    gzip_vary         on;
+    gzip_min_length   1024;
+    gzip_proxied      any;
+    gzip_types        text/plain text/css application/javascript application/json
+                      image/svg+xml application/manifest+json;
+
+    # A single attachment may be up to 25 MB (app.attachments.max-file-size-bytes). nginx's
+    # default is 1 MB and its 413 reads to an operator as "upload failed".
+    client_max_body_size ${PWA_MAX_BODY_SIZE};
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # The app shell itself must be revalidated, or a tablet can keep an index.html that points
+    # at chunks the new build no longer has.
+    location = /index.html {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-cache";
+    }
+
+    # Content-hashed filenames: a URL never changes meaning, so cache it for a year.
+    location /assets/ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # The service worker and its manifest must never be served from cache, or the fleet stays
+    # frozen on the previous build with nothing failing.
+    location ~* (sw\.js|workbox-.*\.js)$ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-cache";
+    }
+
+    # Same rule, plus the right type: nginx's mime.types has no entry for .webmanifest, and an
+    # application/octet-stream manifest under nosniff is one browser update away from refusal.
+    # Exact match, so it wins over the regex above.
+    location = /manifest.webmanifest {
+        types { }
+        default_type application/manifest+json;
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "no-cache";
+    }
+
+    location /api/ {
+        proxy_pass ${PWA_BACKEND_UPSTREAM}/api/;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection        "";
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        # Overwritten, never appended: nginx is the first hop, and the backend records the FIRST
+        # entry of X-Forwarded-For as the client address (sessions, audit, request logs).
+        # $proxy_add_x_forwarded_for would keep whatever the client sent in front, letting any
+        # caller choose the address the audit trail records.
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # A large attachment on plant Wi-Fi must not be cut off mid-request. The client gives
+        # an upload 120 s (UPLOAD_TIMEOUT_MS); nginx must not give up first.
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+
+        # Stream uploads straight through instead of spooling a 25 MB video to the container's
+        # disk first — the root filesystem is read-only, and buffering adds nothing here.
+        proxy_request_buffering off;
+
+        # Likewise for responses: a downloaded attachment is streamed to the tablet rather than
+        # written to a temp file first (there is no writable disk for one, by design).
+        proxy_max_temp_file_size 0;
+    }
+}

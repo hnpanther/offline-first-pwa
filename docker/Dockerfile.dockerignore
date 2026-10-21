@@ -1,0 +1,6 @@
+# Build context is the repository root, but the image needs only two things from it.
+# Everything else (node_modules, android/, certs/ with the CA's private key, .env files) stays
+# out of the context entirely, so it can never end up in a layer.
+*
+!dist/
+!docker/nginx/

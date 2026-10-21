@@ -29,7 +29,7 @@ server is the problem.
 
 | Fact | Where |
 |---|---|
-| The nginx config sets **no security headers at all** — every `add_header` in the documented config is `Cache-Control` | [deployment.md § The whole `nginx.conf`](deployment.md) |
+| The **systemd and WinSW** nginx configs set **no security headers at all**: every `add_header` in them is `Cache-Control`. The **Docker** deployment does set them, built and verified on 2026-10-21 (CSP with `connect-src 'self'`, `nosniff`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`). The service worker installs under that CSP and the app opens offline | [deployment.md](deployment.md), [docker/DEPLOY.md §7](../docker/DEPLOY.md) |
 | `dist/index.html` carries **no `integrity` attributes** — Vite does not emit SRI by default | verified against a real build |
 | The service worker is `registerType: 'autoUpdate'` with `skipWaiting: true` and `clientsClaim: true` | `vite.config.ts` |
 | Therefore a deploy reaches the whole browser fleet **within minutes, with no user action** | [deployment.md § Publishing a new build](deployment.md#publishing-a-new-build) |
@@ -58,7 +58,9 @@ already reached**: on the nginx host, on the backend, or from a third machine.
 1. **Security headers, starting with CSP.** A `connect-src` restricted to the app's own origin
    stops an injected script exfiltrating readings to a second destination — the browser refuses
    the request. It does nothing against a rooted device (§3), which controls the browser itself,
-   but it is the cheapest real control here and today there is none.
+   but it is the cheapest real control here. **Built for the Docker deployment**
+   (`docker/nginx/snippets/security-headers.conf`); still open for the systemd and WinSW configs,
+   which can include the same snippet.
    Add `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY` in the same pass.
    **HSTS deliberately excluded**: with a private CA and IP-based URLs it buys little and can
    strand a site that has to fall back, so it needs its own decision rather than riding along.

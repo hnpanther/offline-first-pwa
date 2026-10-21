@@ -25,6 +25,7 @@ Read, in this order:
 | [docs/storage.md](docs/storage.md) | The Dexie schema, every store, and the rules for changing it |
 | [docs/device-features.md](docs/device-features.md) | NFC, camera, GPS, screen orientation — support and fallbacks |
 | [docs/apk.md](docs/apk.md) | **The packaged Android app.** Building it without Android Studio, the native NFC plugin and the payload contract it keeps with the web decoder, manifest permissions, why the app cannot use a hand-installed CA, and exactly what to rebuild when what changes. |
+| [docker/DEPLOY.md](docker/DEPLOY.md) | **Running the browser delivery in Docker.** nginx + the built `dist/`, TLS and config on volumes, security headers, the `/api/` proxy. |
 | [docs/roadmap.md](docs/roadmap.md) | **Nothing in it is built.** Decisions deferred — hardening what nginx serves, session anomaly detection, device attestation — each with the facts it rests on. Read it before designing any of them again; one idea is recorded there specifically because it does not work. |
 
 ## The rule that keeps this useful
@@ -42,6 +43,7 @@ person — or the next agent — will trust it.
 | NFC, camera, GPS or orientation | [docs/device-features.md](docs/device-features.md) — and check it still works **inside the APK**: a browser API is not a WebView API, and a permission absent from `AndroidManifest.xml` is denied with no prompt |
 | Anything under `android/`, or the native NFC contract | [docs/apk.md](docs/apk.md) |
 | A trap you only found by debugging | **[AGENTS.md](AGENTS.md)** — add an entry with the *why* |
+| The nginx site, headers or proxy | [docker/](docker/) **and** [docs/deployment.md](docs/deployment.md): the same site is described in both |
 | A user-visible feature or setting | [README.md](README.md) |
 | Anything touching the API contract | the backend's `README.md`, `AGENTS.md` and `docs/` too |
 

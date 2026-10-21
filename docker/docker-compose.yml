@@ -1,0 +1,63 @@
+# MFDCS PWA behind nginx. Run from this directory:
+#   cp .env.example .env        # then edit it
+#   docker compose up -d --build
+# Full procedure, certificates and troubleshooting: DEPLOY.md
+
+name: mfdcs
+
+services:
+  pwa:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        APP_VERSION: ${PWA_IMAGE_TAG:-latest}
+    image: mfdcs-pwa:${PWA_IMAGE_TAG:-latest}
+    container_name: mfdcs-pwa
+    restart: unless-stopped
+
+    ports:
+      - "${PWA_HTTP_PORT:-80}:80"
+      - "${PWA_HTTPS_PORT:-443}:443"
+
+    environment:
+      PWA_SERVER_NAME: ${PWA_SERVER_NAME:-_}
+      PWA_BACKEND_UPSTREAM: ${PWA_BACKEND_UPSTREAM:-http://host.docker.internal:8081}
+      PWA_MAX_BODY_SIZE: ${PWA_MAX_BODY_SIZE:-32m}
+
+    # Lets the container reach a backend running on the Docker host itself (Linux needs this
+    # line; Docker Desktop provides the name anyway).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      # cert.pem + key.pem, issued by the plant's CA. Read-only: nginx only reads them.
+      - ./ssl:/etc/nginx/ssl:ro
+      # Optional site override. Uncomment to replace the whole server config with your own copy
+      # (start from nginx/templates/default.conf.template):
+      # - ./overrides/templates:/etc/nginx/templates:ro
+      # Optional header override (e.g. CSP in report-only mode while diagnosing):
+      # - ./overrides/snippets:/etc/nginx/snippets:ro
+
+    # Hardening. Nothing in the container needs to write except these scratch paths.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m
+      - /var/run:size=1m
+      - /etc/nginx/conf.d:size=1m
+      - /tmp:size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

@@ -49,3 +49,8 @@ desktop.ini
 
 # Android — the site CA is copied in from certs/ by npm run ca:apk, never committed
 android/app/src/main/res/raw/plant_ca.crt
+
+# Docker deployment: certificates and the site-specific .env never go into git
+docker/ssl/
+docker/.env
+docker/overrides/

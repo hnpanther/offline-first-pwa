@@ -1743,6 +1743,11 @@ Stored in Settings (`serverUrl` in IndexedDB). If configured origin equals `wind
 
 ## Production Deployment
 
+> **Docker option:** after `npm run build:apk`, the `docker/` folder packages `dist/` behind nginx
+> as one container: TLS and config on volumes, security headers, `/api/` proxy. See
+> [docker/DEPLOY.md](docker/DEPLOY.md). The manual nginx setup below remains valid, and it is
+> what to use on a Windows server.
+
 ### Reference architecture (split hosts)
 
 Typical plant setup:
@@ -1972,7 +1977,7 @@ server {
 
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For   $remote_addr;   # overwrite, never append: the backend logs the FIRST entry, so appending lets a client choose its recorded IP
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -2026,7 +2031,7 @@ http {
 
             proxy_set_header Host              $host;
             proxy_set_header X-Real-IP         $remote_addr;
-            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For   $remote_addr;   # overwrite, never append: the backend logs the FIRST entry, so appending lets a client choose its recorded IP
             proxy_set_header X-Forwarded-Proto $scheme;
         }
 
