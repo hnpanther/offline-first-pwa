@@ -23,7 +23,7 @@ import type {
   LogSheetAssignmentType,
   OperationalUnit
 } from '@/types'
-import type { FieldDefinition } from '@/types/sync'
+import type { AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
 
 // ===========================================================================
@@ -69,6 +69,16 @@ export interface ServerLogSheet {
   syncError?: string | null
   createdAt?: number | null
   updatedAt?: number | null
+  /**
+   * Per-asset field overrides frozen onto this sheet, keyed by asset id as a string.
+   *
+   * The server has always sent it — it is a column on the sheet entity the bundle serialises
+   * whole — but nothing here declared it, so `applyLogSheetBundle` never copied it onto the
+   * stored record and `sheetFieldDefinitions` found `undefined` on every sheet. The device
+   * therefore drew every asset against its class's bands, which is the defect the column
+   * exists to remove.
+   */
+  fieldOverridesSnapshot?: Record<string, AssetFieldOverrideSnapshot> | null
 }
 
 /** Server-generated rows for a log sheet (authoritative asset list). */

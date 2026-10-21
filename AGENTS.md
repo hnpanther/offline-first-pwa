@@ -623,6 +623,22 @@ Three things about it are worth not rediscovering:
 - **`undefined` and `null` are different answers.** A band the override does not mention keeps
   the class's; a band explicitly `null` means *this machine has no such band*, which is a
   decision an engineer made. Collapsing the two silently widens or narrows a danger range.
+- **The delta has to be carried as well as applied, and the two fail identically.** The server
+  sent `fieldOverridesSnapshot` from the first day — the bundle serialises the sheet entity
+  whole — but `ServerLogSheet` did not declare it and `applyLogSheetBundle` rebuilds the stored
+  record **field by field** across four branches, so it reached no device and
+  `sheetFieldDefinitions` read `undefined` on every sheet. Resolving per asset changed nothing
+  visible until the record carried it. Anything added to the server's `LogSheet` entity needs
+  the same two steps; assert the resolved **band**, not the presence of the key
+  (`services/sync/perAssetOverrideSync.test.ts`).
+- **`FULL` changes the field COUNT, so the N-of-M badge is per asset too.** It used to be keyed
+  by class, with a comment that an override changes a band rather than whether a field must be
+  answered — true of `RANGES_ONLY`, false of `FULL`. An asset that dropped a field could never
+  reach N-of-N; one that added a field read «۲ از ۲» with a third input empty below it.
+- **`required`, `sortOrder` and `options` are part of a `FULL` override.** The panel's form does
+  not post them today, but the server's sanitiser allows all three and `AssetFieldResolver`
+  reads all three — so a value arriving by any other route would change the form the web
+  renders. The merge honours them for that reason, not because something writes them.
 
 **Sub-classes need nothing from this app.** An asset class may now have a parent, and an asset
 points at the leaf through its ordinary `classId`, so the existing

@@ -515,7 +515,9 @@ export function LogSheetFillPage() {
 
   const [logSheet, setLogSheet] = useState<LogSheet | null>(null)
   const [assetClasses, setAssetClasses] = useState<AssetClass[]>([])
-  const [fieldDefsByClass, setFieldDefsByClass] = useState<Map<string, FieldDefinition[]>>(new Map())
+  // Keyed by ASSET, not by class. A FULL asset adds and removes fields, so the number of
+  // fields it has is its own — see loadFieldDefsForEntries.
+  const [fieldDefsByAsset, setFieldDefsByAsset] = useState<Map<string, FieldDefinition[]>>(new Map())
   const [loading, setLoading] = useState(true)
   // Which route id the sheet on screen was loaded for. Stored rather than inferred because a
   // sheet's own `localId` is not the route id in the archived view, and the loader has to be
@@ -559,29 +561,41 @@ export function LogSheetFillPage() {
 
   const loadFieldDefsForEntries = useCallback(
     async (entries: LogSheetEntryData[], sheet?: LogSheet | null) => {
+      // One read per class, as before — the shared table is the expensive part and an asset's
+      // override is applied in memory on top of it.
       const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
-      const pairs = await Promise.all(
-        classIds.map(async classId => {
-          // Same precedence as the fill dialog, so the completion badge can never disagree
-          // with the form the operator actually sees.
-          const fallback = await getFieldsForClass(classId)
-          return [classId, sheetFieldDefinitions(sheet, classId, fallback)] as const
-          // Deliberately class-level: this map answers "how many fields does this class have",
-          // which drives the N-of-M badge. A per-asset count would need a per-asset map, and
-          // an override changes a band rather than whether a field must be answered.
-        })
+      const fallbackByClass = new Map(
+        await Promise.all(
+          classIds.map(async classId => [classId, await getFieldsForClass(classId)] as const)
+        )
       )
-      setFieldDefsByClass(new Map(pairs))
+
+      // Resolved PER ASSET. The earlier version keyed this by class and justified it with "an
+      // override changes a band rather than whether a field must be answered" — which is true
+      // of RANGES_ONLY and false of FULL, the mode whose whole purpose is to add and remove
+      // fields. An asset that dropped one could never reach N-of-N, and one that added a field
+      // showed complete while that field was still empty. Same precedence as the fill dialog,
+      // so the badge cannot disagree with the form the operator actually sees.
+      const pairs = entries
+        .filter(e => e.assetId != null)
+        .map(e => {
+          const fallback = fallbackByClass.get(toIdString(e.classId)) ?? []
+          return [
+            toIdString(e.assetId),
+            sheetFieldDefinitions(sheet, e.classId, fallback, e.assetId)
+          ] as const
+        })
+      setFieldDefsByAsset(new Map(pairs))
     },
     []
   )
 
   const getEntryCompletion = useCallback(
     (entry: LogSheetEntryData) => {
-      const defs = fieldDefsByClass.get(toIdString(entry.classId)) ?? []
+      const defs = fieldDefsByAsset.get(toIdString(entry.assetId)) ?? []
       return evaluateEntryCompletion(entry, defs)
     },
-    [fieldDefsByClass]
+    [fieldDefsByAsset]
   )
 
   // -------------------------------------------------------------------------

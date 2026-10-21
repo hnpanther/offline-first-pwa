@@ -64,6 +64,32 @@ assetId)` and nowhere else.
 leaf through its ordinary `classId`, and the server flattens the inheritance before freezing
 the snapshot, so `fd.classId === entry.classId` keeps matching.
 
+### Storing it is a separate step from applying it
+
+`applyLogSheetBundle` does **not** spread the server's sheet onto the stored record — it copies
+a named list of fields, across four branches (new sheet, plain refresh, `reset-draft`,
+`mark-synced`). `fieldOverridesSnapshot` has to be in all four, and for a long time it was in
+none: the column was correct in the database, correct on the wire, and absent on the tablet,
+so every asset resolved to its class's bands no matter what the panel said.
+
+It is patched only when the payload actually carries entries, on the same rule as
+`fieldDefinitions`: an absent or empty key means *this payload says nothing*, and a sheet's
+snapshot is written once at generation and never cleared, so keeping what the device already
+holds is never the stale answer.
+
+### What `FULL` changes beyond colour
+
+`RANGES_ONLY` really is display only. `FULL` is not: it adds and removes fields, so it changes
+**which inputs the form has** and therefore the N-of-M completion badge. Both the fill dialog
+and the badge resolve through `sheetFieldDefinitions(sheet, classId, fallback, assetId)` so
+they cannot disagree — a badge reading «۲ از ۲» over a form with three inputs is a badge
+telling the operator to submit an unfinished round.
+
+The merge also honours `required`, `sortOrder` and `options` on a `FULL` override. Nothing
+writes them today — the web panel's form does not post them — but the server's override
+sanitiser allows them and `AssetFieldResolver` reads them, so a value arriving by any other
+route must not produce one form on the web and another on the tablet.
+
 ## When sync runs
 
 | Trigger | Where |

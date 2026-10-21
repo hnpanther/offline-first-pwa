@@ -98,6 +98,20 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const fieldDefinitionsPatch = bundleFieldDefinitions.length > 0
     ? { fieldDefinitions: bundleFieldDefinitions }
     : {}
+  // The per-asset delta travels on the sheet itself, beside those definitions, and is frozen
+  // the same way. It was never copied onto the stored record — so the device resolved every
+  // asset against its class's bands no matter what the panel said, which is the whole of the
+  // feature going missing on the tablet while the server had it right.
+  //
+  // Patched only when the bundle actually carries entries, on the same reasoning as the
+  // definitions above: an empty or absent key means "this payload says nothing", and blanking
+  // a working delta because a refresh arrived thin is the expensive direction to be wrong in.
+  // A sheet's snapshot is written once at generation and never cleared, so there is no case
+  // where keeping what we already hold is the stale answer.
+  const bundleFieldOverrides = serverSheet.fieldOverridesSnapshot
+  const fieldOverridesPatch = bundleFieldOverrides && Object.keys(bundleFieldOverrides).length > 0
+    ? { fieldOverridesSnapshot: bundleFieldOverrides }
+    : {}
 
   if (existing) {
     if (workflow === 'reset-draft') {
@@ -109,6 +123,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
           ...serverSheetMetadataPatch(serverSheet, reset),
           entries,
           ...fieldDefinitionsPatch,
+          ...fieldOverridesPatch,
           localOwnerUserId: undefined,
           ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
         })
@@ -129,6 +144,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
       await updateLogSheet(existing.localId, {
         ...serverSheetMetadataPatch(serverSheet, existing),
         ...fieldDefinitionsPatch,
+        ...fieldOverridesPatch,
         status: 'submitted',
         syncStatus: 'synced',
         // The server's own value, not a hard-coded 'SUBMITTED'. This branch fires for any
@@ -162,6 +178,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
       ...serverSheetMetadataPatch(serverSheet, existing),
       entries,
       ...fieldDefinitionsPatch,
+      ...fieldOverridesPatch,
       ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
     })
     const updated = await getLogSheetByServerId(serverId)
@@ -190,6 +207,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     dueAt: serverSheet.dueAt ?? undefined,
     entries,
     ...fieldDefinitionsPatch,
+    ...fieldOverridesPatch,
     createdAt: serverSheet.createdAt ?? now,
     updatedAt: serverSheet.updatedAt ?? now
   })

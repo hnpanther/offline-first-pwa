@@ -121,6 +121,17 @@ export interface AssetFieldOverride {
   label?: string
   unit?: string
   dataType?: string
+  /*
+   * The three below are FULL-only too, and the web panel's form does not yet post any of them —
+   * but the server's override sanitiser allows all three and `AssetFieldResolver` reads all
+   * three, so a value reaching the database by any other route (the integration API, a hand
+   * edit) WOULD change the form the web renders. A client that ignored them would then show a
+   * different form from the one the server validates against, on the same asset. Mirrored here
+   * so the two cannot diverge rather than because something writes them today.
+   */
+  required?: boolean
+  sortOrder?: number | string
+  options?: Array<{ value: string; label: string }> | null
 }
 
 // ---------------------------------------------------------------------------

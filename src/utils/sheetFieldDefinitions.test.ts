@@ -229,6 +229,83 @@ describe('sheetFieldDefinitions — per-asset overrides', () => {
     expect(fields.find(f => f.key === 'vibration')?.label).toBe('لرزش')
   })
 
+  // The N-of-M badge on the fill page counts these definitions. It used to resolve them by
+  // class, justified as "an override changes a band rather than whether a field must be
+  // answered" — true of RANGES_ONLY, false of FULL, whose entire purpose is adding and
+  // removing fields. An asset that dropped one could never reach N-of-N; one that added a
+  // field read as complete while that field was still empty.
+  it('changes the field COUNT for a FULL asset, which a per-class count cannot see', () => {
+    const removed = sheetWith({ '11': { source: 'FULL', fields: { pressure: { removed: true } } } })
+    const added = sheetWith({
+      '12': { source: 'FULL', fields: { vibration: { label: 'لرزش' } } }
+    })
+
+    expect(sheetFieldDefinitions(removed, '7', [], '11')).toHaveLength(1)
+    expect(sheetFieldDefinitions(added, '7', [], '12')).toHaveLength(3)
+    // The same class, resolved without an asset, still reports the class's own count — which
+    // is exactly why keying that map by class was wrong.
+    expect(sheetFieldDefinitions(removed, '7')).toHaveLength(2)
+  })
+
+  // Three keys the server's sanitiser allows and `AssetFieldResolver` reads, which this merge
+  // used to drop on the floor. Nothing writes them today; the point is that if anything does,
+  // the tablet's form matches the one the server validates against.
+  it('honours required, sortOrder and options on a FULL override, as the server does', () => {
+    const sheet = sheetWith({
+      '11': {
+        source: 'FULL',
+        fields: {
+          ampere: { required: false },
+          pressure: { sortOrder: -5, options: [{ value: 'a', label: 'آ' }] },
+          mode: { label: 'وضعیت', dataType: 'select', required: true, sortOrder: 99,
+                  options: [{ value: 'on', label: 'روشن' }] }
+        }
+      }
+    })
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    // pressure's own order moves it ahead of ampere; the added field asked to be last.
+    expect(fields.map(f => f.key)).toEqual(['pressure', 'ampere', 'mode'])
+    expect(fields.find(f => f.key === 'ampere')?.required).toBe(false)
+    const mode = fields.find(f => f.key === 'mode')
+    expect(mode?.required).toBe(true)
+    expect(mode?.validation?.options).toEqual([{ value: 'on', label: 'روشن' }])
+    // Options on a field the class already has, too — not only on an added one.
+    expect(fields.find(f => f.key === 'pressure')?.validation?.options)
+      .toEqual([{ value: 'a', label: 'آ' }])
+  })
+
+  it('drops the class options when a FULL override nulls them', () => {
+    const choice = field('mode', '7', 0, {
+      dataType: 'select',
+      validation: { options: [{ value: 'on', label: 'روشن' }] }
+    })
+    const sheet = {
+      fieldDefinitions: [choice],
+      fieldOverridesSnapshot: { '11': { source: 'FULL', fields: { mode: { options: null } } } }
+    } as unknown as LogSheet
+
+    expect(sheetFieldDefinitions(sheet, '7', [], '11')[0].validation?.options).toBeUndefined()
+  })
+
+  it('leaves required and order alone under RANGES_ONLY, which owns no structure', () => {
+    const mandatory = field('ampere', '7', 0, { dataType: 'number', required: true })
+    const sheet = {
+      fieldDefinitions: [mandatory, pressure],
+      fieldOverridesSnapshot: {
+        // Every structural key at once, under the mode that may only re-band.
+        '11': { source: 'RANGES_ONLY', fields: { ampere: { required: false, sortOrder: 99, label: 'x' } } }
+      }
+    } as unknown as LogSheet
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(fields.map(f => f.key)).toEqual(['ampere', 'pressure'])
+    expect(fields[0].required).toBe(true)
+    expect(fields[0].label).toBe('ampere')
+  })
+
   it('does nothing without an assetId — an older caller keeps the class bands', () => {
     const sheet = sheetWith({
       '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }

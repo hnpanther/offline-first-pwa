@@ -105,13 +105,33 @@ function merge(field: FieldDefinition, override: AssetFieldOverride, full: boole
     if (override.danger == null) delete validation.danger
     else validation.danger = override.danger
   }
+  if (full && 'options' in override) {
+    if (override.options == null) delete validation.options
+    else validation.options = override.options
+  }
   const merged: FieldDefinition = { ...field, validation }
   if (full) {
     if (override.label != null) merged.label = override.label
     if (override.unit != null) merged.unit = override.unit
     if (override.dataType != null) merged.dataType = override.dataType as FieldDefinition['dataType']
+    // Presence, not truthiness: `required: false` on an override is a decision to release a
+    // field the class requires, and `=== true` is what the server's own read does with it.
+    if ('required' in override) merged.required = override.required === true
+    const order = sortOrder(override)
+    if (order != null) merged.order = order
   }
   return merged
+}
+
+/** `sortOrder` as the server reads it — a number, or a numeric string, or nothing. */
+function sortOrder(override: AssetFieldOverride): number | null {
+  const raw = override.sortOrder
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const parsed = Number(raw.trim())
+    return Number.isFinite(parsed) ? Math.trunc(parsed) : null
+  }
+  return null
 }
 
 /** A field the asset adds that its class does not have. FULL only. */
@@ -123,12 +143,15 @@ function added(key: string, override: AssetFieldOverride, classId: string): Fiel
     label: override.label ?? key,
     dataType: (override.dataType ?? 'number') as FieldDefinition['dataType'],
     unit: override.unit,
-    required: false,
+    required: override.required === true,
     validation: {
       ...(override.warning != null ? { warning: override.warning } : {}),
-      ...(override.danger != null ? { danger: override.danger } : {})
+      ...(override.danger != null ? { danger: override.danger } : {}),
+      ...(override.options != null ? { options: override.options } : {})
     },
-    order: Number.MAX_SAFE_INTEGER
+    // Last by default, which is where the server also puts it: a definition with no order of
+    // its own sorts as Integer.MAX_VALUE there.
+    order: sortOrder(override) ?? Number.MAX_SAFE_INTEGER
   } as FieldDefinition
 }
 

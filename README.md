@@ -1706,7 +1706,7 @@ Each assigned item (and claim/bundle responses) contains:
 | `sheet` | Server log sheet metadata (`ServerLogSheet`) — status, dueAt, assignee, template, scope, … |
 | `entries` | Rows to fill (`ServerLogSheetEntry`) — assetId, assetName, nfcTagId, classId, formData, … |
 | `context` | Scoped reference slice for **this sheet only** — locations, systems, functions, subFunctions, assetEntries, assetClasses, fieldDefinitions, optional `scopeDisplayLabel` |
-| `sheet.fieldOverridesSnapshot` | Optional. Per-asset warning/danger bands frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Display only: the server recomputes severity from its own copy, so a client that ignores this key still syncs correct data |
+| `sheet.fieldOverridesSnapshot` | Optional. Per-asset field overrides frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Copied onto the stored record by `applyLogSheetBundle` and applied through `sheetFieldDefinitions(sheet, classId, fallback, assetId)`. Under `source: RANGES_ONLY` it is display only — the server recomputes severity from its own copy, so a client that ignores the key still syncs correct data. Under `FULL` it also **adds and removes fields**, so it decides which inputs the form has and what the N-of-M badge counts |
 
 Client merge: `mergeLogSheetBundle.ts` applies **server-wins** `bulkPut` for context tables and updates the local `logSheets` row + entries.
 
