@@ -101,6 +101,28 @@ export interface FieldDefinition extends SyncableRecord {
   order: number         // display order within the class (0-based)
 }
 
+/**
+ * One asset's frozen override, as `log_sheets.field_overrides_snapshot` carries it.
+ *
+ * `RANGES_ONLY` may only replace `warning` / `danger`; `FULL` may also add a field, drop one
+ * with `removed`, or relabel it. The mode is stored rather than inferred because the two are
+ * not distinguishable from the keys alone, and guessing would make a removed field reappear.
+ */
+export interface AssetFieldOverrideSnapshot {
+  source?: 'RANGES_ONLY' | 'FULL'
+  fields?: Record<string, AssetFieldOverride>
+}
+
+export interface AssetFieldOverride {
+  warning?: FieldValidationRange | null
+  danger?: FieldValidationRange | null
+  /** FULL only: this field does not apply to this asset. */
+  removed?: boolean
+  label?: string
+  unit?: string
+  dataType?: string
+}
+
 // ---------------------------------------------------------------------------
 // Attributes
 // ---------------------------------------------------------------------------

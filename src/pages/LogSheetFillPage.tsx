@@ -176,8 +176,9 @@ function AssetFillDialog({
   const { fields: fallbackFields, loading: fieldsLoading, refresh: refreshFields } =
     useFieldDefinitions(entry ? toIdString(entry.classId) : undefined)
   const fields = useMemo(
-    () => sheetFieldDefinitions(logSheet, entry?.classId, fallbackFields),
-    [logSheet, entry?.classId, fallbackFields]
+    // assetId, not only classId: a band may belong to this machine rather than to its class.
+    () => sheetFieldDefinitions(logSheet, entry?.classId, fallbackFields, entry?.assetId),
+    [logSheet, entry?.classId, entry?.assetId, fallbackFields]
   )
   const {
     control,
@@ -565,6 +566,9 @@ export function LogSheetFillPage() {
           // with the form the operator actually sees.
           const fallback = await getFieldsForClass(classId)
           return [classId, sheetFieldDefinitions(sheet, classId, fallback)] as const
+          // Deliberately class-level: this map answers "how many fields does this class have",
+          // which drives the N-of-M badge. A per-asset count would need a per-asset map, and
+          // an override changes a band rather than whether a field must be answered.
         })
       )
       setFieldDefsByClass(new Map(pairs))

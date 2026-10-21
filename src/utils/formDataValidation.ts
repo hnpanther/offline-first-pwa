@@ -109,7 +109,7 @@ export interface SubmitBlockingIssue {
  * is wrong", not "guaranteed to be accepted".
  */
 export function findSubmitBlockingIssues(
-  sheet: Pick<LogSheet, 'entries' | 'fieldDefinitions'>,
+  sheet: Pick<LogSheet, 'entries' | 'fieldDefinitions' | 'fieldOverridesSnapshot'>,
   fallbackDefs: FieldDefinition[] = []
 ): SubmitBlockingIssue[] {
   const issues: SubmitBlockingIssue[] = []
@@ -117,7 +117,7 @@ export function findSubmitBlockingIssues(
   for (const entry of sheet.entries ?? []) {
     if (!hasMeaningfulFormData(entry.formData)) continue
 
-    const defs = sheetFieldDefinitions(sheet as LogSheet, entry.classId, fallbackDefs)
+    const defs = sheetFieldDefinitions(sheet as LogSheet, entry.classId, fallbackDefs, entry.assetId)
     // No schema for this class on this device: the server validates against its own snapshot
     // and may well accept it. Blocking here would strand the operator over our missing data.
     if (defs.length === 0) continue

@@ -33,6 +33,37 @@ Two rules hold the whole design together:
 
 ---
 
+## Per-asset warning and danger bands
+
+A band belongs to a machine as often as to a class — one pump's ampere range is not another's.
+The bundle carries that as `sheet.fieldOverridesSnapshot`, beside the field definitions and
+frozen at the same moment:
+
+```json
+{ "4711": { "source": "RANGES_ONLY", "fields": { "Ampere": { "warning": { "min": 18, "max": 42 } } } } }
+```
+
+Keyed by **asset id as a string**, then by field key. It is a **delta**: only the fields that
+actually differ from the class appear, and an asset that overrides nothing is absent entirely,
+as is the whole key on a sheet where nobody overrides anything. Carrying whole definitions per
+asset would put ~135 KB on a 47-entry sheet instead of ~11 KB, on every fetch.
+
+`source` is the asset's mode when the sheet was raised. `RANGES_ONLY` may only replace
+`warning` and `danger`; `FULL` may additionally add a field, drop one with `"removed": true`,
+or relabel it. It is stored rather than inferred because the two are not distinguishable from
+the keys alone.
+
+**This is for display.** The server recomputes `max_severity` and `breached_fields` from its own
+copy of the same snapshot on every write — the mobile batch merge and the web fill both — and
+it never reads severity, or even `classId`, from what the client posts. So a build of this app
+that ignores the key stores exactly the same data; it simply colours a field by its class's
+range instead of its own. Apply it through `sheetFieldDefinitions(sheet, classId, fallback,
+assetId)` and nowhere else.
+
+**Sub-classes change nothing here.** An asset class may have a parent; the asset points at the
+leaf through its ordinary `classId`, and the server flattens the inheritance before freezing
+the snapshot, so `fd.classId === entry.classId` keeps matching.
+
 ## When sync runs
 
 | Trigger | Where |

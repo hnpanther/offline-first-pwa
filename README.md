@@ -1706,6 +1706,7 @@ Each assigned item (and claim/bundle responses) contains:
 | `sheet` | Server log sheet metadata (`ServerLogSheet`) — status, dueAt, assignee, template, scope, … |
 | `entries` | Rows to fill (`ServerLogSheetEntry`) — assetId, assetName, nfcTagId, classId, formData, … |
 | `context` | Scoped reference slice for **this sheet only** — locations, systems, functions, subFunctions, assetEntries, assetClasses, fieldDefinitions, optional `scopeDisplayLabel` |
+| `sheet.fieldOverridesSnapshot` | Optional. Per-asset warning/danger bands frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Display only: the server recomputes severity from its own copy, so a client that ignores this key still syncs correct data |
 
 Client merge: `mergeLogSheetBundle.ts` applies **server-wins** `bulkPut` for context tables and updates the local `logSheets` row + entries.
 

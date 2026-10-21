@@ -122,3 +122,136 @@ describe('guards', () => {
     expect(sheetFieldDefinitions(null, '7', SHARED_TABLE_AFTER_B)).toHaveLength(3)
   })
 })
+
+// ---------------------------------------------------------------------------------------
+// Per-asset bands. A band may belong to one machine rather than to its class, and the sheet
+// carries that as a delta beside its definitions.
+//
+// Every case here asks the mirrored question: does THIS asset get ITS band — and, just as
+// important, does the asset beside it keep the class's?
+// ---------------------------------------------------------------------------------------
+
+describe('sheetFieldDefinitions — per-asset overrides', () => {
+  const ampere = field('ampere', '7', 0, {
+    dataType: 'number',
+    validation: { warning: { min: 0, max: 100 }, danger: { min: 0, max: 120 } }
+  })
+  const pressure = field('pressure', '7', 1, { dataType: 'number' })
+
+  function sheetWith(overrides: Record<string, unknown>): LogSheet {
+    return {
+      fieldDefinitions: [ampere, pressure],
+      fieldOverridesSnapshot: overrides
+    } as unknown as LogSheet
+  }
+
+  it('leaves an asset with no override on the class bands', () => {
+    const sheet = sheetWith({
+      '99': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }
+    })
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(fields[0].validation?.warning).toEqual({ min: 0, max: 100 })
+  })
+
+  it('gives the named asset its own warning band', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }
+    })
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(fields[0].validation?.warning).toEqual({ min: 18, max: 42 })
+  })
+
+  it('keeps the class danger band when the override names only warning', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }
+    })
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(fields[0].validation?.danger).toEqual({ min: 0, max: 120 })
+  })
+
+  it('treats an explicit null as "this machine has no such band"', () => {
+    const sheet = sheetWith({ '11': { source: 'RANGES_ONLY', fields: { ampere: { danger: null } } } })
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(fields[0].validation?.danger).toBeUndefined()
+    expect(fields[0].validation?.warning).toEqual({ min: 0, max: 100 })
+  })
+
+  it('matches the field key case-insensitively, as the server index does', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { AMPERE: { warning: { min: 1, max: 2 } } } }
+    })
+
+    expect(sheetFieldDefinitions(sheet, '7', [], '11')[0].validation?.warning)
+      .toEqual({ min: 1, max: 2 })
+  })
+
+  it('never mutates the shared definition', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }
+    })
+
+    sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(ampere.validation?.warning).toEqual({ min: 0, max: 100 })
+  })
+
+  it('ignores a removal unless the asset owns its field list', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { pressure: { removed: true } } }
+    })
+
+    expect(sheetFieldDefinitions(sheet, '7', [], '11').map(f => f.key))
+      .toEqual(['ampere', 'pressure'])
+  })
+
+  it('drops a field a FULL asset removed', () => {
+    const sheet = sheetWith({ '11': { source: 'FULL', fields: { pressure: { removed: true } } } })
+
+    expect(sheetFieldDefinitions(sheet, '7', [], '11').map(f => f.key)).toEqual(['ampere'])
+  })
+
+  it('adds a field a FULL asset defines', () => {
+    const sheet = sheetWith({
+      '11': { source: 'FULL', fields: { vibration: { label: 'لرزش', unit: 'mm/s' } } }
+    })
+
+    const fields = sheetFieldDefinitions(sheet, '7', [], '11')
+
+    expect(fields.map(f => f.key)).toContain('vibration')
+    expect(fields.find(f => f.key === 'vibration')?.label).toBe('لرزش')
+  })
+
+  it('does nothing without an assetId — an older caller keeps the class bands', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }
+    })
+
+    expect(sheetFieldDefinitions(sheet, '7').at(0)?.validation?.warning).toEqual({ min: 0, max: 100 })
+  })
+
+  it('does nothing for a sheet raised before the feature existed', () => {
+    const sheet = { fieldDefinitions: [ampere, pressure] } as unknown as LogSheet
+
+    expect(sheetFieldDefinitions(sheet, '7', [], '11')[0].validation?.warning)
+      .toEqual({ min: 0, max: 100 })
+  })
+
+  it('applies to the fallback schema too, for a pre-upgrade sheet record', () => {
+    const sheet = {
+      fieldOverridesSnapshot: {
+        '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 5, max: 9 } } } }
+      }
+    } as unknown as LogSheet
+
+    expect(sheetFieldDefinitions(sheet, '7', [ampere], '11')[0].validation?.warning)
+      .toEqual({ min: 5, max: 9 })
+  })
+})

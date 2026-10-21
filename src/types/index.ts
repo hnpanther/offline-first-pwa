@@ -1,4 +1,4 @@
-import type { FieldDefinition } from './sync'
+import type { AssetFieldOverrideSnapshot, FieldDefinition } from './sync'
 
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed'
 
@@ -459,6 +459,25 @@ export interface LogSheet {
    * needs no Dexie schema change.
    */
   fieldDefinitions?: FieldDefinition[]
+  /**
+   * Per-asset warning/danger overrides frozen with this sheet, keyed by **asset id as a
+   * string** then by field key.
+   *
+   * A band belongs to a machine, not only to its class: two pumps of one class on one sheet
+   * can legitimately be judged against different ranges. `fieldDefinitions` above cannot
+   * express that — it is keyed by class — so the difference travels separately, and as a
+   * *delta*: only the fields that actually differ from the class appear, because a 47-entry
+   * sheet carrying whole definitions per asset would be ~135 KB instead of ~11 KB, on every
+   * bundle fetch.
+   *
+   * `source` is the asset's mode when the sheet was raised (`RANGES_ONLY` or `FULL`) and
+   * decides how far the override reaches — see `sheetFieldDefinitions`.
+   *
+   * Absent on sheets raised before the server grew this, and absent on any sheet where no
+   * asset overrides anything, which is the overwhelming majority. Plain, non-indexed
+   * property: no Dexie version bump.
+   */
+  fieldOverridesSnapshot?: Record<string, AssetFieldOverrideSnapshot>
   /**
    * The server's outcome for the last rejected submission (e.g. `VALIDATION_ERROR`).
    *

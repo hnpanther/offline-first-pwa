@@ -261,16 +261,28 @@ export async function buildRestorePlan(
   const archivedByAsset = new Map(
     (archiveRow.sheet.entries ?? []).map(e => [toIdString(e.assetId), e])
   )
-  // One read per class, not per asset: a 47-asset sheet is usually two or three classes.
-  const defsByClass = new Map<string, FieldDefinition[]>()
-  const defsFor = async (classId: string | undefined): Promise<FieldDefinition[]> => {
+  // One READ per class — a 47-asset sheet is usually two or three — but the resolved answer is
+  // cached per (class, asset), because an asset may carry its own bands and, under FULL, its
+  // own labels. The expensive half is the IndexedDB read; applying an override is a map lookup.
+  const classFieldsCache = new Map<string, FieldDefinition[]>()
+  const resolvedCache = new Map<string, FieldDefinition[]>()
+  const defsFor = async (
+    classId: string | undefined,
+    assetId?: string | number
+  ): Promise<FieldDefinition[]> => {
     const id = toIdString(classId)
-    const cached = defsByClass.get(id)
+    const key = `${id}|${toIdString(assetId)}`
+    const cached = resolvedCache.get(key)
     if (cached) return cached
+    let classFields = classFieldsCache.get(id)
+    if (!classFields) {
+      classFields = await getFieldsForClass(id)
+      classFieldsCache.set(id, classFields)
+    }
     // Same precedence as the fill page, so the dialog can never label a field differently from
     // the form the operator is about to open.
-    const resolved = sheetFieldDefinitions(live, id, await getFieldsForClass(id))
-    defsByClass.set(id, resolved)
+    const resolved = sheetFieldDefinitions(live, id, classFields, assetId)
+    resolvedCache.set(key, resolved)
     return resolved
   }
 
@@ -301,7 +313,7 @@ export async function buildRestorePlan(
       conflict: hasEntryFormData(liveEntry.formData),
       attachmentIds: merged.attachmentIds,
       missingAttachmentIds: merged.missing,
-      fields: diffFields(merged.formData, liveEntry.formData ?? {}, await defsFor(liveEntry.classId))
+      fields: diffFields(merged.formData, liveEntry.formData ?? {}, await defsFor(liveEntry.classId, liveEntry.assetId))
     })
   }
 

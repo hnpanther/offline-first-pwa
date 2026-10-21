@@ -1,5 +1,5 @@
 import type { LogSheet } from '@/types'
-import type { FieldDefinition } from '@/types/sync'
+import type { AssetFieldOverride, AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
 import { toIdString } from '@/utils/ids'
 
 /**
@@ -16,20 +16,116 @@ import { toIdString } from '@/utils/ids'
  * existed on the record, so nothing regresses for work already on a device.
  */
 export function sheetFieldDefinitions(
-  sheet: Pick<LogSheet, 'fieldDefinitions'> | null | undefined,
+  sheet: Pick<LogSheet, 'fieldDefinitions' | 'fieldOverridesSnapshot'> | null | undefined,
   classId: string | number | undefined,
-  fallback: FieldDefinition[] = []
+  fallback: FieldDefinition[] = [],
+  assetId?: string | number
 ): FieldDefinition[] {
   const normalizedClassId = toIdString(classId)
   if (!normalizedClassId) return []
 
   const own = sheet?.fieldDefinitions
-  if (!own || own.length === 0) return fallback
+  if (!own || own.length === 0) return applyAssetOverride(fallback, sheet, assetId)
 
   const scoped = own.filter(fd => toIdString(fd.classId) === normalizedClassId && !fd.deleted)
   // A sheet that carries definitions but none for this class is a real answer — the class is
   // not part of this sheet — so do NOT fall back and quietly show another sheet's schema.
-  return sortByDisplayOrder(scoped)
+  //
+  // NARROW BY CLASS FIRST, THEN APPLY THE ASSET'S OVERRIDE. An override names a field key and
+  // nothing else, so applying it to the unfiltered list would collapse the identically-named
+  // fields of a class and its sub-class into one. The server makes the same mistake available
+  // and guards against it in the same order (backend AGENTS.md #146).
+  return applyAssetOverride(sortByDisplayOrder(scoped), sheet, assetId)
+}
+
+/**
+ * This asset's own warning/danger bands, laid over the definitions its class froze.
+ *
+ * Display only: the server recomputes severity from its own copy of the same snapshot on every
+ * write, so a build of this app that did not do this would still store correct data — it would
+ * simply paint the class's colours on a machine that has its own. Which is exactly how this
+ * shipped: the override travels in a key an older build ignores.
+ */
+function applyAssetOverride(
+  fields: FieldDefinition[],
+  sheet: Pick<LogSheet, 'fieldOverridesSnapshot'> | null | undefined,
+  assetId: string | number | undefined
+): FieldDefinition[] {
+  const key = toIdString(assetId)
+  if (!key || fields.length === 0) return fields
+
+  const entry: AssetFieldOverrideSnapshot | undefined = sheet?.fieldOverridesSnapshot?.[key]
+  const overrides = entry?.fields
+  if (!overrides || Object.keys(overrides).length === 0) return fields
+
+  // Keys are matched case-insensitively, as the server's unique index on lower(field_key)
+  // already requires. Matching exactly would let a difference in case silently do nothing,
+  // and a danger band that silently does nothing is the worst outcome available here.
+  const byKey = new Map<string, AssetFieldOverride>()
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v && typeof v === 'object') byKey.set(k.trim().toLowerCase(), v)
+  }
+  const ownsFieldList = entry?.source === 'FULL'
+
+  const out: FieldDefinition[] = []
+  for (const field of fields) {
+    const override = byKey.get(String(field.key ?? '').trim().toLowerCase())
+    if (!override) {
+      out.push(field)
+      continue
+    }
+    if (ownsFieldList && override.removed) continue
+    out.push(merge(field, override, ownsFieldList))
+  }
+
+  if (ownsFieldList) {
+    const present = new Set(out.map(f => String(f.key ?? '').trim().toLowerCase()))
+    for (const [k, override] of byKey) {
+      if (present.has(k) || override.removed) continue
+      out.push(added(k, override))
+    }
+  }
+  return sortByDisplayOrder(out)
+}
+
+/** A copy with the override's bands substituted. Never mutates: definitions are shared. */
+function merge(field: FieldDefinition, override: AssetFieldOverride, full: boolean): FieldDefinition {
+  const validation = { ...(field.validation ?? {}) }
+  // `undefined` means "the override says nothing about this band" and the class's stands.
+  // `null` means "this machine has no such band", which is a decision, not an absence.
+  if ('warning' in override) {
+    if (override.warning == null) delete validation.warning
+    else validation.warning = override.warning
+  }
+  if ('danger' in override) {
+    if (override.danger == null) delete validation.danger
+    else validation.danger = override.danger
+  }
+  const merged: FieldDefinition = { ...field, validation }
+  if (full) {
+    if (override.label != null) merged.label = override.label
+    if (override.unit != null) merged.unit = override.unit
+    if (override.dataType != null) merged.dataType = override.dataType as FieldDefinition['dataType']
+  }
+  return merged
+}
+
+/** A field the asset adds that its class does not have. FULL only. */
+function added(key: string, override: AssetFieldOverride): FieldDefinition {
+  return {
+    id: `asset-override:${key}`,
+    classId: '',
+    key,
+    label: override.label ?? key,
+    dataType: (override.dataType ?? 'number') as FieldDefinition['dataType'],
+    unit: override.unit,
+    required: false,
+    validation: {
+      ...(override.warning != null ? { warning: override.warning } : {}),
+      ...(override.danger != null ? { danger: override.danger } : {})
+    },
+    order: Number.MAX_SAFE_INTEGER
+  } as FieldDefinition
 }
 
 /** True when the sheet carries its own frozen schema (i.e. it is not a pre-upgrade record). */

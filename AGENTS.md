@@ -593,12 +593,41 @@ mirroring the server's own per-sheet freeze. And `upsertFieldDefinitionsForBundl
 deletes: the shared table is now a best-effort fallback for sheets stored before that field
 existed, where a lingering stale row is harmless but a deleted row another sheet needs is not.
 
-Read through `sheetFieldDefinitions(sheet, classId, fallback)` — never `getFieldsForClass`
-directly — anywhere a sheet is in scope; both the fill dialog and the completion badge use it,
-so the badge can never disagree with the form. One rule inside is easy to get backwards: when a
-sheet has definitions but **none for the requested class**, return empty rather than the
-fallback. "This class is not part of this sheet" is a real answer, and falling back there would
-show another sheet's schema — the exact bug. Tests: `utils/sheetFieldDefinitions.test.ts`.
+Read through `sheetFieldDefinitions(sheet, classId, fallback, assetId)` — never
+`getFieldsForClass` directly — anywhere a sheet is in scope; both the fill dialog and the
+completion badge use it, so the badge can never disagree with the form. One rule inside is easy
+to get backwards: when a sheet has definitions but **none for the requested class**, return
+empty rather than the fallback. "This class is not part of this sheet" is a real answer, and
+falling back there would show another sheet's schema — the exact bug. Tests:
+`utils/sheetFieldDefinitions.test.ts`.
+
+
+**A warning or danger band may belong to one machine, not to its class.** Since the server's
+V5, an asset carries its own `field_source` and overrides, and a sheet freezes them beside its
+definitions in `sheet.fieldOverridesSnapshot` — keyed by **asset id as a string**, then field
+key, as `{ source, fields }`. Two pumps of one class on one sheet can therefore be judged
+against different ranges, which `fieldDefinitions` alone cannot express because it is keyed by
+class. Pass `assetId` as the fourth argument wherever an entry is in scope.
+
+Three things about it are worth not rediscovering:
+
+- **It is display only.** The server recomputes `max_severity` from its own copy of the same
+  snapshot on every write and never trusts anything the client sends — not the severity, not
+  even the `classId`. A build of this app without the override applied still stores correct
+  data; it paints the class's colours on a machine that has its own. That is exactly how this
+  shipped, and why `fieldOverridesSnapshot` is a key an older build simply ignores.
+- **Narrow by class first, then apply the override.** An override names a field key and nothing
+  else, so applying it to an unfiltered list collapses the identically-named fields of a class
+  and its sub-class into one. The server had this bug and a two-asset test caught it (backend
+  AGENTS.md #146); the same order is kept here.
+- **`undefined` and `null` are different answers.** A band the override does not mention keeps
+  the class's; a band explicitly `null` means *this machine has no such band*, which is a
+  decision an engineer made. Collapsing the two silently widens or narrows a danger range.
+
+**Sub-classes need nothing from this app.** An asset class may now have a parent, and an asset
+points at the leaf through its ordinary `classId`, so the existing
+`fd.classId === entry.classId` filter keeps working untouched — the server flattens the
+inheritance before it freezes the snapshot.
 
 
 **`sessionUserId` may be unresolved, and everything user-scoped must cope.** Login binds it from
