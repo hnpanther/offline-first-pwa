@@ -635,6 +635,16 @@ Three things about it are worth not rediscovering:
   by class, with a comment that an override changes a band rather than whether a field must be
   answered — true of `RANGES_ONLY`, false of `FULL`. An asset that dropped a field could never
   reach N-of-N; one that added a field read «۲ از ۲» with a third input empty below it.
+- **A threshold is a range for a number and a set of OPTIONS for a choice.** A `select` or
+  `multiselect` carries `warningOptions` / `dangerOptions` beside `options` — the choices that
+  *are* the alert, the opposite polarity to the numeric bands. `evaluateFieldSeverity(dataType,
+  value, validation)` dispatches on the type and is the only entry point; the old
+  `evaluateNumericSeverity` answers `ok` for anything that is not a number, so using it on a
+  select meant a field that could be configured and could never colour. Three rules must match
+  the backend exactly, because a looser one here tells an operator a reading is fine that comes
+  back from the server as a danger: a **multiselect takes the worst** chosen option, matching is
+  **trimmed but case-sensitive** (the server's submit-time allow-list is), and a field naming no
+  severities is never an alert. `utils/fieldOptionSeverity.test.ts` pins all three.
 - **`required`, `sortOrder` and `options` are part of a `FULL` override.** The panel's form does
   not post them today, but the server's sanitiser allows all three and `AssetFieldResolver`
   reads all three — so a value arriving by any other route would change the form the web

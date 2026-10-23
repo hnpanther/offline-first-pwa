@@ -109,6 +109,16 @@ function merge(field: FieldDefinition, override: AssetFieldOverride, full: boole
     if (override.options == null) delete validation.options
     else validation.options = override.options
   }
+  // Which options are the alert travels with the bands, under the same rule and in BOTH modes:
+  // it is a threshold, not structure, so RANGES_ONLY may re-mark it while the class keeps
+  // owning the vocabulary itself. `null` is "this machine has no such list" — a decision — and
+  // an empty array says the same thing explicitly; neither means "inherit".
+  for (const key of ['warningOptions', 'dangerOptions'] as const) {
+    if (!(key in override)) continue
+    const value = override[key]
+    if (value == null) delete validation[key]
+    else validation[key] = value.map(v => String(v))
+  }
   const merged: FieldDefinition = { ...field, validation }
   if (full) {
     if (override.label != null) merged.label = override.label

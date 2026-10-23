@@ -74,6 +74,22 @@ export interface FieldValidation {
   /** Regex string — converted to RegExp at runtime for react-hook-form */
   pattern?: string
   options?: Array<{ value: string; label: string }>
+  /**
+   * Which of `options` are a warning / a danger when chosen.
+   *
+   * The polarity is the opposite of `warning`/`danger` above: a range is something a reading
+   * must stay inside, these are the choices that ARE the alert. Plain strings compared against
+   * the option values, trimmed and case-SENSITIVELY, exactly as the server's submit-time
+   * allow-list does.
+   *
+   * Additive on purpose: a build of this app that ignores them stores the same data, because
+   * the server recomputes `max_severity` from its own copy on every write. It simply paints
+   * nothing — which is how the per-asset override itself shipped. They ARE threaded through
+   * `FieldValidationSupport.build(...)` on the server, so unlike `allowNegative` below they
+   * survive a field edit.
+   */
+  warningOptions?: string[]
+  dangerOptions?: string[]
   /*
    * `allowNegative` used to live here. It is gone, and not just unused: the backend never had the
    * concept, the web panel could not set it, and `FieldValidationSupport.build(...)` rebuilds this
@@ -132,6 +148,16 @@ export interface AssetFieldOverride {
   required?: boolean
   sortOrder?: number | string
   options?: Array<{ value: string; label: string }> | null
+  /**
+   * This asset's own alerting options, replacing the class's list wholesale.
+   *
+   * Carried under `RANGES_ONLY` as well as `FULL`: which choices mean trouble on a
+   * particular machine is a threshold, not structure, so the class keeps owning the
+   * vocabulary. An explicit empty array means "this machine has no such list", which is a
+   * decision and not the same as inheriting the class's.
+   */
+  warningOptions?: string[] | null
+  dangerOptions?: string[] | null
 }
 
 // ---------------------------------------------------------------------------

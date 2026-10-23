@@ -30,7 +30,8 @@ import type { FieldDefinition } from '@/types/sync'
 import type { FormField } from '@/types'
 import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
 import {
-  evaluateNumericSeverity,
+  evaluateFieldSeverity,
+  optionSeverityMessage,
   severityMessage,
   type FieldValidationSeverity
 } from '@/utils/fieldValidation'
@@ -248,11 +249,15 @@ export function DynamicClassForm({
           }
 
           const { value, unit } = formatReadOnlyValue(def, rawValue)
-          const rangeSeverity =
-            def.dataType === 'number' && def.validation
-              ? evaluateNumericSeverity(rawValue, def.validation)
-              : 'ok'
-          const rangeFeedback = severityMessage(rangeSeverity)
+          // Type-aware: a chosen option can be the alert, so gating this on 'number' left a
+          // read-only review showing a dangerous state in the same colour as a normal one.
+          const rangeSeverity = def.validation
+            ? evaluateFieldSeverity(def.dataType, rawValue, def.validation)
+            : 'ok'
+          const isChoice = def.dataType === 'select' || def.dataType === 'multiselect'
+          const rangeFeedback = isChoice
+            ? optionSeverityMessage(rangeSeverity)
+            : severityMessage(rangeSeverity)
           const valueColor = readOnlyValueColor(rangeSeverity)
 
           return (

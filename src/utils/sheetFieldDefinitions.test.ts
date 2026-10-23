@@ -306,6 +306,53 @@ describe('sheetFieldDefinitions — per-asset overrides', () => {
     expect(fields[0].label).toBe('ampere')
   })
 
+  // Which options alert is a THRESHOLD, not structure, so RANGES_ONLY may re-mark it while the
+  // class keeps owning the vocabulary — the same rule the numeric bands follow.
+  it('lets a RANGES_ONLY asset re-mark which options alert', () => {
+    const choice = field('status', '7', 0, {
+      dataType: 'select',
+      validation: {
+        options: ['OF', 'ON', 'Idle'],
+        warningOptions: ['Idle'],
+        dangerOptions: ['OF']
+      }
+    })
+    const sheet = {
+      fieldDefinitions: [choice],
+      fieldOverridesSnapshot: {
+        // This machine idles normally; a stop is only a warning here.
+        '11': { source: 'RANGES_ONLY', fields: { status: { warningOptions: ['OF'], dangerOptions: [] } } }
+      }
+    } as unknown as LogSheet
+
+    const own = sheetFieldDefinitions(sheet, '7', [], '11')[0].validation
+    expect(own?.warningOptions).toEqual(['OF'])
+    expect(own?.dangerOptions).toEqual([])
+    // ...and the vocabulary itself still comes from the class.
+    expect(own?.options).toEqual(['OF', 'ON', 'Idle'])
+
+    // The asset beside it keeps the class's marking.
+    const other = sheetFieldDefinitions(sheet, '7', [], '99')[0].validation
+    expect(other?.warningOptions).toEqual(['Idle'])
+    expect(other?.dangerOptions).toEqual(['OF'])
+  })
+
+  it('treats an explicit null severity list as "no such list here"', () => {
+    const choice = field('status', '7', 0, {
+      dataType: 'select',
+      validation: { options: ['OF', 'ON'], dangerOptions: ['OF'] }
+    })
+    const sheet = {
+      fieldDefinitions: [choice],
+      fieldOverridesSnapshot: {
+        '11': { source: 'RANGES_ONLY', fields: { status: { dangerOptions: null } } }
+      }
+    } as unknown as LogSheet
+
+    expect(sheetFieldDefinitions(sheet, '7', [], '11')[0].validation?.dangerOptions)
+      .toBeUndefined()
+  })
+
   it('does nothing without an assetId — an older caller keeps the class bands', () => {
     const sheet = sheetWith({
       '11': { source: 'RANGES_ONLY', fields: { ampere: { warning: { min: 18, max: 42 } } } }

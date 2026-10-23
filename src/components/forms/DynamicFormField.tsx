@@ -17,7 +17,10 @@ import { Controller, useWatch, type Control, type RegisterOptions, type Controll
 import type { FormField } from '@/types'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
 import {
-  evaluateNumericSeverity,
+  evaluateFieldSeverity,
+  evaluateOptionSeverity,
+  optionSeverityMessage,
+  optionSeveritySummaryFa,
   severityMessage,
   validationSummaryFa,
   filterNumericInput,
@@ -43,6 +46,29 @@ interface DynamicFormFieldProps {
   rangeValidation?: FieldValidation
 }
 
+/**
+ * The outline colour for a control whose chosen value carries a severity.
+ *
+ * MUI's `error` prop is for a validation failure — a field that cannot be submitted — and a
+ * dangerous reading is not that: it is perfectly valid data about equipment in a bad state. So
+ * the outline is coloured directly, leaving `error` to mean what it means everywhere else.
+ */
+/** Which MUI palette a checkbox uses when its own option carries an alert. */
+function checkboxColor(severity: FieldValidationSeverity): 'error' | 'warning' | 'primary' {
+  if (severity === 'danger') return 'error'
+  if (severity === 'warning') return 'warning'
+  return 'primary'
+}
+
+function choiceOutlineSx(severity: FieldValidationSeverity) {
+  if (severity === 'ok') return undefined
+  const color = severity === 'danger' ? 'error.main' : 'warning.main'
+  return {
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: color, borderWidth: 2 },
+    '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: color }
+  }
+}
+
 function rangeFeedbackColor(severity: FieldValidationSeverity): 'warning.main' | 'error.main' | undefined {
   if (severity === 'warning') return 'warning.main'
   if (severity === 'danger') return 'error.main'
@@ -54,6 +80,8 @@ function resolveRangeValidation(
   rangeValidation?: FieldValidation
 ): FieldValidation | undefined {
   if (rangeValidation) return rangeValidation
+  // A choice field's thresholds live only in `validation`, never in min/max, so when the
+  // caller passed none there is nothing to synthesise and nothing to colour by.
   if (field.type !== 'number' || (field.min == null && field.max == null)) return undefined
   return { min: field.min, max: field.max }
 }
@@ -147,17 +175,24 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
   const label = field.required ? `${field.label} *` : field.label
   const options = normalizeFieldOptions(field.options)
   const effectiveRangeValidation = resolveRangeValidation(field, rangeValidation)
+  // A choice carries severity too, so the watch has to cover it. Leaving the old
+  // `field.type !== 'number'` gate here kept the subscription disabled for a select and the
+  // colour never changed, however the field was configured.
+  const isChoice = field.type === 'select' || field.type === 'multiselect'
   const watchedValue = useWatch({
     control,
     name: field.name,
-    disabled: field.type !== 'number' || !effectiveRangeValidation
+    disabled: (field.type !== 'number' && !isChoice) || !effectiveRangeValidation
   })
-  const rangeSummary = field.type === 'number' ? validationSummaryFa(effectiveRangeValidation) : null
-  const rangeSeverity =
-    field.type === 'number' && effectiveRangeValidation
-      ? evaluateNumericSeverity(watchedValue, effectiveRangeValidation)
-      : 'ok'
-  const rangeFeedback = severityMessage(rangeSeverity)
+  const rangeSummary = field.type === 'number'
+    ? validationSummaryFa(effectiveRangeValidation)
+    : isChoice ? optionSeveritySummaryFa(effectiveRangeValidation) : null
+  const rangeSeverity = effectiveRangeValidation
+    ? evaluateFieldSeverity(field.type, watchedValue, effectiveRangeValidation)
+    : 'ok'
+  const rangeFeedback = isChoice
+    ? optionSeverityMessage(rangeSeverity)
+    : severityMessage(rangeSeverity)
 
   const buildHelperParts = (): { text: string; color?: 'warning.main' | 'error.main' } | null => {
     if (error) return { text: error }
@@ -254,6 +289,7 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                 labelId={`${field.name}-label`}
                 label={label}
                 displayEmpty={!field.required}
+                sx={choiceOutlineSx(rangeSeverity)}
               >
                 {!field.required && (
                   <MenuItem key={`${field.name}-empty`} value="">
@@ -266,8 +302,10 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                   </MenuItem>
                 ))}
               </Select>
-              {(error ?? field.helperText) && (
-                <FormHelperText>{error ?? field.helperText}</FormHelperText>
+              {helper && (
+                <FormHelperText sx={helper.color ? { color: helper.color, fontWeight: 600 } : undefined}>
+                  {helper.text}
+                </FormHelperText>
               )}
             </FormControl>
           )}
@@ -307,6 +345,13 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                     control={
                       <Checkbox
                         checked={Array.isArray(f.value) && f.value.includes(opt.value)}
+                        // Coloured per OPTION, not per field: a multiselect shows several
+                        // choices at once, and "one of these five is the dangerous one" is the
+                        // thing an operator needs to see. The helper below still reports the
+                        // worst of what is actually ticked.
+                        color={checkboxColor(
+                          evaluateOptionSeverity(opt.value, effectiveRangeValidation)
+                        )}
                         onChange={e => {
                           const current: string[] = Array.isArray(f.value) ? f.value : []
                           f.onChange(
@@ -321,8 +366,10 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                   />
                 ))}
               </FormGroup>
-              {(error ?? field.helperText) && (
-                <FormHelperText>{error ?? field.helperText}</FormHelperText>
+              {helper && (
+                <FormHelperText sx={helper.color ? { color: helper.color, fontWeight: 600 } : undefined}>
+                  {helper.text}
+                </FormHelperText>
               )}
             </FormControl>
           )}

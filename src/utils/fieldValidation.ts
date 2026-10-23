@@ -12,6 +12,18 @@ export const FIELD_VALIDATION_MESSAGES = {
   danger: 'خارج از بازه خطر است.'
 } as const
 
+/**
+ * The same two verdicts for a CHOICE rather than a range.
+ *
+ * Separate wording because the polarity is the opposite: a number is out of its band, an option
+ * *is* the alert. Telling an operator a chosen option is "outside the warning range" would be
+ * describing a rule that does not exist.
+ */
+export const FIELD_OPTION_MESSAGES = {
+  warning: 'این گزینه هشدار محسوب می‌شود.',
+  danger: 'این گزینه خطر محسوب می‌شود.'
+} as const
+
 function toNumber(value: unknown): number | null {
   if (value === undefined || value === null) return null
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
@@ -104,6 +116,95 @@ export function evaluateNumericSeverity(
   if (!isEmptyRange(warning) && !contains(warning, numeric)) return 'warning'
 
   return 'ok'
+}
+
+/**
+ * The severity of a chosen option, or of the worst of several.
+ *
+ * Mirrors the backend's `FieldValidationSupport.evaluateOptionValue`, including the two things
+ * that are easy to get wrong and invisible when wrong:
+ *
+ *  - a `multiselect` reading is an array and takes the **worst** of what was chosen, so one
+ *    dangerous tick among five safe ones is a danger;
+ *  - the comparison is trimmed but **case-sensitive**, because the server's submit-time
+ *    allow-list is. A looser rule here tells an operator a reading is fine that the server
+ *    then stores as a danger.
+ *
+ * A field that names no severities is never an alert, so adding a vocabulary cannot raise one
+ * on its own.
+ */
+export function evaluateOptionSeverity(
+  value: unknown,
+  validation?: FieldValidation | Record<string, unknown>
+): FieldValidationSeverity {
+  if (value == null || !validation) return 'ok'
+  const dangers = optionList(validation, 'dangerOptions')
+  const warnings = optionList(validation, 'warningOptions')
+  if (dangers.length === 0 && warnings.length === 0) return 'ok'
+
+  const chosen = (Array.isArray(value) ? value : [value])
+    .filter(v => v != null)
+    .map(v => String(v).trim())
+    .filter(Boolean)
+
+  let warned = false
+  for (const option of chosen) {
+    if (dangers.includes(option)) return 'danger'
+    if (warnings.includes(option)) warned = true
+  }
+  return warned ? 'warning' : 'ok'
+}
+
+/** One stored severity list, tolerating the shapes JSON can hand back. */
+export function optionList(
+  validation: FieldValidation | Record<string, unknown> | undefined,
+  key: 'warningOptions' | 'dangerOptions' | 'options'
+): string[] {
+  const raw = (validation as Record<string, unknown> | undefined)?.[key]
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter(v => v != null)
+    .map(v => String(v).trim())
+    .filter(Boolean)
+}
+
+/**
+ * The severity of one reading, chosen by the field's type — the single entry point.
+ *
+ * `evaluateNumericSeverity` answers `ok` for anything that is not a number, so a select field
+ * could never be anything but fine however it was configured. The backend dispatches the same
+ * way (`FieldValidationSupport.evaluateValue`); a type with no notion of severity is `ok`,
+ * because a photo and a note are not in or out of range.
+ */
+export function evaluateFieldSeverity(
+  dataType: string | undefined,
+  value: unknown,
+  validation?: FieldValidation | Record<string, unknown>
+): FieldValidationSeverity {
+  if (dataType === 'select' || dataType === 'multiselect') {
+    return evaluateOptionSeverity(value, validation)
+  }
+  if (dataType === 'number') return evaluateNumericSeverity(value, validation)
+  return 'ok'
+}
+
+/** The alerting options as a reader should see them, or null when there are none. */
+export function optionSeveritySummaryFa(
+  validation?: FieldValidation | Record<string, unknown>
+): string | null {
+  const parts: string[] = []
+  const warnings = optionList(validation, 'warningOptions')
+  const dangers = optionList(validation, 'dangerOptions')
+  if (warnings.length > 0) parts.push(`هشدار: ${warnings.join('، ')}`)
+  if (dangers.length > 0) parts.push(`خطر: ${dangers.join('، ')}`)
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** The message for a chosen option, which is worded differently from a range breach. */
+export function optionSeverityMessage(severity: FieldValidationSeverity): string | null {
+  if (severity === 'warning') return FIELD_OPTION_MESSAGES.warning
+  if (severity === 'danger') return FIELD_OPTION_MESSAGES.danger
+  return null
 }
 
 export function severityMessage(severity: FieldValidationSeverity): string | null {

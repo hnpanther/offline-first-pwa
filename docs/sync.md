@@ -77,6 +77,39 @@ It is patched only when the payload actually carries entries, on the same rule a
 snapshot is written once at generation and never cleared, so keeping what the device already
 holds is never the stale answer.
 
+### A choice field's threshold is its options, not a range
+
+A `select` or `multiselect` definition may carry `warningOptions` and `dangerOptions` beside
+`options` — the choices that *are* the alert:
+
+```json
+{ "options": ["OF", "ON", "Idle"], "warningOptions": ["Idle"], "dangerOptions": ["OF"] }
+```
+
+The polarity is the opposite of `warning`/`danger`: a number must stay *inside* its band, an
+option raises the alert by being chosen. Resolve severity through
+`evaluateFieldSeverity(dataType, value, validation)` and nowhere else — it dispatches on the
+type, and the numeric-only function it replaced answers `ok` for every select.
+
+Three things must match the backend exactly. The server recomputes `max_severity` from its own
+copy on every write, so a looser rule here does not corrupt data — it tells an operator a
+reading is fine that comes back as a danger, which costs a second trip to the equipment:
+
+| Rule | Why |
+|---|---|
+| A `multiselect` takes the **worst** chosen option | one dangerous tick among five safe ones is a danger |
+| Matching is trimmed but **case-sensitive** | the server's submit-time allow-list is, so a looser match would accept a reading the server then rejects |
+| No severities means never an alert | adding a vocabulary must not raise one on its own |
+
+Both keys also arrive in a **per-asset** override, under `RANGES_ONLY` as well as `FULL`: which
+choices mean trouble on one machine is a threshold, not structure, so the class keeps owning the
+vocabulary. An explicit `null` or empty array means "this machine marks nothing", which is a
+decision and not the same as inheriting.
+
+The fill form colours a `select` by outlining the control and a `multiselect` by colouring
+**each checkbox according to its own option**, which is the more useful answer when several
+choices are visible at once.
+
 ### What `FULL` changes beyond colour
 
 `RANGES_ONLY` really is display only. `FULL` is not: it adds and removes fields, so it changes
