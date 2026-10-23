@@ -80,8 +80,9 @@ function resolveRangeValidation(
   rangeValidation?: FieldValidation
 ): FieldValidation | undefined {
   if (rangeValidation) return rangeValidation
-  // A choice field's thresholds live only in `validation`, never in min/max, so when the
-  // caller passed none there is nothing to synthesise and nothing to colour by.
+  // A choice field keeps its thresholds only in `validation` — there is no min/max to
+  // synthesise one from — so if the caller passed none, it passed none for a reason and
+  // nothing is coloured. `supportsSeverity` is what decides that, on the caller's side.
   if (field.type !== 'number' || (field.min == null && field.max == null)) return undefined
   return { min: field.min, max: field.max }
 }

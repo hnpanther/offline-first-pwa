@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   evaluateFieldSeverity,
   evaluateOptionSeverity,
+  isChoiceType,
   optionSeverityMessage,
-  optionSeveritySummaryFa
+  optionSeveritySummaryFa,
+  supportsSeverity
 } from '@/utils/fieldValidation'
 import type { FieldValidation } from '@/types/sync'
 
@@ -97,5 +99,48 @@ describe('option severity', () => {
       dangerOptions: ['OF']
     } as unknown as FieldValidation
     expect(evaluateOptionSeverity('OF', asStored)).toBe('danger')
+  })
+})
+
+/**
+ * The gate that decides whether a field is given its thresholds at all.
+ *
+ * This is the bug that made option severity look broken in the app: the form passed
+ * `validation` down only when `dataType === 'number'`, so a select received none and nothing
+ * coloured while the operator was choosing. The severity appeared only after saving and
+ * reopening — a different path (the read-only review) that reads `def.validation` directly.
+ *
+ * Two type lists, one of them narrower. The fix is one exported predicate, and this is the test
+ * that fails if a third list ever appears.
+ */
+describe('supportsSeverity', () => {
+  it('covers exactly the types that evaluateFieldSeverity can judge', () => {
+    const everyType = [
+      'number', 'text', 'select', 'multiselect', 'checkbox',
+      'textarea', 'image', 'audio', 'video', 'location'
+    ]
+    // A validation object carrying BOTH kinds of threshold, so the only thing that can make a
+    // type answer 'ok' is the type itself.
+    const bothKinds = {
+      warning: { min: 0, max: 1 },
+      danger: { min: 0, max: 1 },
+      options: ['OF'],
+      dangerOptions: ['OF']
+    }
+
+    for (const type of everyType) {
+      const judged = evaluateFieldSeverity(type, type === 'number' ? 99 : 'OF', bothKinds) !== 'ok'
+      expect(judged).toBe(supportsSeverity(type))
+    }
+  })
+
+  it('names the two choice types and nothing else', () => {
+    expect(isChoiceType('select')).toBe(true)
+    expect(isChoiceType('multiselect')).toBe(true)
+    expect(isChoiceType('number')).toBe(false)
+    expect(isChoiceType(undefined)).toBe(false)
+    expect(supportsSeverity('number')).toBe(true)
+    expect(supportsSeverity('text')).toBe(false)
+    expect(supportsSeverity(undefined)).toBe(false)
   })
 })

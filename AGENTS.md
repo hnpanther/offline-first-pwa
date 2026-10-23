@@ -645,6 +645,17 @@ Three things about it are worth not rediscovering:
   back from the server as a danger: a **multiselect takes the worst** chosen option, matching is
   **trimmed but case-sensitive** (the server's submit-time allow-list is), and a field naming no
   severities is never an alert. `utils/fieldOptionSeverity.test.ts` pins all three.
+- **Pass a field's `validation` down for every type that HAS a threshold, via
+  `supportsSeverity(dataType)`.** `DynamicClassForm` gated this on `dataType === 'number'`, so a
+  select received no validation at all and nothing coloured while the operator was choosing —
+  the severity showed up only after saving and reopening, because the read-only review is a
+  separate branch reading `def.validation` directly. Two type lists with the narrow one guarding
+  the input path. One exported predicate now serves both the component that decides what to pass
+  and `evaluateFieldSeverity` which decides what to do with it, and
+  `fieldOptionSeverity.test.ts` asserts they agree across every data type.
+- **The MESSAGE is type-dependent as well as the verdict.** `severityMessage` says «خارج از بازه
+  …» — a range a choice field does not have. Use `optionSeverityMessage` for a select or
+  multiselect; the backend had the identical bug on its detail page (backend AGENTS.md #156).
 - **`required`, `sortOrder` and `options` are part of a `FULL` override.** The panel's form does
   not post them today, but the server's sanitiser allows all three and `AssetFieldResolver`
   reads all three — so a value arriving by any other route would change the form the web

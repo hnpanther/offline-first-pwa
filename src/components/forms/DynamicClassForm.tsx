@@ -32,6 +32,7 @@ import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
 import {
   evaluateFieldSeverity,
   optionSeverityMessage,
+  supportsSeverity,
   severityMessage,
   type FieldValidationSeverity
 } from '@/utils/fieldValidation'
@@ -378,7 +379,10 @@ export function DynamicClassForm({
             control={control}
             error={error}
             rules={rules}
-            rangeValidation={def.dataType === 'number' ? def.validation : undefined}
+            // Every type that HAS a threshold, not just numbers. Gating this on 'number'
+            // meant a select was handed no validation at all, so nothing coloured until
+            // the entry was saved and reopened through the read-only path.
+            rangeValidation={supportsSeverity(def.dataType) ? def.validation : undefined}
           />
         )
       })}

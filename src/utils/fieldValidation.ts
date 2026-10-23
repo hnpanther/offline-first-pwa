@@ -181,11 +181,29 @@ export function evaluateFieldSeverity(
   value: unknown,
   validation?: FieldValidation | Record<string, unknown>
 ): FieldValidationSeverity {
-  if (dataType === 'select' || dataType === 'multiselect') {
-    return evaluateOptionSeverity(value, validation)
-  }
+  if (isChoiceType(dataType)) return evaluateOptionSeverity(value, validation)
   if (dataType === 'number') return evaluateNumericSeverity(value, validation)
   return 'ok'
+}
+
+/** A field that offers a vocabulary, and therefore has option severities rather than a range. */
+export function isChoiceType(dataType: string | undefined): boolean {
+  return dataType === 'select' || dataType === 'multiselect'
+}
+
+/**
+ * Whether this type has any notion of being in or out of range.
+ *
+ * **Exported so the component that decides whether to PASS a field's validation down and the
+ * function that decides what to DO with it cannot disagree.** They did: the form only handed
+ * `validation` to a field whose type was `number`, so a select never received its own
+ * thresholds and nothing coloured while the operator was choosing — the severity only appeared
+ * once the entry had been saved and reopened, which is a different code path (the read-only
+ * review) that reads `def.validation` directly. Two type lists, one of them narrower, and the
+ * gap between them was the bug.
+ */
+export function supportsSeverity(dataType: string | undefined): boolean {
+  return dataType === 'number' || isChoiceType(dataType)
 }
 
 /** The alerting options as a reader should see them, or null when there are none. */
