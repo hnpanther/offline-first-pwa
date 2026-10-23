@@ -5,6 +5,7 @@ import {
   FormControl,
   InputLabel,
   FormHelperText,
+  OutlinedInput,
   Checkbox,
   FormControlLabel,
   FormGroup,
@@ -284,12 +285,25 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
           rules={effectiveRules}
           render={({ field: f }) => (
             <FormControl fullWidth error={!!error} sx={{ mt: 0.5 }}>
-              <InputLabel id={`${field.name}-label`}>{label}</InputLabel>
+              {/*
+                `shrink` and `notched` are forced, and must stay forced.
+
+                MUI decides whether a label floats from whether it thinks the input is filled.
+                With `displayEmpty` the placeholder «— انتخاب کنید —» is painted INSIDE the
+                control while the value is still empty, so MUI left the label sitting on the
+                same line and the two overlapped — unreadably, for a long question like «صدای
+                غیرعادی دارد؟» — until the operator picked something and the label jumped up.
+
+                Pinning both gives the control ONE rendering state instead of two, so the
+                label is never a function of the value. `notched` goes with `shrink`: without
+                it the floated label would sit across an uncut outline.
+              */}
+              <InputLabel id={`${field.name}-label`} shrink>{label}</InputLabel>
               <Select
                 {...f}
                 labelId={`${field.name}-label`}
-                label={label}
                 displayEmpty={!field.required}
+                input={<OutlinedInput label={label} notched />}
                 sx={choiceOutlineSx(rangeSeverity)}
               >
                 {!field.required && (
