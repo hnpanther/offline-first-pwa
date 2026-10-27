@@ -1,5 +1,11 @@
 import type { LogSheet } from '@/types'
-import type { AssetFieldOverride, AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
+import type {
+  AssetFieldOverride,
+  AssetFieldOverrideSnapshot,
+  FieldDefinition,
+  FieldValidation,
+  FieldValidationRange
+} from '@/types/sync'
 import { toIdString } from '@/utils/ids'
 
 /**
@@ -93,31 +99,45 @@ function applyAssetOverride(
 }
 
 /** A copy with the override's bands substituted. Never mutates: definitions are shared. */
-function merge(field: FieldDefinition, override: AssetFieldOverride, full: boolean): FieldDefinition {
-  const validation = { ...(field.validation ?? {}) }
-  // `undefined` means "the override says nothing about this band" and the class's stands.
-  // `null` means "this machine has no such band", which is a decision, not an absence.
-  if ('warning' in override) {
-    if (override.warning == null) delete validation.warning
-    else validation.warning = override.warning
-  }
-  if ('danger' in override) {
-    if (override.danger == null) delete validation.danger
-    else validation.danger = override.danger
-  }
-  if (full && 'options' in override) {
-    if (override.options == null) delete validation.options
-    else validation.options = override.options
+/**
+ * The override's thresholds laid over whatever validation is already there.
+ *
+ * <p>One place, used by both the merge path (a class field this asset re-bands) and the add
+ * path (a field only this asset has). Keeping them apart is how `warningOptions` reached one
+ * and not the other.
+ *
+ * `undefined` means "the override says nothing about this" and what is already there stands.
+ * `null` means "this machine has no such threshold", which is a decision, not an absence.
+ */
+function overrideValidation(
+  override: AssetFieldOverride,
+  base: FieldValidation
+): FieldValidation {
+  const validation: FieldValidation = { ...base }
+  for (const key of ['warning', 'danger'] as const) {
+    if (!(key in override)) continue
+    if (override[key] == null) delete validation[key]
+    else validation[key] = override[key] as FieldValidationRange
   }
   // Which options are the alert travels with the bands, under the same rule and in BOTH modes:
   // it is a threshold, not structure, so RANGES_ONLY may re-mark it while the class keeps
-  // owning the vocabulary itself. `null` is "this machine has no such list" — a decision — and
-  // an empty array says the same thing explicitly; neither means "inherit".
+  // owning the vocabulary itself. An empty array says "no such list" explicitly; neither it
+  // nor `null` means "inherit".
   for (const key of ['warningOptions', 'dangerOptions'] as const) {
     if (!(key in override)) continue
     const value = override[key]
     if (value == null) delete validation[key]
     else validation[key] = value.map(v => String(v))
+  }
+  return validation
+}
+
+function merge(field: FieldDefinition, override: AssetFieldOverride, full: boolean): FieldDefinition {
+  const validation = overrideValidation(override, { ...(field.validation ?? {}) })
+  // The vocabulary itself is structure, so only FULL may replace it.
+  if (full && 'options' in override) {
+    if (override.options == null) delete validation.options
+    else validation.options = override.options
   }
   const merged: FieldDefinition = { ...field, validation }
   if (full) {
@@ -154,11 +174,13 @@ function added(key: string, override: AssetFieldOverride, classId: string): Fiel
     dataType: (override.dataType ?? 'number') as FieldDefinition['dataType'],
     unit: override.unit,
     required: override.required === true,
-    validation: {
-      ...(override.warning != null ? { warning: override.warning } : {}),
-      ...(override.danger != null ? { danger: override.danger } : {}),
-      ...(override.options != null ? { options: override.options } : {})
-    },
+    // Built by the SAME helper `merge` uses, so a threshold key added to one of them cannot
+    // go missing from the other. It already did once: `warningOptions`/`dangerOptions` were
+    // added to `merge` and not here, so a chosen option coloured on a class field and stayed
+    // grey on a field the asset had added — the server judging it correctly the whole time.
+    validation: overrideValidation(
+      override,
+      override.options != null ? { options: override.options } : {}),
     // Last by default, which is where the server also puts it: a definition with no order of
     // its own sorts as Integer.MAX_VALUE there.
     order: sortOrder(override) ?? Number.MAX_SAFE_INTEGER

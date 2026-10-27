@@ -379,3 +379,97 @@ describe('sheetFieldDefinitions — per-asset overrides', () => {
       .toEqual({ min: 5, max: 9 })
   })
 })
+
+// ---------------------------------------------------------------------------------------
+// A threshold must reach a field the asset ADDED exactly as it reaches one of the class's.
+// It did not: `warningOptions`/`dangerOptions` were handled on the merge path only, so a
+// chosen option coloured on a class field and stayed grey on an added one.
+// ---------------------------------------------------------------------------------------
+
+describe('sheetFieldDefinitions — a threshold reaches both kinds of field', () => {
+  const ampere = field('ampere', '7', 0, {
+    dataType: 'number',
+    validation: { warning: { min: 0, max: 100 } }
+  })
+  const status = field('status', '7', 1, {
+    dataType: 'select',
+    validation: { options: [{ value: 'Running', label: 'Running' }] }
+  })
+
+  function sheetWith(overrides: Record<string, unknown>): LogSheet {
+    return {
+      fieldDefinitions: [ampere, status],
+      fieldOverridesSnapshot: overrides
+    } as unknown as LogSheet
+  }
+
+  it('marks an option as a danger on a CLASS field', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { status: { dangerOptions: ['EMSHD'] } } }
+    })
+
+    const resolved = sheetFieldDefinitions(sheet, '7', [], '11').find(f => f.key === 'status')
+
+    expect(resolved?.validation?.dangerOptions).toEqual(['EMSHD'])
+  })
+
+  it('marks an option as a danger on a field the ASSET ADDED', () => {
+    const sheet = sheetWith({
+      '11': {
+        source: 'FULL',
+        fields: {
+          mode: {
+            dataType: 'select',
+            label: 'حالت',
+            options: [{ value: 'Trip', label: 'Trip' }],
+            dangerOptions: ['Trip'],
+            warningOptions: ['Idle']
+          }
+        }
+      }
+    })
+
+    const resolved = sheetFieldDefinitions(sheet, '7', [], '11').find(f => f.key === 'mode')
+
+    expect(resolved).toBeDefined()
+    expect(resolved?.validation?.dangerOptions).toEqual(['Trip'])
+    expect(resolved?.validation?.warningOptions).toEqual(['Idle'])
+    expect(resolved?.validation?.options).toEqual([{ value: 'Trip', label: 'Trip' }])
+  })
+
+  it('carries a numeric band onto a field the ASSET ADDED', () => {
+    const sheet = sheetWith({
+      '11': {
+        source: 'FULL',
+        fields: {
+          vibration: { dataType: 'number', warning: { min: 0, max: 7 }, danger: { max: 9 } }
+        }
+      }
+    })
+
+    const resolved = sheetFieldDefinitions(sheet, '7', [], '11').find(f => f.key === 'vibration')
+
+    expect(resolved?.validation?.warning).toEqual({ min: 0, max: 7 })
+    expect(resolved?.validation?.danger).toEqual({ max: 9 })
+  })
+
+  it('an empty option list is "no such list", not "inherit"', () => {
+    const sheet = sheetWith({
+      '11': { source: 'RANGES_ONLY', fields: { status: { dangerOptions: [] } } }
+    })
+
+    const resolved = sheetFieldDefinitions(sheet, '7', [], '11').find(f => f.key === 'status')
+
+    expect(resolved?.validation?.dangerOptions).toEqual([])
+  })
+
+  it('coerces option values to strings, as the merge path already did', () => {
+    const sheet = sheetWith({
+      '11': { source: 'FULL', fields: { code: { dataType: 'select', dangerOptions: [7, 8] } } }
+    })
+
+    const resolved = sheetFieldDefinitions(sheet, '7', [], '11').find(f => f.key === 'code')
+
+    expect(resolved?.validation?.dangerOptions).toEqual(['7', '8'])
+  })
+})
