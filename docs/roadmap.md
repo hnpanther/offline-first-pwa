@@ -462,3 +462,92 @@ is discovered when an operator mentions it.
 ## What would make it urgent
 
 A fleet large enough that "an operator will mention it" stops being a monitoring strategy.
+
+---
+
+# 10. Changing the server address without rebuilding
+
+*Raised as: "every time the domain or IP changes we edit `.env.mobile` and rebuild — can we put
+something in `dist/` and change it on nginx instead?"*
+
+The request is reasonable and the facts below are worth having before anybody builds it, because
+**three of them say the file would not do what it looks like it does.**
+
+## What is true today
+
+| Fact | Where |
+|---|---|
+| `VITE_SERVER_URL` is read once, at build, into `DEFAULT_SETTINGS.serverUrl` | `services/storage/db.ts` |
+| `getSettings()` returns `{ ...DEFAULT_SETTINGS, ...stored }` — **the stored row is spread second and wins** | `services/storage/index.ts` |
+| So the build value applies only to a device with no settings row: a genuinely fresh install. Rebuilding moves no tablet already in the field | [apk.md § The server address changed](apk.md) |
+| `getBaseUrl()` returns `''` — a **relative** `/api` — whenever the stored origin equals `window.location.origin` | `services/api/client.ts` |
+| In the APK the document origin is `https://localhost` (Capacitor's `androidScheme` + `hostname` defaults, no `server.url` set), so it can **never** match and the APK always needs an absolute address | `capacitor.config.ts`, Capacitor `CapConfig` |
+| The supported way to repoint one device is the Settings page, through `applyServerUrlChange` — which tears the session down *before* writing the new address, so no token is ever sent to the new host | `services/settings/applyServerUrlChange.ts` |
+| Workbox's `globPatterns` covers `js,css,html,ico,png,svg,woff,woff2,webmanifest` — **`json` is not in it** | `vite.config.ts` |
+| The served CSP sets `connect-src 'self'` | `docker/nginx/snippets/security-headers.conf` |
+| `index.html` and `sw.js` are served `no-cache`; `/assets/` is `immutable` | `docker/nginx/templates/default.conf.template` |
+
+## The three things that decide this
+
+**1. For the browser there is no address to change.** When the stored origin matches the page's
+own, the app already calls `/api` relative to wherever it was served — the address is whatever
+host answered. And `connect-src 'self'` means the browser **cannot** be pointed at a different
+origin even if a config file said so; the request is refused before it leaves. A runtime config
+for the browser delivery would therefore either do nothing, or require widening the CSP that §1
+exists to add.
+
+**2. For the APK — the case that actually needs it — the file cannot be fetched without already
+knowing an address.** Its assets are bundled, so `dist/config.json` inside the APK is the
+build-time copy; reaching nginx's copy needs the address the file is supposed to supply.
+
+There is one shape that does work, and it is worth separating from the request: the APK keeps its
+bundled address for bootstrap, and treats a config fetched **from that address** as a *redirect*
+to a new one. That is a migration path — "this server has moved" — not initial configuration, and
+it only helps while the old address still answers.
+
+**3. The stored row still wins.** A runtime config changes where the *default* comes from, not
+which value is used. To actually move a configured tablet the file would have to take precedence
+over the stored settings, which overrides the per-device choice an admin made deliberately in
+Settings. That is a real conflict to resolve, not a detail.
+
+## Two facts that would make it cheap, if it is built anyway
+
+- `json` is outside `globPatterns`, so a `dist/config.json` is **not precached** — an edit on
+  nginx takes effect without waiting for a service-worker update. The same fact means it is **not
+  available offline**, so the app must fall back to the last known value and must never block
+  startup on it. For an app whose first requirement is opening with no network, that fallback is
+  the design, not an edge case.
+- It would need its own `no-cache` location in the nginx template, beside `index.html` and
+  `sw.js`, or the immutable rules elsewhere will outlive the edit.
+
+## The security cost, which belongs with §1
+
+§1 records that a compromised nginx cannot change what the **APK** runs, because the APK fetches
+none of its assets — the one asymmetry that delivery has. A config file the APK fetches *and
+obeys* hands that back: an attacker holding nginx could repoint every tablet at a server of their
+own, and the session token and every reading would follow. If this is built for the APK, the
+payload has to be signed and the signature checked against a key shipped in the APK — which is
+most of the work, and is the part that would get dropped under time pressure.
+
+## The options, cheapest first
+
+1. **Use an internal DNS name instead of an IP** — `https://mfdcs.plant.local`. This removes the
+   problem rather than solving it: the IP moves, one DNS record changes, and **the certificate
+   does not need re-issuing either**, because it is issued for the name. Today the cert is issued
+   for the IP (`setup-mkcert.ps1 -Ip …`), so an address change means a new certificate *and* a new
+   build *and* a visit to every tablet. See [deployment.md § Internal DNS](deployment.md).
+2. **Make the browser delivery relative by default** — in a browser, always resolve `/api`
+   against the serving origin rather than a stored absolute URL. Correct by construction for
+   production and for `preview:mobile`, both of which proxy `/api`. The exception to handle is
+   plain `npm run dev`, which does **not** proxy (`vite.config.ts` adds the proxy only in mobile
+   mode) and so still needs an absolute address.
+3. **A first-run setup screen in the APK** — the address entered once per install. Fits the
+   uninstall-and-reinstall update procedure (§[apk.md](apk.md) §10) and needs no rebuild ever.
+4. **`dist/config.json` as a signed redirect for the APK only**, with the browser left on
+   relative. The narrowest version of the original request, and the only one that both works and
+   does not undo §1.
+
+## What would make it urgent
+
+The address changing often enough that visiting each tablet's Settings page is the bottleneck —
+or a move that has to happen while tablets are out in the plant and cannot be visited at all.
