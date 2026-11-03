@@ -50,6 +50,7 @@ import {
   getNfcFaultReportsForSheet
 } from '@/services/storage/nfcFaultReports'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
+import { SheetQuestionsCard } from '@/components/logsheet/SheetQuestionsCard'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 import {
@@ -873,6 +874,36 @@ export function LogSheetFillPage() {
     }
   }
 
+  /**
+   * Saves the round's own answers.
+   *
+   * Mirrors the per-asset save beside it, including the two writes that are not about the
+   * values: `sheetFormLocallyEditedAt` is the marker that means "this device answered these"
+   * — no question asked of the data can tell that from an answer the device was *sent*, which
+   * is the whole lesson of `mapServerEntryToLocal` — and `progressSyncStatus` queues a report
+   * so a supervisor sees the answer without waiting for the round to end.
+   */
+  const handleSheetQuestionsSave = async (values: Record<string, unknown>) => {
+    if (!logSheet || !localId) return
+    setSaveError(null)
+    try {
+      await updateLogSheet(localId, {
+        sheetFormData: values,
+        sheetFormLocallyEditedAt: Date.now(),
+        ...(sessionUserId ? { localOwnerUserId: sessionUserId } : {}),
+        progressSyncStatus: 'pending'
+      })
+      const refreshed = await getLogSheet(localId)
+      if (refreshed) {
+        const { entries: enriched } = await enrichEntriesWithNfc(refreshed.entries ?? [])
+        setLogSheet({ ...refreshed, entries: enriched })
+      }
+      setSavedMessage('پاسخ پرسش‌ها ذخیره شد')
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'خطا در ذخیره')
+    }
+  }
+
   // -------------------------------------------------------------------------
   // NFC fault reports
   // -------------------------------------------------------------------------
@@ -1147,6 +1178,11 @@ export function LogSheetFillPage() {
     !isSuperseded &&
     (!isRevoked || backInMyInbox)
   const entries = logSheet.entries ?? []
+  // The round's own questions — asked once per sheet rather than once per asset. A round can
+  // consist of nothing else, which is why every `entries.length` below reads this too.
+  const sheetQuestions = logSheet.sheetFieldDefinitions ?? []
+  const sheetAnswers = logSheet.sheetFormData ?? {}
+  const hasAnythingToAnswer = entries.length > 0 || sheetQuestions.length > 0
   const totalCount = entries.length
   const filledCount = entries.filter(e => getEntryCompletion(e).isComplete).length
 
@@ -1313,7 +1349,7 @@ export function LogSheetFillPage() {
           "progress" line would be noise. Read from `progressSyncStatus`, never `syncStatus` —
           the two are separate queues, and conflating them is what would let a refused progress
           report look like undelivered work. */}
-      {canEdit && entries.length > 0 && logSheet.status === 'draft' && (
+      {canEdit && hasAnythingToAnswer && logSheet.status === 'draft' && (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
           {logSheet.progressSyncedAt
             ? `${t.logSheet.progressSyncedAt}: ${formatDate(logSheet.progressSyncedAt)}`
@@ -1324,7 +1360,10 @@ export function LogSheetFillPage() {
       )}
 
       {/* Submit — top */}
-      {canEdit && entries.length > 0 && (
+      {/* `hasAnythingToAnswer`, not `entries.length`: a round made only of questions is a
+          round, and gating the button on assets alone left it unsubmittable with no
+          explanation on the screen. */}
+      {canEdit && hasAnythingToAnswer && (
         <Box sx={{ mb: 2 }}>
           <Button
             type="button"
@@ -1473,12 +1512,27 @@ export function LogSheetFillPage() {
         </Alert>
       )}
 
+      {/* The round's own questions, before the asset list: a question about the whole round
+          is not a property of any row in it. */}
+      {sheetQuestions.length > 0 && (
+        <SheetQuestionsCard
+          questions={sheetQuestions}
+          values={sheetAnswers}
+          readOnly={!canEdit}
+          savedAt={logSheet.sheetFormLocallyEditedAt}
+          onSave={handleSheetQuestionsSave}
+        />
+      )}
+
       {/* Asset status list */}
-      {entries.length === 0 ? (
+      {/* An empty list only means "could not load" when the round is SUPPOSED to have assets.
+          A round made of questions alone has none by design, and telling its operator to go
+          and find signal would send them away from work they can finish right now. */}
+      {entries.length === 0 && sheetQuestions.length === 0 ? (
         <Alert severity="warning">
           هیچ Asset ای برای این کار یافت نشد. برای دریافت لیست تجهیزات باید آنلاین باشید یا با سرپرست تماس بگیرید.
         </Alert>
-      ) : (
+      ) : entries.length === 0 ? null : (
       <Stack spacing={1}>
         {entries.map(entry => {
           const assetClass = getAssetClass(entry.classId)

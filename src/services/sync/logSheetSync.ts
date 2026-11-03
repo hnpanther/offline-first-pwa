@@ -112,6 +112,30 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const fieldOverridesPatch = bundleFieldOverrides && Object.keys(bundleFieldOverrides).length > 0
     ? { fieldOverridesSnapshot: bundleFieldOverrides }
     : {}
+  // The round's own questions travel the same way and are frozen the same way: an empty or
+  // absent list means "this payload says nothing about them", not "this round asks none".
+  const bundleSheetFields = normalizeFieldDefinitions(
+    serverSheet.sheetFieldDefinitionsSnapshot ?? []
+  )
+  const sheetFieldsPatch = bundleSheetFields.length > 0
+    ? { sheetFieldDefinitions: bundleSheetFields }
+    : {}
+  // The ANSWERS to them need the opposite treatment: they are values, not schema, so the device
+  // may legitimately hold a newer one than the server. Same single condition the entries use —
+  // `locallyEditedAt` recorded by the save itself — for the same reason: no question asked of
+  // the data can tell a value this device entered from one it was sent, because after any sync
+  // they are identical. See `mapServerEntryToLocal` for the two predicates that failed here.
+  const sheetFormLocalWins =
+    preserveLocal && localEditsPending && existing?.sheetFormLocallyEditedAt != null
+  const sheetFormPatch = sheetFormLocalWins
+    ? {}
+    : {
+        sheetFormData: serverSheet.sheetFormData ?? undefined,
+        // Dropped with the values it belonged to. A marker left standing after the server
+        // won would hand this device every future merge of these answers — which is the
+        // failure `localEditsPending` exists to stop at entry level.
+        sheetFormLocallyEditedAt: undefined
+      }
 
   if (existing) {
     if (workflow === 'reset-draft') {
@@ -124,6 +148,8 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
           entries,
           ...fieldDefinitionsPatch,
           ...fieldOverridesPatch,
+          ...sheetFieldsPatch,
+          ...sheetFormPatch,
           localOwnerUserId: undefined,
           ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
         })
@@ -145,6 +171,8 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         ...serverSheetMetadataPatch(serverSheet, existing),
         ...fieldDefinitionsPatch,
         ...fieldOverridesPatch,
+        ...sheetFieldsPatch,
+        ...sheetFormPatch,
         status: 'submitted',
         syncStatus: 'synced',
         // The server's own value, not a hard-coded 'SUBMITTED'. This branch fires for any
@@ -179,6 +207,8 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
       entries,
       ...fieldDefinitionsPatch,
       ...fieldOverridesPatch,
+      ...sheetFieldsPatch,
+      ...sheetFormPatch,
       ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
     })
     const updated = await getLogSheetByServerId(serverId)
@@ -208,6 +238,8 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     entries,
     ...fieldDefinitionsPatch,
     ...fieldOverridesPatch,
+    ...sheetFieldsPatch,
+    ...sheetFormPatch,
     createdAt: serverSheet.createdAt ?? now,
     updatedAt: serverSheet.updatedAt ?? now
   })
@@ -467,6 +499,10 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
       ? Number(sheet.operationalUnitId)
       : undefined,
     completedAt,
-    clientActionId
+    clientActionId,
+    // Omitted entirely when the round asks nothing, so a sheet with no round-level form sends
+    // exactly the payload it sent before this feature existed. The server reads an absent key
+    // as "not carried" rather than "cleared".
+    ...(sheet.sheetFormData != null ? { sheetFormData: sheet.sheetFormData } : {})
   }
 }

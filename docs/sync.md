@@ -123,6 +123,49 @@ writes them today — the web panel's form does not post them — but the server
 sanitiser allows them and `AssetFieldResolver` reads them, so a value arriving by any other
 route must not produce one form on the web and another on the tablet.
 
+## The round's own questions
+
+A round can carry questions of its own — «آیا همه لوله‌ها بازدید شد؟», asked once per sheet
+rather than once per asset. They are field definitions with a different owner, so
+`DynamicClassForm` renders them unchanged; what is new is how they travel.
+
+**Downward, nothing changed.** The bundle serialises the whole sheet entity, so
+`sheetFieldDefinitionsSnapshot` and `sheetFormData` have always been in the payload. Declaring
+them on `ServerLogSheet` is what lets `applyLogSheetBundle` copy them onto the stored row, as
+`sheetFieldDefinitions` and `sheetFormData`. Both are **plain, non-indexed properties — no Dexie
+version bump**, the same as `fieldDefinitions` and `fieldOverridesSnapshot` beside them.
+
+**The schema and the answers are merged by opposite rules, and that is the point.** The frozen
+questions follow the definitions: an empty or absent list means "this payload says nothing",
+so a thin refresh never blanks a working form. The *answers* are values the device may hold a
+newer version of, so they follow the entries:
+
+```
+sheetFormLocalWins = preserveLocal && localEditsPending && existing?.sheetFormLocallyEditedAt != null
+```
+
+`sheetFormLocallyEditedAt` is stamped by the save itself and cleared when the server accepts the
+answers. **No question asked of `sheetFormData` can replace it**, for the reason
+`mapServerEntryToLocal` sets out at length: after any sync the local answers *are* the server's
+answers, so both key presence and value presence are permanently true and the server side of the
+merge stops existing. Those two predicates were tried at entry level and each lost real readings.
+
+**Upward it is one additive field**, `sheetFormData`, on the submit payload and on the progress
+push. Omitted entirely when the device has no opinion — an absent key means "not carried", never
+"cleared", which is what lets an older build keep submitting without wiping what the panel
+stored.
+
+**A round can be reported with no asset touched at all.** The operator answers the round-level
+questions first, so `getLogSheetsPendingProgress` and the queue loop both read
+`hasDirtySheetForm` beside `dirtyEntriesForProgress`. Counting entries alone left that answer on
+the device with nothing to say it had never been delivered — and the server, reading the same
+way, replied `NO_CHANGE`. Both sides were fixed together.
+
+**The marker is forgotten only if the answer the server accepted is still the one on the
+device.** An operator who answers again while the request is in flight keeps their marker and
+the next pass delivers it — the same rule, and the same reason, as
+`clearMarkersForAcceptedEntries`.
+
 ## When sync runs
 
 | Trigger | Where |

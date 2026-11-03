@@ -479,6 +479,33 @@ export interface LogSheet {
    */
   fieldOverridesSnapshot?: Record<string, AssetFieldOverrideSnapshot>
   /**
+   * The round's **own** questions, frozen with this sheet — asked once per sheet rather than
+   * once per asset («آیا همه لوله‌ها بازدید شد؟»).
+   *
+   * Field definitions in every respect — same shape, same controls, same validator — with a
+   * different owner, which is why `DynamicClassForm` renders them unchanged. They belong to no
+   * asset class, so they are kept apart from `fieldDefinitions` rather than appended to it:
+   * every per-asset path filters that list by `classId`, and a class-less entry in it would be
+   * silently dropped by some and silently shown by others.
+   *
+   * Absent on a round that asks none, which is most of them. Plain, non-indexed property — no
+   * Dexie version bump, the same as `fieldDefinitions` and `fieldOverridesSnapshot` above.
+   */
+  sheetFieldDefinitions?: FieldDefinition[]
+  /** Answers to those questions, keyed by field key. */
+  sheetFormData?: Record<string, unknown>
+  /**
+   * When the operator last answered them **on this device**.
+   *
+   * The sheet-level twin of `LogSheetEntryData.locallyEditedAt`, and it exists for exactly the
+   * same reason: no question asked of `sheetFormData` can tell a value this device entered from
+   * a value this device was sent, because after any sync the two are identical. Both predicates
+   * that infer it from the data have already been tried at entry level and both lost real
+   * readings — see `mapServerEntryToLocal`. So the opinion is recorded when it is formed, by
+   * the save itself, and cleared when the server accepts it.
+   */
+  sheetFormLocallyEditedAt?: number
+  /**
    * The server's outcome for the last rejected submission (e.g. `VALIDATION_ERROR`).
    *
    * Only a rejection sets this, and only `VALIDATION_ERROR` unlocks the correct-and-resubmit

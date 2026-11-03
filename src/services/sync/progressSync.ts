@@ -104,6 +104,20 @@ export function dirtyEntriesForProgress(sheet: Pick<LogSheet, 'entries'>): LogSh
   return (sheet.entries ?? []).filter(e => e.locallyEditedAt != null)
 }
 
+/**
+ * Whether this device also owes the server the round's own answers.
+ *
+ * Read beside `dirtyEntriesForProgress`, never instead of it: a round can be walked and
+ * reported with **no asset touched at all** — the operator answers «آیا همه لوله‌ها بازدید
+ * شد؟» first — and a predicate that only counted entries would have left that answer on the
+ * device with nothing to say it was never delivered.
+ */
+export function hasDirtySheetForm(
+  sheet: Pick<LogSheet, 'sheetFormLocallyEditedAt'>
+): boolean {
+  return sheet.sheetFormLocallyEditedAt != null
+}
+
 /** Sheets with something to report, for this operator, right now. */
 export async function getLogSheetsPendingProgress(userId?: string | null): Promise<LogSheet[]> {
   const resolved = userId === undefined ? await getSessionUserId() : userId
@@ -112,7 +126,7 @@ export async function getLogSheetsPendingProgress(userId?: string | null): Promi
   return all.filter(
     sheet =>
       isLogSheetProgressOwnedByUser(sheet, resolved) &&
-      dirtyEntriesForProgress(sheet).length > 0
+      (dirtyEntriesForProgress(sheet).length > 0 || hasDirtySheetForm(sheet))
   )
 }
 
@@ -133,7 +147,13 @@ function toProgressItem(sheet: LogSheet, entries: LogSheetEntryData[]): LogSheet
       ...(e.createdAt != null ? { createdAt: e.createdAt } : {}),
       ...(e.updatedAt != null ? { updatedAt: e.updatedAt } : {}),
       ...(e.filledVia != null ? { manualEntry: e.filledVia === 'manual' } : {})
-    }))
+    })),
+    // Whole, not a delta: one small map per sheet. Sent only when this device has an opinion
+    // about it, so a push that carries nothing of its own cannot overwrite what the panel
+    // stored while the operator was offline.
+    ...(sheet.sheetFormLocallyEditedAt != null && sheet.sheetFormData != null
+      ? { sheetFormData: sheet.sheetFormData }
+      : {})
   }
 }
 
@@ -175,7 +195,8 @@ function clearMarkersForAcceptedEntries(
 async function applyProgressOutcome(
   sheet: LogSheet,
   result: LogSheetProgressResult,
-  pushedMarkers: Map<string, number | undefined>
+  pushedMarkers: Map<string, number | undefined>,
+  pushedSheetFormMarker?: number
 ): Promise<'pushed' | 'refused'> {
   const accepted = result.outcome === 'SAVED' || result.outcome === 'NO_CHANGE'
 
@@ -192,8 +213,17 @@ async function applyProgressOutcome(
   const current = await getLogSheet(sheet.localId)
   const entries = clearMarkersForAcceptedEntries(current?.entries ?? sheet.entries, pushedMarkers)
 
+  // The round-level marker is forgotten only when the answer the server accepted is still the
+  // one on the device. An operator who answered again while the request was in flight keeps
+  // their marker, and the next pass delivers that answer — the same rule, and the same reason,
+  // as `clearMarkersForAcceptedEntries` above.
+  const sheetFormUnchanged =
+    pushedSheetFormMarker != null &&
+    (current?.sheetFormLocallyEditedAt ?? sheet.sheetFormLocallyEditedAt) === pushedSheetFormMarker
+
   await updateLogSheet(sheet.localId, {
     entries,
+    ...(sheetFormUnchanged ? { sheetFormLocallyEditedAt: undefined } : {}),
     progressSyncStatus: 'synced',
     progressSyncedAt: result.savedAt ?? Date.now(),
     progressError: undefined
@@ -215,15 +245,26 @@ export async function pushPendingLogSheetProgress(
   if (sheets.length === 0) return { pushed: 0, refused: 0 }
 
   const items: LogSheetProgressItem[] = []
-  const bySheet = new Map<string, { sheet: LogSheet; markers: Map<string, number | undefined> }>()
+  const bySheet = new Map<
+    string,
+    { sheet: LogSheet; markers: Map<string, number | undefined>; sheetFormMarker?: number }
+  >()
 
   for (const sheet of sheets) {
     const dirty = dirtyEntriesForProgress(sheet)
-    if (dirty.length === 0) continue
+    // Not `dirty.length === 0`: a round answered only at sheet level has nothing in `dirty` and
+    // is still work the supervisor should see.
+    if (dirty.length === 0 && !hasDirtySheetForm(sheet)) continue
     const markers = new Map<string, number | undefined>(
       dirty.map(e => [toIdString(e.assetId), e.locallyEditedAt])
     )
-    bySheet.set(sheet.localId, { sheet, markers })
+    bySheet.set(sheet.localId, {
+      sheet,
+      markers,
+      // Captured before the request, like the entry markers beside it: the operator may answer
+      // again while it is in flight, and that answer must survive the acceptance.
+      sheetFormMarker: sheet.sheetFormLocallyEditedAt
+    })
     items.push(toProgressItem(sheet, dirty))
   }
   if (items.length === 0) return { pushed: 0, refused: 0 }
@@ -235,7 +276,8 @@ export async function pushPendingLogSheetProgress(
   for (const result of results) {
     const tracked = bySheet.get(result.localId)
     if (!tracked) continue
-    const outcome = await applyProgressOutcome(tracked.sheet, result, tracked.markers)
+    const outcome = await applyProgressOutcome(
+      tracked.sheet, result, tracked.markers, tracked.sheetFormMarker)
     if (outcome === 'pushed') pushed++
     else refused++
   }

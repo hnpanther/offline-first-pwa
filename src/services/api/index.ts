@@ -79,6 +79,17 @@ export interface ServerLogSheet {
    * exists to remove.
    */
   fieldOverridesSnapshot?: Record<string, AssetFieldOverrideSnapshot> | null
+  /**
+   * The round's OWN questions, frozen when this sheet was raised — asked once per sheet rather
+   * than once per asset.
+   *
+   * Like `fieldOverridesSnapshot` above, this needed nothing new on the wire: the bundle
+   * serialises the whole sheet entity, so both this and `sheetFormData` have travelled since
+   * the server grew them. Declaring them is what lets the merge copy them onto the stored row.
+   */
+  sheetFieldDefinitionsSnapshot?: FieldDefinition[] | null
+  /** The answers to those questions, keyed by field key. Null when nobody has answered. */
+  sheetFormData?: Record<string, unknown> | null
 }
 
 /** Server-generated rows for a log sheet (authoritative asset list). */
@@ -414,6 +425,14 @@ export interface LogSheetBatchItem {
   operationalUnitId?: number | string
   completedAt?: number
   clientActionId?: string
+  /**
+   * Answers to the round's own questions.
+   *
+   * Omitted entirely when this round asks none, and the server reads an absent key as "this
+   * client did not carry them" rather than "clear them" — which is what lets an older build
+   * keep submitting without wiping what the web panel stored.
+   */
+  sheetFormData?: Record<string, unknown>
 }
 
 /**
@@ -478,6 +497,15 @@ export interface LogSheetProgressItem {
   localId: string
   operatorName?: string
   entries: ApiLogSheetEntry[]
+  /**
+   * The round's own answers as they stand on the device — whole, not a delta.
+   *
+   * One small map per sheet rather than one per asset, so sending it entire costs nothing and
+   * removes the question of how a cleared answer would be expressed in a delta. The server
+   * keeps what a correction replaces here exactly as it does for the web panel, but does not
+   * apply the required check: a round being walked is partial by definition.
+   */
+  sheetFormData?: Record<string, unknown>
 }
 
 /**

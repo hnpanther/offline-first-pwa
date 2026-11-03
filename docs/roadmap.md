@@ -554,11 +554,28 @@ or a move that has to happen while tablets are out in the plant and cannot be vi
 
 ---
 
-# 11. Sheet-level fields, and a round with no assets
+# 11. Sheet-level fields, and a round with no assets — **the fields are built**
 
 *The device half of the backend's [roadmap §24](../../JavaProject/backend-offline-first/docs/roadmap.md).
 Raised as: "a log sheet should be able to carry a few fields of its own beside the assets — and a
 sheet may have no asset at all, just a few questions."*
+
+> **Status.** The round's own questions are **built** on this side: the two fields arrive with
+> the bundle, `SheetQuestionsCard` renders them at the top of the round with a save of its own,
+> and both the submit payload and the progress push carry the answers. The behaviour is in
+> [sync.md](sync.md#the-rounds-own-questions). What is still open here is **a round with no
+> assets** — the backend has not shipped that half either (its phase D), so the three guards
+> below are changed but have no asset-less round to be tested against yet.
+>
+> Two things the build corrected in this section:
+>
+> - **No Dexie version bump was needed.** The three new fields are plain, non-indexed
+>   properties, exactly like `fieldDefinitions` and `fieldOverridesSnapshot`.
+> - **The merge rule did have an existing answer**, and it is the entry rule one level up:
+>   `sheetFormLocallyEditedAt`, stamped by the save itself. The "device wins while a draft,
+>   server wins afterwards" shape sketched below would have been a third predicate over the
+>   data, which is the family of answer `mapServerEntryToLocal` rejects.
+>
 
 **Read the backend's §24 first.** It owns the model, the migration and the decisions; this section
 is only what has to change here, and the two places where this repository is the harder half.
