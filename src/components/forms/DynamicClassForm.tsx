@@ -187,7 +187,11 @@ interface DynamicClassFormProps {
   attachmentContext?: {
     logSheetLocalId: string
     logSheetServerId?: string
-    assetId: string
+    /**
+     * Absent for the round's own questions — those belong to the sheet rather than to any asset
+     * on it, and so does any photo answering one. Present for every per-asset form.
+     */
+    assetId?: string
   }
 }
 

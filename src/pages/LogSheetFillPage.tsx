@@ -1520,6 +1520,13 @@ export function LogSheetFillPage() {
           values={sheetAnswers}
           readOnly={!canEdit}
           savedAt={logSheet.sheetFormLocallyEditedAt}
+          attachmentContext={{
+            logSheetLocalId: logSheet.localId,
+            // May be absent for a sheet raised offline; the upload queue skips those rows until
+            // the sheet itself has synced and been given an id. No `assetId` — this media
+            // answers the round, not one of its assets.
+            logSheetServerId: logSheet.serverId
+          }}
           onSave={handleSheetQuestionsSave}
         />
       )}

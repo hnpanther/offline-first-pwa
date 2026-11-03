@@ -166,6 +166,43 @@ device.** An operator who answers again while the request is in flight keeps the
 the next pass delivers it — the same rule, and the same reason, as
 `clearMarkersForAcceptedEntries`.
 
+### Media answering a round-level question
+
+A round-level question may be an image, a video, a voice note or a coordinate. The control is the
+one an asset's media field uses; what changes is the owner.
+
+**`LocalAttachment.assetId` is optional, and absent is an owner rather than a missing value** —
+the media belongs to the round. It mirrors the server's `attachments.asset_id`, nullable since
+V10: inside a log sheet there are exactly two owners media can have, `logSheetLocalId` is set
+either way, so absence carries the one bit that tells them apart. It stays a plain Dexie index
+and needed **no version bump**: an index does not list a row whose property is undefined, and
+nothing queries `where('assetId')` — every read starts from the sheet and filters in memory.
+
+`getAttachmentsForEntry` takes `assetId` as `string | undefined` and compares both sides through
+`toIdString`, so absent matches absent and nothing else (an asset id is a database id and can
+never be the empty string). The two owners therefore do not see each other's files, which is what
+keeps the per-field ceiling from counting one against the other. **Per-operator ownership still
+applies unchanged** — `createdByUserId`, the invariant that AGENTS.md says must be applied to
+every outbound-syncable table separately.
+
+**The upload omits the field rather than sending `"undefined"`.** `uploadAttachment` appends
+`assetId` only when it is present; the server reads an absent one as "this answers the round's own
+question", while the literal string would fail to parse as a Long and park the row as a permanent
+failure — an operator's evidence refused for a client bug.
+
+### Where a required question is enforced
+
+`SheetQuestionsCard` has its own `useForm`, so `handleSubmit` refuses to call `onSave` while a
+required question is unanswered. **That is the only place it is enforced.** The round's final
+submission does not check it — on the device or on the server — and
+`validateLogSheetBeforeSubmit` never looks at `sheetFormData` at all.
+
+This is deliberate and it is the whole design of `required`: an operator standing at the
+equipment, offline, with a day's readings queued must never be blocked by an answer they can
+still supply. Enforced where somebody is answering those questions and nowhere else, it is help;
+enforced on the submit it would be a round that cannot be delivered. Shape is still checked
+everywhere, because a value the schema cannot describe is a client bug either way.
+
 ## When sync runs
 
 | Trigger | Where |

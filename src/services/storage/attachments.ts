@@ -68,10 +68,13 @@ export async function getAttachmentsByIds(ids: string[]): Promise<LocalAttachmen
  *
  * @param ownerUserId the signed-in operator. `null` yields nothing: media with no provable owner
  *        must not be shown to somebody who might not be entitled to it.
+ * @param assetId which asset's field, or `undefined` for the round's own question. Both sides go
+ *        through `toIdString`, so absent matches absent and nothing else: an asset id is a
+ *        database id and can never be the empty string.
  */
 export async function getAttachmentsForEntry(
   logSheetLocalId: string,
-  assetId: string,
+  assetId: string | undefined,
   fieldKey: string,
   ownerUserId: string | null
 ): Promise<LocalAttachment[]> {

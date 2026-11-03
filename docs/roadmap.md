@@ -554,27 +554,38 @@ or a move that has to happen while tablets are out in the plant and cannot be vi
 
 ---
 
-# 11. Sheet-level fields, and a round with no assets — **the fields are built**
+# 11. Sheet-level fields, and a round with no assets — **built**
 
 *The device half of the backend's [roadmap §24](../../JavaProject/backend-offline-first/docs/roadmap.md).
 Raised as: "a log sheet should be able to carry a few fields of its own beside the assets — and a
 sheet may have no asset at all, just a few questions."*
 
-> **Status.** The round's own questions are **built** on this side: the two fields arrive with
-> the bundle, `SheetQuestionsCard` renders them at the top of the round with a save of its own,
-> and both the submit payload and the progress push carry the answers. The behaviour is in
-> [sync.md](sync.md#the-rounds-own-questions). What is still open here is **a round with no
-> assets** — the backend has not shipped that half either (its phase D), so the three guards
-> below are changed but have no asset-less round to be tested against yet.
+> **Status. Built, both halves.** The round's own questions arrive with the bundle,
+> `SheetQuestionsCard` renders them at the top of the round with a save of its own, and both the
+> submit payload and the progress push carry the answers. The backend has since shipped its phase
+> D, so **a round with no assets** is real: the three guards below read `hasAnythingToAnswer`
+> rather than `entries.length`, and such a round is claimed, walked, answered and submitted like
+> any other. The behaviour is in [sync.md](sync.md#the-rounds-own-questions).
 >
-> Two things the build corrected in this section:
+> Four things the build corrected in this section:
 >
-> - **No Dexie version bump was needed.** The three new fields are plain, non-indexed
->   properties, exactly like `fieldDefinitions` and `fieldOverridesSnapshot`.
+> - **No Dexie version bump was needed** — not for the three question fields, and not for
+>   round-level media either. All of them are plain, non-indexed properties (and an index simply
+>   does not list a row whose property is undefined), exactly like `fieldDefinitions` and
+>   `fieldOverridesSnapshot`.
 > - **The merge rule did have an existing answer**, and it is the entry rule one level up:
 >   `sheetFormLocallyEditedAt`, stamped by the save itself. The "device wins while a draft,
 >   server wins afterwards" shape sketched below would have been a third predicate over the
 >   data, which is the family of answer `mapServerEntryToLocal` rejects.
+> - **A round-level question can carry media**, which this section assumed it could not. The
+>   server made `attachments.asset_id` nullable, so `LocalAttachment.assetId` became optional and
+>   absence is the owner — the round rather than an asset. `uploadAttachment` omits the field
+>   instead of sending `"undefined"`, which would have parked an operator's photograph as a
+>   permanent failure.
+> - **`required` is enforced in exactly one place**, `SheetQuestionsCard`'s own `handleSubmit`,
+>   and nowhere near the submit. The section below expected it to wait for every tablet to carry
+>   the field; moving the enforcement point removed that constraint rather than scheduling around
+>   it. See [sync.md](sync.md#where-a-required-question-is-enforced).
 >
 
 **Read the backend's §24 first.** It owns the model, the migration and the decisions; this section

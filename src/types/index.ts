@@ -372,7 +372,19 @@ export interface LocalAttachment {
   logSheetLocalId: string
   /** Server id of the sheet — null until the sheet itself has one, which gates upload. */
   logSheetServerId?: string
-  assetId: string
+  /**
+   * The asset this media belongs to, or **absent** when it answers the round's own question —
+   * a question asked once for the whole sheet rather than once per asset.
+   *
+   * Optional rather than a second owner column, matching the server's `attachments.asset_id`
+   * (V10): inside a log sheet there are exactly two owners media can have, and `logSheetLocalId`
+   * is set either way, so absence carries the one bit that distinguishes them.
+   *
+   * It stays a plain Dexie index. An index simply does not list a row whose property is
+   * undefined, and nothing queries `where('assetId')` — every read starts from the sheet and
+   * filters in memory — so this needed no schema version bump.
+   */
+  assetId?: string
   fieldKey: string
   kind: AttachmentKind
   mimeType: string

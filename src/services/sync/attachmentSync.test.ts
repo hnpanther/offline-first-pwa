@@ -108,6 +108,19 @@ describe('syncPendingAttachments', () => {
     )
   })
 
+  it('uploads media answering the round’s own question with no asset id', async () => {
+    await saveAttachment(attachment({ assetId: undefined }))
+    await syncPendingAttachments()
+
+    // The server reads an ABSENT assetId as "this belongs to the round's own form". Sending the
+    // string "undefined" instead would fail to parse as a Long and the file would be parked as
+    // a permanent failure — the operator's evidence, refused for a client bug.
+    const payload = uploadAttachment.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.assetId).toBeUndefined()
+    expect(payload.logSheetServerId).toBe('55')
+    expect(payload.fieldKey).toBe('pump_photo')
+  })
+
   it('uploads one file at a time rather than in parallel', async () => {
     // Sequential is a deliberate choice for weak field links: three concurrent uploads there
     // are slower than one and far likelier to time out.

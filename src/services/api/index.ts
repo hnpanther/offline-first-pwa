@@ -348,7 +348,8 @@ export interface AttachmentDto {
 export async function uploadAttachment(params: {
   id: string
   logSheetServerId: string | number
-  assetId: string | number
+  /** Omitted for media answering the round's own question — see `LocalAttachment.assetId`. */
+  assetId?: string | number
   fieldKey: string
   blob: Blob
   width?: number
@@ -359,7 +360,9 @@ export async function uploadAttachment(params: {
   const form = new FormData()
   form.append('id', params.id)
   form.append('logSheetId', String(params.logSheetServerId))
-  form.append('assetId', String(params.assetId))
+  // Left out entirely rather than sent as "undefined": the server reads an absent assetId as
+  // "this belongs to the round's own form", and a literal string would fail to parse as a Long.
+  if (params.assetId != null) form.append('assetId', String(params.assetId))
   form.append('fieldKey', params.fieldKey)
   if (params.width != null) form.append('width', String(params.width))
   if (params.height != null) form.append('height', String(params.height))

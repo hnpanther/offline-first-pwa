@@ -25,6 +25,17 @@ interface SheetQuestionsCardProps {
   readOnly: boolean
   /** When the operator last answered them on this device, for the «ذخیره شد» line. */
   savedAt?: number
+  /**
+   * Where a photo, voice note, video or coordinate answering one of these questions belongs.
+   *
+   * No `assetId`, and that is the point: this media belongs to the **round**. The server stores
+   * it with `attachments.asset_id` NULL (V10) and the device with `LocalAttachment.assetId`
+   * absent, which is the one bit that tells the two owners apart.
+   */
+  attachmentContext?: {
+    logSheetLocalId: string
+    logSheetServerId?: string
+  }
   onSave: (values: Record<string, unknown>) => Promise<void>
 }
 
@@ -45,16 +56,25 @@ interface SheetQuestionsCardProps {
  * validator. The component takes a list and a form control and asks nothing about where the
  * list came from, which is the whole reason this feature needed no new field rendering.
  *
- * Attachment types cannot reach here: the server refuses them for a round-level question
- * because `attachments.asset_id` is NOT NULL and an answer that belongs to no asset has
- * nowhere to put its bytes. `attachmentContext` is therefore deliberately absent, and such a
- * field would render read-only if one ever arrived from an older server.
+ * <h3>Media, and required answers</h3>
+ *
+ * A round-level question may be an image, a video, a voice note or a coordinate, exactly like a
+ * per-asset one: `attachmentContext` is passed down with no `assetId`, and everything from the
+ * capture control to the upload queue reads that absence as "this belongs to the sheet".
+ *
+ * A **required** question is enforced here and nowhere else. `handleSubmit` refuses to call
+ * `onSave` while one is unanswered, which is help — the operator is looking at exactly these
+ * questions. The round's final submission never checks them, on the device or on the server: an
+ * operator standing at the equipment with a day's readings queued must never be blocked by an
+ * answer they can still supply, and a required question that stopped a submit would do exactly
+ * that.
  */
 export function SheetQuestionsCard({
   questions,
   values,
   readOnly,
   savedAt,
+  attachmentContext,
   onSave
 }: SheetQuestionsCardProps) {
   const {
@@ -74,6 +94,10 @@ export function SheetQuestionsCard({
 
   if (questions.length === 0) return null
 
+  // Only to word the hint. The refusal itself is react-hook-form's, from the rules
+  // `DynamicClassForm` already builds out of `required` — not a second check that could disagree.
+  const hasRequired = questions.some(q => q.required)
+
   return (
     <Card variant="outlined" sx={{ mb: 2 }} data-testid="sheet-questions">
       <CardContent sx={{ pb: 2 }}>
@@ -91,6 +115,7 @@ export function SheetQuestionsCard({
 
         <Alert severity="info" sx={{ mb: 2, py: 0.5 }}>
           این پرسش‌ها یک‌بار برای کل این کار پرسیده می‌شوند، نه برای هر دارایی.
+          {hasRequired && ' پرسش‌های ستاره‌دار برای ذخیرهٔ همین بخش لازم‌اند.'}
         </Alert>
 
         <Box
@@ -106,6 +131,7 @@ export function SheetQuestionsCard({
             errors={errors}
             readOnly={readOnly}
             readOnlyValues={readOnly ? values : undefined}
+            attachmentContext={attachmentContext}
           />
 
           {!readOnly && (

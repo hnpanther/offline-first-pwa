@@ -89,6 +89,35 @@ describe('basic persistence', () => {
     expect(await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)).toHaveLength(1)
   })
 
+  it('finds media answering the round’s own question, which has no asset at all', async () => {
+    // The round's own form: `assetId` absent is a real owner, not a missing value. Both sides
+    // of the comparison go through `toIdString`, so absent matches absent and nothing else —
+    // an asset id is a database id and can never be the empty string.
+    await saveAttachment(attachment({ id: 'round-level', assetId: undefined }))
+    await saveAttachment(attachment({ id: 'per-asset', assetId: '7' }))
+
+    const roundLevel = await getAttachmentsForEntry(
+      'sheet-local-1', undefined, 'pump_photo', OWNER)
+    expect(roundLevel.map(r => r.id)).toEqual(['round-level'])
+
+    // And the two owners do not see each other's files, which is what keeps the per-field
+    // ceiling from counting one against the other.
+    const perAsset = await getAttachmentsForEntry('sheet-local-1', '7', 'pump_photo', OWNER)
+    expect(perAsset.map(r => r.id)).toEqual(['per-asset'])
+  })
+
+  it('still owns round-level media per operator', async () => {
+    // The invariant that cost the most to learn, applied to the new owner: a reassigned round
+    // reuses the local row, so «what is on this device for this field» is a different question
+    // from «what is mine». Answering the first where the second was meant handed one
+    // operator's photographs to the next.
+    await saveAttachment(attachment({ id: 'mine', assetId: undefined, createdByUserId: OWNER }))
+    await saveAttachment(attachment({ id: 'theirs', assetId: undefined, createdByUserId: '42' }))
+
+    const rows = await getAttachmentsForEntry('sheet-local-1', undefined, 'pump_photo', OWNER)
+    expect(rows.map(r => r.id)).toEqual(['mine'])
+  })
+
   it('deletes one attachment', async () => {
     await saveAttachment(attachment())
     await deleteAttachment('att-1')

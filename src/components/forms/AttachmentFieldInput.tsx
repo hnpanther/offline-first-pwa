@@ -160,7 +160,8 @@ interface Props {
   readOnly?: boolean
   logSheetLocalId: string
   logSheetServerId?: string
-  assetId: string
+  /** Absent for a round-level question: the media then belongs to the sheet, not to an asset. */
+  assetId?: string
   fieldKey: string
   onChange: (value: ReturnType<typeof buildAttachmentRef>) => void
 }
