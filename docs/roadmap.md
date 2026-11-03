@@ -551,3 +551,235 @@ most of the work, and is the part that would get dropped under time pressure.
 
 The address changing often enough that visiting each tablet's Settings page is the bottleneck —
 or a move that has to happen while tablets are out in the plant and cannot be visited at all.
+
+---
+
+# 11. Sheet-level fields, and a round with no assets
+
+*The device half of the backend's [roadmap §24](../../JavaProject/backend-offline-first/docs/roadmap.md).
+Raised as: "a log sheet should be able to carry a few fields of its own beside the assets — and a
+sheet may have no asset at all, just a few questions."*
+
+**Read the backend's §24 first.** It owns the model, the migration and the decisions; this section
+is only what has to change here, and the two places where this repository is the harder half.
+
+Two other backend changes in the same batch need **nothing on the device**, and it is worth saying
+so rather than leaving somebody to check: §26 (filtering the panel's log-sheet list) is a web-panel
+list the app does not have, and §27 (withdrawing an approval becomes admin-only) touches no mobile
+endpoint — approve and unapprove have never existed in `/api`.
+
+## The one piece of luck, and the two that are not
+
+**Downward there is nothing to do.** The backend serialises the whole `LogSheet` entity into
+`bundle.sheet`, so `sheetFieldDefinitionsSnapshot` and `sheetFormData` arrive on the device with no
+contract change and no new endpoint. Whatever this app does with them, it does not have to be told
+about them.
+
+What is not lucky:
+
+**1. The round screen refuses to submit a sheet with no entries, and blames the network.** Three
+conditions in `src/pages/LogSheetFillPage.tsx`:
+
+| Line | Today | On a questions-only round |
+|---|---|---|
+| 1477 | `entries.length === 0` renders «هیچ Asset ای برای این کار یافت نشد… باید آنلاین باشید» | **untrue** — nothing failed to load, and the operator is sent to look for signal |
+| 1327 | the submit button renders only when `entries.length > 0` | **the round cannot be submitted at all** |
+| 1316 | the progress line, same condition | merely absent |
+
+The condition all three want is "is there anything on this round to answer" —
+`entries.length > 0 || sheetFields.length > 0`. The «not found» alert has to keep its present
+meaning and fire only when the sheet is *supposed* to have assets, which the device can now tell:
+a sheet with no entries **and** no sheet-level fields really is a sheet that failed to load.
+
+`canSubmitLogSheet` itself has no asset-count condition, so this is three JSX conditions — not a
+lifecycle change.
+
+**2. The round's own counters are per entry.** `LogSheetFillPage` derives `totalCount` and
+`filledCount` from `entries` (lines 1150–1151) and `getEntryCompletion` per row. A questions-only
+round reads «۰ از ۰». The sheet-level form has to count as one more item in that pair, or the
+header contradicts a screen that visibly has something to fill in.
+
+## What changes, file by file
+
+| | Change |
+|---|---|
+`src/types` | `sheetFieldDefinitionsSnapshot?: FieldDefinition[]` and `sheetFormData?: Record<string, unknown>` on `LogSheet` |
+`services/storage/db.ts` | a Dexie version bump. Purely additive — no index on either field, no data transform, and an older row simply has neither |
+a resolver beside the per-asset one | `resolveSheetFields(sheet)`, which **prefers the sheet's own snapshot and never today's definitions**. The same rule the per-asset resolution already follows, and for the same reason: a question edited on the template next month must not re-describe a round already walked |
+`LogSheetFillPage.tsx` | one `DynamicClassForm` at the **end** of the round, after the asset list — "were all the pipes checked" is answerable only once they have been. The component itself does not change; it already takes a definition list and a value map |
+the three guards above | `entries.length > 0 \|\| sheetFields.length > 0` |
+the counters above | the sheet-level form as one more item |
+`utils/formDataValidation.ts` | `findSubmitBlockingIssues` must look at the sheet-level required fields too |
+the submit payload | `sheetFormData` on the sheet object the outbox sends |
+the progress push | `sheetFormData` as well — a partial round reports partial answers, and the server deliberately does **not** apply the required check to a progress push |
+
+## The two rules this feature must not break
+
+**Blankness is judged by `isFieldValueBlank`, never by key presence.** `formDataValidation.ts`
+already carries the whole argument — its rules are transcribed from the server's
+`FormDataValidationSupport.isBlank` precisely because `evaluateEntryCompletion` disagrees in ways
+that matter. The sheet-level form is a second caller of the same question, and the first instinct
+(`Object.keys(sheetFormData).length > 0`) is the exact test that once let a device's blank copy win
+a merge and overwrite the server's values. Use the existing helper; add no second definition of
+"answered".
+
+**The local gate stays conservative.** That file's governing rule is *"this must never block a
+submission the server would have accepted"* — a false block strands the operator with no error
+from anyone. So a required sheet-level field blocks the submit **only when the device actually
+holds the sheet's field snapshot**. A sheet synced by an older build carries none, and that case
+must fall through to allow and let the server answer. This is also what makes the backend's
+phase-1 choice (nothing required at first) safe to ship in either order.
+
+## Two things the device does not get, and one it decides
+
+**Revisions are web-only, deliberately.** The backend keeps what a correction replaced
+(`log_sheet_revisions`, §24), and `LogSheetBundleDto` carries `sheet`, `entries`, `context`,
+`nfcFaultReports` and `attachments` — **no revisions**, for entries today and for the sheet-level
+answers tomorrow. So there is nothing to render here and nothing to store. An operator sees the
+current answers; a supervisor reads the history in the panel.
+
+**There is no save button to add.** The panel needs one because its fill page posts to the server;
+this app writes to Dexie as the operator works and reports through the progress push. Nothing in
+§24's save-button half reaches the device.
+
+**But the push cadence now decides how the history reads.** `LogSheetProgressItem` carries *only
+what changed since the last accepted push*, and the server writes one revision row per push that
+genuinely replaces a stored value. So an operator who corrects a round-level answer across three
+pushes leaves three history rows, and one who corrects it three times between two pushes leaves
+one. Both are honest. What would not be honest is pushing on every keystroke: the history would
+fill with rows nobody made a decision in. Keep the sheet-level form on the same
+confirm-or-debounce rhythm the asset forms already use, and treat "how many revisions did this
+round produce" as a thing worth looking at once after the first week in service.
+
+## Merging, which has no existing answer
+
+Every conflict rule in `services/sync` operates on `entries`. `sheetFormData` is a field of the
+*sheet*, so none of them covers it, and the sheet record is the one the server rewrites wholesale
+on every bundle fetch.
+
+The narrow rule that matches what the rest of the app already does: **the device's answers win
+while the round is still a local draft, and the server's copy wins once the sheet is no longer
+editable here** — with blankness decided by `isFieldValueBlank`, so an empty local map never
+overwrites stored answers. Write it as its own small function with the reasoning next to it, next
+to the entry merge rather than inside it; a flag threaded through the entry merge would be read as
+applying per asset.
+
+## What this does not need
+
+No new store, no new queue, no new endpoint, no service-worker change, and no change to
+`DynamicClassForm`, `DynamicFormField` or any field control. That is the whole point of the
+backend building the questions as `field_definitions` in a different owner rather than as a new
+kind of thing.
+
+## What would make it urgent
+
+A round that exists only to ask questions — a shift handover, a security patrol's closing
+checklist, an area inspection with no equipment in it. Until the backend ships §24 there is nothing
+to render; once it does, the device is the half that decides whether the feature is usable in the
+field.
+
+---
+
+# 12. QR beside NFC on the device
+
+*The device half of the backend's [roadmap §25](../../JavaProject/backend-offline-first/docs/roadmap.md).
+Raised as: "a template should be able to allow NFC, or QR, or either of the two — with NFC the
+default."*
+
+**Read the backend's §25 first** for the model (`scan_methods` on the template, frozen onto the
+sheet) and for the one fact that governs everything: **a QR code has no hardware serial**, so
+`nfcStrictSerialMatch` has nothing to check and a printed label is clonable by photocopier. The
+device must not present a QR scan as if it were a verified one.
+
+## What arrives, and what has to be built
+
+`scanMethods` (`NFC` | `QR` | `NFC_OR_QR`) reaches the device inside `bundle.sheet` with no
+contract change, exactly as §11's two fields do. A site-wide `qrEnabled` belongs on
+`mobilePolicy` beside `nfcStrictSerialMatch` and `nfcManualEntryEnabled`, mirrored into `settings`
+so it still answers offline — and **AND-ed** with the sheet's own value, never OR-ed, so a site
+that has printed no labels can turn the control off for every tablet at once.
+
+The payload is **the same `tag` string** an NDEF record 1 carries. So `matchLogSheetEntryByTag` is
+reused **verbatim**, and the whole of `matchLogSheetEntry.ts` — including the one outcome that
+stays specific, *a valid tag that is simply not on this sheet* — keeps working unchanged. Anything
+richer in the QR payload would create a second identifier space to keep in step, which is the
+mistake the single `decodeRecordData` exists to prevent.
+
+## The decoder — and `BarcodeDetector` is `NDEFReader` all over again
+
+| Where | Web NFC | `BarcodeDetector` |
+|---|---|---|
+| Chrome on Android | available | available |
+| **Android's WebView — i.e. inside the APK** | **absent** | **absent** |
+| Everywhere else | absent | absent |
+
+`device-features.md` records the first row of that trap already: *"not iOS, not desktop, and — the
+one that catches people — not Android's WebView"*. `BarcodeDetector` is a Chrome API with exactly
+the same shape of availability, so building on it would make QR scanning vanish inside the
+packaged app with no error anywhere — the same failure NFC needed a native plugin
+(`android/app/src/main/java/com/hnp/mfdcs/NfcPlugin.java`) to escape.
+
+**Recommended: one bundled JavaScript decoder fed by `getUserMedia`, and no second path.** It
+works in Chrome and in the WebView alike, which is strictly better than the position NFC is in —
+there, two readers answer one `isNFCSupported()` and the project has to keep them decoding
+identically on purpose. A camera decoder has no such obligation if there is only one of it.
+
+Three facts make that concrete:
+
+- **`getUserMedia` is already used here**, for audio and video capture (`utils/mediaCapture.ts`),
+  and `utils/mediaPermissions.ts` already maps a rejection to a Persian sentence and says whether
+  it is recoverable in-app. Reuse both; do not write a second permission story. Photo capture is
+  **not** a precedent — it uses `<input accept="image/*" capture="environment">` and never opens a
+  stream, so a live preview is genuinely new UI.
+- **`getUserMedia` needs a secure context.** `mediaPermissions.ts` notes that over plain HTTP
+  `navigator.mediaDevices` is not merely empty, it is undefined. Production is TLS and the APK's
+  origin is `https://localhost`, so both are fine — but a developer on `http://…:5173` will see
+  the feature simply not exist, and the message should say why.
+- **Workbox would not precache a `.wasm` decoder.** `globPatterns` in `vite.config.ts` covers
+  `js,css,html,ico,png,svg,woff,woff2,webmanifest` — **no `wasm`** (the same gap §10 found for
+  `json`). A wasm-based decoder would therefore work online and fail offline, which for this app
+  is the only mode that matters. Either choose a **pure-JS** decoder, or add `wasm` to
+  `globPatterns` in the same commit and verify it with the network off. Nothing about this is
+  discoverable later: it fails exactly once, in the field, in a basement.
+
+## The scan control, per `scanMethods`
+
+| Sheet value | What the operator sees |
+|---|---|
+| `NFC` | today's «اسکن NFC», unchanged |
+| `QR` | a camera scan action, and no NFC affordance |
+| `NFC_OR_QR` | **both offered, NFC first** — the default stays visually the default |
+
+`isNFCSupported()` gains a sibling `isQRSupported()`, and the control shows what the sheet allows
+**intersected with what the device can do**: a `QR`-only round on a tablet whose camera is refused
+has to fall back the way an unreadable chip already does — the **NFC fault report**, which unlocks
+manual entry for that one asset and leaves a maintenance ticket behind. Do not invent a second
+bypass; the existing one is what turns "the scan was skipped" from a hole in the data into
+somebody's job.
+
+## What the device sends back
+
+`captureMethod` (`'NFC'` | `'QR'` | `'MANUAL'`) on the submitted entry, beside the existing
+`manualEntry` boolean rather than instead of it: the server reads `captureMethod` when present and
+falls back to `manualEntry` otherwise, so an older server and a newer device still agree about a
+manual entry. The backend stamps `entry_source = PWA_QR` from it.
+
+**The device must not claim verification it did not perform.** Strict serial matching governs NFC
+and says nothing about QR; a QR scan is never "strict". Whatever the round summary says about a
+scanned position must not say the same thing for both carriers — the data-quality report splits
+them on the server (§25 point 7), and a screen that calls them both «تأییدشده» would make that
+split pointless.
+
+## Documentation to update when it is built
+
+| | |
+|---|---|
+[device-features.md](device-features.md) | a QR section beside the NFC one: availability, the payload, why there is no strict mode, and the fallback |
+[apk.md](apk.md) | §7 holds the NFC plugin contract; if a native decoder is ever chosen over the bundled one, its contract belongs beside it. If the bundled decoder is used, say **that** — "no plugin, deliberately" is the fact a future reader needs |
+[storage.md](storage.md) | only if `qrEnabled` lands in the settings mirror, which it should |
+
+## What would make it urgent
+
+Positions that cannot take a chip — too hot, too small, outdoors, behind glass — or tablets
+without NFC hardware. Both are facts about equipment rather than preferences, and either one makes
+this the difference between a round that can be walked and one that cannot.
