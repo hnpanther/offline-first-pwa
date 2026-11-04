@@ -266,6 +266,16 @@ export function isCompletedServerStatus(status?: LogSheetServerStatus | null): b
 
 export type LogSheetAssignmentType = 'SELF_CLAIMED' | 'SUPERVISOR_ASSIGNED'
 
+/**
+ * How a round identifies its assets.
+ *
+ * `NONE` is not «scanning is broken» — it is a round where there is nothing to scan: a
+ * questionnaire, an area inspection, a position nobody will ever label. The operator picks the
+ * asset from the round's own list and the reading is recorded as a manual one, which is what it
+ * is.
+ */
+export type AssetScanMode = 'NFC' | 'QR' | 'NFC_OR_QR' | 'NONE'
+
 export interface LogSheetEntryData {
   assetId: string
   assetName: string
@@ -280,8 +290,15 @@ export interface LogSheetEntryData {
   createdAt?: number
   /** Device time of the latest edit (epoch millis). */
   updatedAt?: number
-  /** How this entry's current form data was captured. Unset means not yet filled. */
-  filledVia?: 'nfc' | 'manual'
+  /**
+   * How this entry's current form data was captured. Unset means not yet filled.
+   *
+   * `'qr'` joined the pair when a round gained the ability to be identified by a QR code. It is
+   * kept apart from `'nfc'` rather than folded in because the two carry different evidence: a
+   * chip read can be checked against a hardware serial, a QR read has no serial to check, and a
+   * report that merged them would overstate what half its rows prove.
+   */
+  filledVia?: 'nfc' | 'qr' | 'manual'
   /**
    * Device time of the last save an operator made to this entry **on this device**, whether
    * they entered a value or removed the last one. Local-only: never sent to the server, never
@@ -517,6 +534,17 @@ export interface LogSheet {
    * the save itself, and cleared when the server accepts it.
    */
   sheetFormLocallyEditedAt?: number
+
+  /**
+   * How the operator must identify each asset on **this** round — frozen by the server when the
+   * round was raised, so a template changed afterwards cannot change the rules under a tablet
+   * that downloaded its bundle before the change.
+   *
+   * Absent means `'NFC'`: every round raised before the server grew this column was an NFC
+   * round, and a bundle from an older server carries no such field. Plain, non-indexed property
+   * — no Dexie version bump, like `sheetFieldDefinitions` beside it.
+   */
+  scanMode?: AssetScanMode
   /**
    * The server's outcome for the last rejected submission (e.g. `VALIDATION_ERROR`).
    *

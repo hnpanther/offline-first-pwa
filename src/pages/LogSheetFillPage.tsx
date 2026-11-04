@@ -20,6 +20,7 @@ import {
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import NfcIcon from '@mui/icons-material/Nfc'
+import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
@@ -51,6 +52,8 @@ import {
 } from '@/services/storage/nfcFaultReports'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { SheetQuestionsCard } from '@/components/logsheet/SheetQuestionsCard'
+import { QrScanDialog } from '@/components/logsheet/QrScanDialog'
+import { qrScanSupport } from '@/services/scan/qrScanner'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 import {
@@ -533,6 +536,10 @@ export function LogSheetFillPage() {
 
   // NFC
   const { isScanning, isSupported, lastTag, error: nfcScanError, startScan, stopScan } = useNFC()
+  const [qrScanOpen, setQrScanOpen] = useState(false)
+  // Asked once per mount rather than per render: it opens no camera and requests no permission,
+  // but it does walk the Capacitor bridge, and the answer cannot change while a page is open.
+  const [qrSupport] = useState(() => qrScanSupport())
   const setNFCError = useAppStore(s => s.setNFCError)
   const setLastScannedTag = useAppStore(s => s.setLastScannedTag)
   const [manualTagId, setManualTagId] = useState('')
@@ -543,7 +550,8 @@ export function LogSheetFillPage() {
   const [activeEntry, setActiveEntry] = useState<LogSheetEntryData | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogEditable, setDialogEditable] = useState(false)
-  const [activeEntryFilledVia, setActiveEntryFilledVia] = useState<'nfc' | 'manual' | undefined>(undefined)
+  const [activeEntryFilledVia, setActiveEntryFilledVia] =
+    useState<'nfc' | 'qr' | 'manual' | undefined>(undefined)
 
   // NFC fault reports — filed on this device, unlock manual entry per asset
   const [nfcFaultReports, setNfcFaultReports] = useState<NfcFaultReport[]>([])
@@ -725,19 +733,24 @@ export function LogSheetFillPage() {
   // -------------------------------------------------------------------------
 
   const handleTagId = useCallback(
-    (tagId: string, source: 'nfc' | 'manual' = 'manual', scannedSerial?: string | null) => {
+    (tagId: string, source: 'nfc' | 'qr' | 'manual' = 'manual', scannedSerial?: string | null) => {
       if (!logSheet) return
       setNfcError(null)
 
-      // Strict serial verification only makes sense for a real chip read. Manual
-      // tag entry and the NFC-fault fallback have no hardware serial to compare.
+      // Strict serial verification only makes sense for a real chip read. Manual tag entry and
+      // the NFC-fault fallback have no hardware serial to compare — and neither does a QR code,
+      // which is a printed string with no hardware behind it at all. Applying the check to a QR
+      // read would fail every one of them on a plant that has strict mode on, which is how the
+      // two modes would silently become incompatible. A site that needs the clone-resistance of
+      // a chip chooses «فقط NFC»; that is what the per-round setting exists to offer.
       const result = matchLogSheetEntryByTag(logSheet.entries ?? [], tagId, {
         strictSerial: source === 'nfc' && settings.nfcStrictSerialMatch,
         scannedSerial
       })
 
       if (result.kind === 'notInSheet') {
-        setNfcError(`Asset مربوط به تگ "${tagId.trim()}" در این Log Sheet وجود ندارد`)
+        const label = source === 'qr' ? 'کد QR' : 'تگ'
+        setNfcError(`Asset مربوط به ${label} "${tagId.trim()}" در این Log Sheet وجود ندارد`)
         return
       }
       // Both verification failures give the same opaque answer on purpose — naming which
@@ -780,6 +793,21 @@ export function LogSheetFillPage() {
     setDialogEditable(false)
     setActiveEntryFilledVia(undefined)
     lastProcessedTag.current = null
+  }
+
+  /**
+   * A QR read, which resolves to the same identifier a tag would have carried.
+   *
+   * The payload IS `nfcTagId` — no parsing, no URL unwrapping. A transformation invented here
+   * would mean a sticker printed from the panel and one printed from a label machine resolving
+   * differently, and the one that failed would be the one already in the plant.
+   */
+  const handleQrDetected = (value: string) => {
+    setQrScanOpen(false)
+    const trimmed = value.trim()
+    if (!trimmed) return
+    setManualTagId(trimmed)
+    void handleTagId(trimmed, 'qr')
   }
 
   const handleStartNfcScan = (e?: MouseEvent) => {
@@ -847,6 +875,8 @@ export function LogSheetFillPage() {
       // before the write rather than after: if the write throws, the dialog stays open holding
       // the same values, and a stale draft underneath it would only be able to disagree.
       draftCache.forget(assetId)
+      // Defaults to 'nfc' only because that is how every entry was opened before the other
+      // channels existed; every path that opens the dialog sets this explicitly.
       const filledVia = activeEntryFilledVia ?? 'nfc'
       const updatedEntries = logSheet.entries.map(e =>
         e.assetId === assetId ? applyOperatorEntrySave(e, formData, filledVia) : e
@@ -1180,6 +1210,15 @@ export function LogSheetFillPage() {
   const entries = logSheet.entries ?? []
   // The round's own questions — asked once per sheet rather than once per asset. A round can
   // consist of nothing else, which is why every `entries.length` below reads this too.
+  // How THIS round identifies its assets, frozen by the server when it was raised. Absent
+  // means NFC: every round raised before the column existed was an NFC round, and a bundle from
+  // an older server carries no such field.
+  const scanMode = logSheet.scanMode ?? 'NFC'
+  const nfcAllowed = scanMode === 'NFC' || scanMode === 'NFC_OR_QR'
+  const qrAllowed = scanMode === 'QR' || scanMode === 'NFC_OR_QR'
+  // Nothing to scan. The operator opens an asset from the list and the reading is recorded as
+  // manual, which is what it is — there was no tag and no sticker to prove otherwise.
+  const noScanRequired = scanMode === 'NONE'
   const sheetQuestions = logSheet.sheetFieldDefinitions ?? []
   const sheetAnswers = logSheet.sheetFormData ?? {}
   const hasAnythingToAnswer = entries.length > 0 || sheetQuestions.length > 0
@@ -1386,8 +1425,8 @@ export function LogSheetFillPage() {
         </Box>
       )}
 
-      {/* NFC scan bar */}
-      {canEdit && (
+      {/* Scan bar — whichever kind this round asks for, or none at all */}
+      {canEdit && !noScanRequired && (
         <Card
           variant="outlined"
           sx={{
@@ -1409,6 +1448,10 @@ export function LogSheetFillPage() {
               >
                 {isScanning
                   ? t.nfc.waitingForTag
+                  : scanMode === 'QR'
+                  ? 'برای ویرایش Asset، برچسب QR آن را اسکن کنید'
+                  : scanMode === 'NFC_OR_QR'
+                  ? 'برای ویرایش Asset، تگ NFC یا برچسب QR آن را اسکن کنید'
                   : isSupported
                   ? 'برای ویرایش Asset، دکمه اسکن NFC را بزنید'
                   : t.nfc.notSupported}
@@ -1418,7 +1461,7 @@ export function LogSheetFillPage() {
               )}
             </Box>
 
-            {isSupported && (
+            {nfcAllowed && isSupported && (
               <Button
                 type="button"
                 variant={isScanning ? 'contained' : 'outlined'}
@@ -1430,6 +1473,36 @@ export function LogSheetFillPage() {
               >
                 {isScanning ? t.nfc.stopScan : t.nfc.startScan}
               </Button>
+            )}
+
+            {/* The QR half. Offered only when this round allows it, and only when the device can
+                actually decode one — a button that opens a camera and never reads anything is
+                worse than no button, because the operator cannot tell it from a bad sticker. */}
+            {qrAllowed && qrSupport === 'available' && (
+              <Button
+                type="button"
+                variant="outlined"
+                color="primary"
+                fullWidth
+                startIcon={<QrCodeScannerIcon />}
+                onClick={() => {
+                  setNfcError(null)
+                  setNFCError(null)
+                  if (isScanning) stopScan()
+                  setQrScanOpen(true)
+                }}
+                sx={{ mb: 1.5, height: 44 }}
+              >
+                اسکن QR Code
+              </Button>
+            )}
+
+            {qrAllowed && qrSupport !== 'available' && (
+              <Alert severity="warning" sx={{ mb: 1.5 }}>
+                {qrSupport === 'noDecoder'
+                  ? 'این دستگاه از خواندن QR Code پشتیبانی نمی‌کند. شناسه را دستی وارد کنید یا از دستگاه دیگری استفاده کنید.'
+                  : 'دوربینی برای اسکن QR Code در دسترس نیست. دسترسی دوربین را بررسی کنید.'}
+              </Alert>
             )}
 
             {allowManualEntry ? (
@@ -1531,6 +1604,21 @@ export function LogSheetFillPage() {
         />
       )}
 
+      {/* A round that asks for no scan says so, once. Without this the missing scan card
+          reads as a tablet whose NFC has stopped working — and an operator who concludes that
+          goes looking for a fault instead of doing the round. */}
+      {canEdit && noScanRequired && entries.length > 0 && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          این کار اسکن نیاز ندارد — روی هر دارایی بزنید و مقادیر را ثبت کنید.
+        </Alert>
+      )}
+
+      <QrScanDialog
+        open={qrScanOpen}
+        onDetected={handleQrDetected}
+        onClose={() => setQrScanOpen(false)}
+      />
+
       {/* Asset status list */}
       {/* An empty list only means "could not load" when the round is SUPPOSED to have assets.
           A round made of questions alone has none by design, and telling its operator to go
@@ -1552,7 +1640,13 @@ export function LogSheetFillPage() {
             <Card
               key={entry.assetId}
               variant="outlined"
-              onClick={() => openEntryForView(entry)}
+              // On a round that requires no scan there is nothing standing between the
+              // operator and the form, so tapping the row opens it for editing. Every other
+              // mode opens it read-only: the scan is what grants the edit, and a tap that
+              // bypassed it would make the requirement decorative.
+              onClick={() =>
+                canEdit && noScanRequired ? handleOpenManualEntry(entry) : openEntryForView(entry)
+              }
               sx={{
                 cursor: 'pointer',
                 transition: 'box-shadow 0.15s',

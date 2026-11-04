@@ -109,8 +109,71 @@ Keep this distinction if you add outcomes to `matchLogSheetEntryByTag`.
 
 The operator files an **NFC fault report**, which unlocks manual entry for that asset. The
 report is what turns "the scan was bypassed" from a silent hole in the data into a maintenance
-ticket. `entry_source` records `PWA_NFC` or `PWA_MANUAL`, and the data-quality report is built
-on the distinction.
+ticket. `entry_source` records `PWA_NFC`, `PWA_QR` or `PWA_MANUAL`, and the data-quality report
+is built on the distinction.
+
+---
+
+# QR — the other way to identify an asset
+
+**Code:** [`src/services/scan/qrScanner.ts`](../src/services/scan/qrScanner.ts),
+[`src/components/logsheet/QrScanDialog.tsx`](../src/components/logsheet/QrScanDialog.tsx)
+
+## Which rounds offer it
+
+`logSheet.scanMode`, frozen by the server when the round was raised and arriving inside
+`bundle.sheet` with no contract change: `NFC` (the default and what every round was before this
+existed), `QR`, `NFC_OR_QR`, or `NONE`. The fill page offers the button(s) that round allows and
+no others; on `NONE` there is no scan bar at all and tapping an asset row opens its form.
+
+Absent means `NFC` — a bundle from an older server carries no such field, and reading it as
+anything else would change how a historic round is walked.
+
+## The payload is the tag id, verbatim
+
+A QR code carries exactly what Record 1 of the tag would have carried, so
+`matchLogSheetEntryByTag` is reused **unchanged** and there is no second identifier space to keep
+in step. The scanner trims the decoded string and does nothing else to it: no URL unwrapping, no
+prefix stripping. A transformation invented here would mean a sticker printed from the panel and
+one printed from a label machine resolving differently, and the one that failed would be the one
+already in the plant.
+
+## There is no strict mode for QR, and that is correct
+
+`nfcStrictSerialMatch` compares the chip's hardware UID with the one recorded on the asset. **A
+QR code has no hardware UID** — it is a printed string, clonable by photocopier. The check is
+therefore not applied to a QR read rather than failing it: applying it would reject every QR
+read on a plant that has strict mode on, which is how the two modes would silently become
+incompatible. A site that needs clone-resistance chooses `NFC` for that round.
+
+This is why `filledVia` keeps `'qr'` apart from `'nfc'` all the way to the server: the two carry
+different evidence, and a column that merged them would have every report overstate what half
+its rows prove.
+
+## The decoder, and the device that does not have one
+
+`BarcodeDetector` — a platform API, present in Chrome on Android since 83 and therefore in a
+current Android System WebView. No JavaScript decoder is bundled: it would add a dependency and
+~40 KB to every tablet in order to re-implement, more slowly, something the platform does in
+native code — and on a tablet holding a live camera stream, slower is the difference between a
+scan that lands and one the operator gives up on.
+
+What that costs is a device without the API getting **no QR scanning at all**, so
+`qrScanSupport()` reports `noDecoder` / `noCamera` / `available` as a first-class state and the
+page says so where the button would have been. Opening a camera that reads nothing would be
+worse, because the operator could not tell it from a bad sticker.
+
+`startQrScan` prefers a Capacitor plugin named `Qr` if a build registers one, exactly as
+`nativeNfc` does. None is written today — a native decoder means an ML Kit or ZXing Gradle
+dependency — and that door is the packaged app's fallback if the WebView turns out to lack
+`BarcodeDetector`.
+
+## The camera is stopped by the dialog that started it
+
+`QrScanDialog` owns the session and stops it on close, on a successful read, and on unmount. A
+track that outlives its dialog keeps the sensor powered and the indicator light on; on a tablet
+that stays on one screen for a whole shift that is both a battery cost and something an operator
+reasonably reads as the app watching them.
 
 ---
 

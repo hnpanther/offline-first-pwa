@@ -119,6 +119,28 @@ describe('mapServerEntryToLocal', () => {
     expect(local.filledVia).toBe('manual')
   })
 
+  it('preserves filledVia="qr" too — a QR read is a read, not a typed entry', () => {
+    // The pair became a trio when a round gained the ability to be identified by a sticker.
+    // Losing this the way `manual` was once lost would relabel every QR reading as an NFC scan
+    // after any bundle refresh, which would have the sheet claim evidence it does not have: a
+    // chip read can be checked against a hardware serial and a QR read cannot.
+    const existing: LogSheetEntryData = {
+      assetId: '42',
+      assetName: 'Pump A',
+      subFunctionCode: 'SF-01',
+      subFunctionTag: 'T1',
+      classId: '7',
+      formData: { temp: 25 },
+      createdAt: 1_600_000_000_000,
+      updatedAt: 1_600_000_100_000,
+      filledVia: 'qr'
+    }
+
+    const local = mapServerEntryToLocal(serverEntry, existing)
+
+    expect(local.filledVia).toBe('qr')
+  })
+
   it('drops filledVia when preserveLocal is false (server form data wins)', () => {
     const existing: LogSheetEntryData = {
       assetId: '42',

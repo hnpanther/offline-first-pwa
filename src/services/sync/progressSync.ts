@@ -12,6 +12,7 @@ import {
   isRevokedAssignment
 } from '@/utils/logSheetStatus'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
+import { ENTRY_SOURCE_BY_FILLED_VIA } from '@/services/sync/logSheetSync'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, LogSheetEntryData } from '@/types'
 
@@ -146,7 +147,15 @@ function toProgressItem(sheet: LogSheet, entries: LogSheetEntryData[]): LogSheet
       formData: e.formData,
       ...(e.createdAt != null ? { createdAt: e.createdAt } : {}),
       ...(e.updatedAt != null ? { updatedAt: e.updatedAt } : {}),
-      ...(e.filledVia != null ? { manualEntry: e.filledVia === 'manual' } : {})
+      // Same pair as the submit payload, and for the same reason — see
+      // `ENTRY_SOURCE_BY_FILLED_VIA`. A progress push records readings too, so a round reported
+      // live and one submitted at the end must describe their channel identically.
+      ...(e.filledVia != null
+        ? {
+            manualEntry: e.filledVia === 'manual',
+            entrySource: ENTRY_SOURCE_BY_FILLED_VIA[e.filledVia]
+          }
+        : {})
     })),
     // Whole, not a delta: one small map per sheet. Sent only when this device has an opinion
     // about it, so a push that carries nothing of its own cannot overwrite what the panel

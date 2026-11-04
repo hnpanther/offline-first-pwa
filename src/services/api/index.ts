@@ -15,6 +15,7 @@ import { apiClient, ApiError } from './client'
 import type {
   AssetClass,
   AssetEntry,
+  AssetScanMode,
   Location,
   PlantSystem,
   MainFunction,
@@ -87,6 +88,12 @@ export interface ServerLogSheet {
    * serialises the whole sheet entity, so both this and `sheetFormData` have travelled since
    * the server grew them. Declaring them is what lets the merge copy them onto the stored row.
    */
+  /**
+   * How this round identifies its assets — `NFC`, `QR`, `NFC_OR_QR` or `NONE`, frozen by the
+   * server when the round was raised. Absent from a server older than that column, which the
+   * device reads as `NFC`.
+   */
+  scanMode?: AssetScanMode | null
   sheetFieldDefinitionsSnapshot?: FieldDefinition[] | null
   /** The answers to those questions, keyed by field key. Null when nobody has answered. */
   sheetFormData?: Record<string, unknown> | null
@@ -406,6 +413,14 @@ export interface ApiLogSheetEntry {
   updatedAt?: number
   /** True when this entry was filled without an NFC scan (manual / fault-report fallback). */
   manualEntry?: boolean
+  /**
+   * Which channel captured this reading: `PWA_NFC`, `PWA_QR` or `PWA_MANUAL`.
+   *
+   * Sent beside `manualEntry` rather than instead of it. A server that predates this field reads
+   * the boolean and behaves exactly as before; a current one prefers this, because a boolean
+   * cannot tell a QR scan from a tag scan and the two carry different evidence.
+   */
+  entrySource?: string
 }
 
 /** Payload shape expected by POST /api/log-sheets/batch */

@@ -76,7 +76,7 @@ export function applyEntrySaveTimestamps(
 export function applyOperatorEntrySave(
   entry: LogSheetEntryData,
   formData: Record<string, unknown>,
-  filledVia: 'nfc' | 'manual',
+  filledVia: 'nfc' | 'qr' | 'manual',
   now: number = Date.now()
 ): LogSheetEntryData {
   return {

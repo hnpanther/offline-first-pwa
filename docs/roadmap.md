@@ -708,11 +708,39 @@ field.
 
 ---
 
-# 12. QR beside NFC on the device
+# 12. QR beside NFC on the device — **built**
 
 *The device half of the backend's [roadmap §25](../../JavaProject/backend-offline-first/docs/roadmap.md).
 Raised as: "a template should be able to allow NFC, or QR, or either of the two — with NFC the
 default."*
+
+> **Status. Built.** `scanMode` arrives on the sheet, the fill page offers the button(s) that
+> round allows, `QrScanDialog` drives the camera, and a QR reading is labelled `PWA_QR` all the
+> way to the server. Four things differ from the plan below, and each is worth reading before
+> acting on the rest of this section:
+>
+> - **There is a fourth mode: `NONE`.** Not in the original sketch, and it turned out to be the
+>   one a plant asks for first — a position nobody will ever label, or a questions-only round
+>   with no asset to scan at all. On such a round the asset row opens the form directly and the
+>   reading is recorded as manual, which is what it is. A round with no assets is forced to it
+>   by the server, whatever the form said.
+> - **No site-wide `qrEnabled`, and none is planned.** The sketch wanted one AND-ed with the
+>   sheet's value so a site with no printed labels could switch the control off everywhere. The
+>   per-round setting already is that switch, at the resolution the decision is actually made:
+>   labels are printed per area, not per plant. A second global flag would be a second place to
+>   look when a button fails to appear.
+> - **`BarcodeDetector`, with no bundled decoder.** The table below weighs the two; the platform
+>   API won on size and on speed-with-a-live-camera. What it costs is a device without the API
+>   getting no QR scanning at all, so `qrScanSupport()` reports that as a first-class state and
+>   the page says so where the button would have been, instead of opening a camera that reads
+>   nothing. If field tablets turn out to lack it, a bundled decoder is a drop-in behind the same
+>   function.
+> - **The native door is open and unused.** `startQrScan` prefers a Capacitor plugin named `Qr`
+>   if a build registers one, exactly as `nativeNfc` does. None is written: a native decoder
+>   means an ML Kit or ZXing Gradle dependency, and adding one that cannot be fetched, built or
+>   tested here would be shipping an unverified APK path. It is the packaged app's fallback if
+>   the WebView turns out to lack `BarcodeDetector`.
+>
 
 **Read the backend's §25 first** for the model (`scan_methods` on the template, frozen onto the
 sheet) and for the one fact that governs everything: **a QR code has no hardware serial**, so
@@ -811,3 +839,90 @@ split pointless.
 Positions that cannot take a chip — too hot, too small, outdoors, behind glass — or tablets
 without NFC hardware. Both are facts about equipment rather than preferences, and either one makes
 this the difference between a round that can be walked and one that cannot.
+
+---
+
+# 13. A page where an administrator can test the device's hardware
+
+*Raised as: "a page in the PWA, admin only, to test the camera, NFC and GPS."*
+
+## What happens today
+
+Nothing — and the gap shows up at the worst moment. An operator says «اسکن کار نمی‌کند» and
+there is no way to tell, on that tablet, whether NFC is switched off in Android settings, the
+WebView lacks Web NFC, camera permission was denied six months ago, or location is off. Every
+one of those produces the same thing in the field: a button that does nothing useful, and a
+support call that begins by guessing.
+
+The pieces are all already written and already feature-detect: `useNFC` and `nativeNfc`,
+`qrScanSupport()` plus `startQrScan`, `geolocation.ts`, and `mediaPermissions.ts`. What is
+missing is one screen that *asks all of them at once* and shows the answers side by side.
+
+## The shape
+
+A route under the existing settings area, gated the way the rest of the admin-only UI is gated —
+a permission the session carries, not a role code (the backend's `security.md` is explicit about
+why). Four rows, each with a live state and a «تست» button:
+
+| Row | Checks | Reports |
+|---|---|---|
+| NFC | `NDEFReader` present / native plugin present / neither | available, and the first tag it reads with its record-1 payload and hardware serial |
+| Camera + QR | `qrScanSupport()`, then an actual scan | `noDecoder` vs `noCamera` vs a decoded payload |
+| GPS | permission state, then one fix | accuracy in metres and how long the fix took |
+| Storage | the quota helpers that already exist | used / available, and whether the browser is in the «low» state the attachment capture refuses in |
+
+**It must report rather than fix.** A page that quietly asks for every permission on load teaches
+an operator to press «رد». Each row asks only when its own button is pressed.
+
+**Show the raw answer, not a verdict.** «NFC در دسترس نیست» sends somebody to the wrong place
+half the time; «`NDEFReader` تعریف نشده — این WebView از Web NFC پشتیبانی نمی‌کند» names what to
+do about it. The reader of this page is an administrator standing next to the tablet.
+
+## What would make it urgent
+
+A fleet large enough that a support call costs a site visit, or the first time a model of tablet
+turns out to differ from the ones the system was built on — which is exactly when nobody can
+tell whether the problem is the hardware, the build, or a setting somebody changed.
+
+---
+
+# 14. The round's own answers say, in the form, that they are not saved yet
+
+*Raised as: "above the save button write that these will not be sent unless saved, and when
+they are unsaved say so — in orange."*
+
+## What happens today
+
+`SheetQuestionsCard` has its own save button, deliberately: one small save per section means a
+closed app costs a field rather than an afternoon. But the consequence of **not** pressing it is
+invisible. The answers sit in a `react-hook-form` state that nothing persists, so closing the
+round — or letting the tablet sleep until the app is evicted — loses them silently. The operator
+has no reason to suspect it: every other field on the page belongs to a dialog that saves when
+it closes.
+
+This is the one place in the app where typing into a visible form and walking away loses the
+typing.
+
+## The shape
+
+Two additions, both inside that card:
+
+- **A line above the button**, always: «تا وقتی ذخیره نکنید، این پاسخ‌ها به سرور ارسال نمی‌شوند.»
+- **A warning while the form is dirty**, in `warning.main`: «این پاسخ‌ها هنوز ذخیره نشده‌اند.»
+  `useForm` already tracks `formState.isDirty`, so this is a read of state that exists, not a
+  second source of truth about whether there is unsaved work.
+
+**Dirty, not "different from the server".** Comparing against `values` would call a re-typed
+identical answer clean, and the operator who retyped it would be told there is nothing to save
+while the button still has something to do.
+
+**A `beforeunload` / navigation guard is NOT part of this**, and that is a decision rather than
+an omission: a tablet navigating away mid-round is ordinary (an NFC scan opens a dialog; the
+operator checks the asset list), and a confirm dialog on each of those trains people to dismiss
+it. The warning is the honest version — it says what is true, and leaves the operator to act.
+
+## What would make it urgent
+
+The first report of a round whose questions came back blank on the panel while the operator is
+certain they answered them. By then the data is gone and nobody can prove what happened, which
+is the shape of bug this warning exists to make impossible to have.

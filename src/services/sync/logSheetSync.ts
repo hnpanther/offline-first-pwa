@@ -227,6 +227,9 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     templateName: serverSheet.templateName ?? '',
     scopeSummary: serverSheet.scopeSummary ?? '',
     scopeDisplayLabel,
+    // Absent from an older server means NFC, which the fill page reads as the default anyway —
+    // stored as undefined rather than invented, so the two cases stay distinguishable.
+    scanMode: serverSheet.scanMode ?? undefined,
     operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
     operatorName: serverSheet.operatorName ?? fallbackOperatorName,
     assigneeUserId:
@@ -260,6 +263,11 @@ function serverSheetMetadataPatch(
     assignmentType: serverSheet.assignmentType ?? existing.assignmentType,
     dueAt: serverSheet.dueAt ?? existing.dueAt,
     scopeSummary: serverSheet.scopeSummary ?? existing.scopeSummary,
+    // Server-authoritative and frozen on the sheet, so this follows the server the way `dueAt`
+    // does. `?? existing` rather than `?? 'NFC'`: a payload from an older server carries no such
+    // field, and overwriting a mode this device was already told with the default would turn a
+    // QR round back into an NFC one on the next refresh.
+    scanMode: serverSheet.scanMode ?? existing.scanMode,
     templateName: serverSheet.templateName ?? existing.templateName,
     operationalUnitId: toIdString(serverSheet.operationalUnitId) || existing.operationalUnitId,
     templateId: toIdString(serverSheet.templateId) || existing.templateId,
@@ -305,6 +313,7 @@ export async function ensureLocalLogSheet(
       templateId: toIdString(serverSheet.templateId),
       templateName: serverSheet.templateName ?? '',
       scopeSummary: serverSheet.scopeSummary ?? '',
+      scanMode: serverSheet.scanMode ?? undefined,
       operationalUnitId: toIdString(serverSheet.operationalUnitId) || undefined,
       operatorName: serverSheet.operatorName ?? fallbackOperatorName,
       assigneeUserId:
@@ -461,6 +470,19 @@ export function shouldMarkDraftRevokedForMissingInbox(
   )
 }
 
+/**
+ * The server's name for each way a reading can be captured on a device.
+ *
+ * One map rather than a conditional at the call site, because the submit payload and the
+ * progress payload both need it and a second copy is where one of them would quietly stop
+ * reporting QR.
+ */
+export const ENTRY_SOURCE_BY_FILLED_VIA: Record<'nfc' | 'qr' | 'manual', string> = {
+  nfc: 'PWA_NFC',
+  qr: 'PWA_QR',
+  manual: 'PWA_MANUAL'
+}
+
 export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogSheetBatchItem {
   const serverId = sheet.serverId
   if (!serverId) {
@@ -490,7 +512,16 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
       formData: e.formData,
       ...(e.createdAt != null ? { createdAt: e.createdAt } : {}),
       ...(e.updatedAt != null ? { updatedAt: e.updatedAt } : {}),
-      ...(e.filledVia != null ? { manualEntry: e.filledVia === 'manual' } : {})
+      // Both, on purpose. `manualEntry` is the field every server since the beginning reads,
+      // and dropping it would make an older server label a QR reading as a scan it cannot
+      // describe. `entrySource` is the one a current server prefers, and it is the only one
+      // that can say WHICH kind of scan — a boolean cannot.
+      ...(e.filledVia != null
+        ? {
+            manualEntry: e.filledVia === 'manual',
+            entrySource: ENTRY_SOURCE_BY_FILLED_VIA[e.filledVia]
+          }
+        : {})
     })),
     submittedAt: sheet.submittedAt,
     createdAt: sheet.createdAt,
