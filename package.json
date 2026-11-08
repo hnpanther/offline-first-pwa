@@ -40,11 +40,10 @@
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.53.2",
     "react-i18next": "^15.1.0",
-    "react-router-dom": "^6.30.6",
+    "react-router-dom": "^7.18.5",
     "stylis-plugin-rtl": "^2.1.1",
     "uuid": "^11.0.3",
     "vazirmatn": "^33.0.3",
-    "zod": "^3.23.8",
     "zustand": "^5.0.1"
   },
   "devDependencies": {

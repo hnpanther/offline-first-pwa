@@ -19,6 +19,7 @@ import FactCheckIcon from '@mui/icons-material/FactCheck'
 import AssignmentIcon from '@mui/icons-material/Assignment'
 import HistoryIcon from '@mui/icons-material/History'
 import NfcIcon from '@mui/icons-material/Nfc'
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart'
 import LogoutIcon from '@mui/icons-material/Logout'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
@@ -179,6 +180,21 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               <ListItemText
                 primary={t.nav.nfcInspect}
                 primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isSelected('/nfc-inspect') ? 600 : 400 }}
+              />
+            </ListItemButton>
+
+            {/* بررسی سخت‌افزار دستگاه — فقط ادمین، و فقط روی همین دستگاه */}
+            <ListItemButton
+              selected={isSelected('/device-check')}
+              onClick={() => handleNav('/device-check')}
+              sx={groupItemSx(isSelected('/device-check'))}
+            >
+              <ListItemIcon sx={{ minWidth: 40 }}>
+                <MonitorHeartIcon color={isSelected('/device-check') ? 'inherit' : 'action'} />
+              </ListItemIcon>
+              <ListItemText
+                primary={t.nav.deviceCheck}
+                primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isSelected('/device-check') ? 600 : 400 }}
               />
             </ListItemButton>
 

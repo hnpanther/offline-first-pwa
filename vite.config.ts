@@ -175,7 +175,11 @@ export default defineConfig(({ mode, command }) => {
               '@emotion/cache'
             ],
             'vendor-storage': ['dexie', 'zustand'],
-            'vendor-forms': ['react-hook-form', 'zod', '@hookform/resolvers']
+            // `zod` was removed: it was a direct dependency that no app file imported, and it
+            // carried GHSA-mrhx-c7xc-m3w5 (memory exhaustion on oversized constrained
+            // collections). Deleting it fixed the advisory outright rather than by upgrading
+            // across a major version for code that did not exist.
+            'vendor-forms': ['react-hook-form', '@hookform/resolvers']
           }
         }
       }

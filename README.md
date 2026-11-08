@@ -91,6 +91,14 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
+- **Device hardware check (admin)** — «بررسی سخت‌افزار دستگاه» tests NFC, camera, video,
+  microphone, QR/barcode scanning, GPS and storage **on the tablet itself**, with no server
+  involved. It reports rather than fixes, asks for each permission only when its own button is
+  pressed, and shows the raw answer (`NDEFReader تعریف نشده`) instead of a verdict — so an
+  administrator standing next to a tablet can tell a missing permission from a missing API
+- **Scan a value into a field** — a `text` or `number` field whose definition allows it shows
+  small NFC / camera icons inside the input; the scanned payload becomes the field's value and
+  goes through that field's own validation unchanged
 
 ---
 

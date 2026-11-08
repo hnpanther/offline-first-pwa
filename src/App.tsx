@@ -14,6 +14,7 @@ import { SettingsPage } from '@/pages/SettingsPage'
 import { LogSheetListPage } from '@/pages/LogSheetListPage'
 import { LogSheetFillPage } from '@/pages/LogSheetFillPage'
 import { NfcInspectPage } from '@/pages/NfcInspectPage'
+import { DeviceCheckPage } from '@/pages/DeviceCheckPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { useAuthInit } from '@/hooks/useAuth'
 
@@ -57,6 +58,10 @@ export function App() {
                   <Route path=":localId" element={<LogSheetFillPage />} />
                 </Route>
                 <Route path="nfc-inspect" element={<PermissionRoute allow={canManageNfcSerial}><NfcInspectPage /></PermissionRoute>} />
+                {/* Device-only: it reads this tablet's own capabilities and talks to no
+                    server, so it is gated on the same admin reach as the inspector beside
+                    it rather than on a permission of its own. */}
+                <Route path="device-check" element={<PermissionRoute allow={canManageNfcSerial}><DeviceCheckPage /></PermissionRoute>} />
                 <Route path="settings" element={<PermissionRoute allow={hasPlantWideScope}><SettingsPage /></PermissionRoute>} />
                 {/*
                   Master data, asset registry and log-sheet templates are managed in the web

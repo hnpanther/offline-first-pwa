@@ -24,6 +24,7 @@ import type { Control, FieldErrors, RegisterOptions } from 'react-hook-form'
 import { DynamicFormField } from './DynamicFormField'
 import { AttachmentFieldInput } from './AttachmentFieldInput'
 import { LocationFieldInput } from './LocationFieldInput'
+import { scanFieldConfig } from '@/services/scan/scanFieldFill'
 import { formatCoordinate, parseCoordinate } from '@/services/device/geolocation'
 import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
 import type { FieldDefinition } from '@/types/sync'
@@ -387,6 +388,11 @@ export function DynamicClassForm({
             // meant a select was handed no validation at all, so nothing coloured until
             // the entry was saved and reopened through the read-only path.
             rangeValidation={supportsSeverity(def.dataType) ? def.validation : undefined}
+            // Passed in rather than wrapped around: the scan icons belong inside the input so
+            // the field keeps its label and its validation. An earlier version wrapped the
+            // whole thing in a second Controller for the same name, which registered the field
+            // twice and left it with no label at all.
+            scan={readOnly ? undefined : (scanFieldConfig(def) ?? undefined)}
           />
         )
       })}

@@ -6,11 +6,14 @@ import {
   Button,
   Card,
   CardContent,
+  Chip,
   CircularProgress,
   Stack,
   Typography
 } from '@mui/material'
 import SaveIcon from '@mui/icons-material/Save'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { formatJalaliDateTime } from '@/utils/formatDate'
@@ -81,7 +84,7 @@ export function SheetQuestionsCard({
     control,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting }
+    formState: { errors, isSubmitting, isDirty }
   } = useForm<Record<string, unknown>>({ defaultValues: values })
 
   // Re-seed when the stored answers change under the form — a bundle merge while the round is
@@ -106,6 +109,30 @@ export function SheetQuestionsCard({
           <Typography variant="subtitle2" fontWeight={700} sx={{ flexGrow: 1 }}>
             پرسش‌های این کار
           </Typography>
+          {/* Saved / unsaved, as a chip rather than a timestamp alone.
+              This is the one place in the app where typing into a visible form and walking
+              away loses the typing: these answers live in react-hook-form state until the
+              button below is pressed, and every other field on the page belongs to a dialog
+              that saves when it closes. `isDirty` rather than a comparison with `values` —
+              re-typing the same answer still leaves the button something to do. */}
+          {!readOnly && isDirty && (
+            <Chip
+              size="small"
+              color="warning"
+              variant="outlined"
+              icon={<ErrorOutlineIcon fontSize="small" />}
+              label="ذخیره نشده"
+            />
+          )}
+          {!readOnly && !isDirty && savedAt != null && (
+            <Chip
+              size="small"
+              color="success"
+              variant="outlined"
+              icon={<CheckCircleOutlineIcon fontSize="small" />}
+              label="ذخیره شد"
+            />
+          )}
           {savedAt != null && (
             <Typography variant="caption" color="text.secondary">
               {formatJalaliDateTime(savedAt)}
@@ -135,16 +162,25 @@ export function SheetQuestionsCard({
           />
 
           {!readOnly && (
-            <Button
-              type="submit"
-              variant="outlined"
-              fullWidth
-              sx={{ mt: 2 }}
-              disabled={isSubmitting}
-              startIcon={isSubmitting ? <CircularProgress size={16} /> : <SaveIcon />}
-            >
-              ذخیره پرسش‌ها
-            </Button>
+            <>
+              <Typography
+                variant="caption"
+                color={isDirty ? 'warning.main' : 'text.secondary'}
+                sx={{ display: 'block', mt: 2, fontWeight: isDirty ? 600 : 400 }}
+              >
+                تا وقتی ذخیره نکنید، این پاسخ‌ها به سرور ارسال نمی‌شوند.
+              </Typography>
+              <Button
+                type="submit"
+                variant={isDirty ? 'contained' : 'outlined'}
+                fullWidth
+                sx={{ mt: 0.75 }}
+                disabled={isSubmitting}
+                startIcon={isSubmitting ? <CircularProgress size={16} /> : <SaveIcon />}
+              >
+                ذخیره پرسش‌ها
+              </Button>
+            </>
           )}
         </Box>
       </CardContent>

@@ -54,6 +54,7 @@ import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { SheetQuestionsCard } from '@/components/logsheet/SheetQuestionsCard'
 import { QrScanDialog } from '@/components/logsheet/QrScanDialog'
 import { qrScanSupport } from '@/services/scan/qrScanner'
+import { offerTagToField, releaseFieldTagClaim } from '@/services/scan/nfcFieldCapture'
 import { useFieldDefinitions } from '@/hooks/useFieldDefinitions'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 import {
@@ -793,6 +794,10 @@ export function LogSheetFillPage() {
     setDialogEditable(false)
     setActiveEntryFilledVia(undefined)
     lastProcessedTag.current = null
+    // A field inside the dialog may have been waiting for a tag. The adornment releases its
+    // own claim on unmount, and this is the belt to that braces: a claim nobody releases
+    // leaves the page handing every later tag to a component that is gone.
+    releaseFieldTagClaim()
   }
 
   /**
@@ -831,6 +836,15 @@ export function LogSheetFillPage() {
   // Fill tag ID from NDEF record payload (not hardware UID), then open asset for edit
   useEffect(() => {
     if (!lastTag || !isScanning) return
+
+    // A field inside the open dialog may have asked for this tag — a nameplate serial, which
+    // is deliberately NOT an asset on this round. Without standing down here, the scan that
+    // just filled that field would also reach the matcher below and be reported as «این تگ در
+    // این Log Sheet وجود ندارد»: a correct read shown as an error.
+    if (offerTagToField(lastTag)) {
+      setLastScannedTag(null)
+      return
+    }
 
     const tagId = resolveNfcTagId(lastTag)
     if (!tagId) {
@@ -1213,7 +1227,13 @@ export function LogSheetFillPage() {
   // How THIS round identifies its assets, frozen by the server when it was raised. Absent
   // means NFC: every round raised before the column existed was an NFC round, and a bundle from
   // an older server carries no such field.
-  const scanMode = logSheet.scanMode ?? 'NFC'
+  // A round with no equipment has nothing to scan, whatever the column says — and until V12
+  // the column said NFC for every round raised before it, including the asset-less ones. The
+  // device decides this from the entries because that fact is true by construction: a sheet's
+  // entries are written when it is raised and nothing deletes them, so an empty list means the
+  // round never had equipment. Stale data on an un-upgraded server cannot put a scan card in
+  // front of an operator with nothing to point it at.
+  const scanMode = entries.length === 0 ? 'NONE' : (logSheet.scanMode ?? 'NFC')
   const nfcAllowed = scanMode === 'NFC' || scanMode === 'NFC_OR_QR'
   const qrAllowed = scanMode === 'QR' || scanMode === 'NFC_OR_QR'
   // Nothing to scan. The operator opens an asset from the list and the reading is recorded as

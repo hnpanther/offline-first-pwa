@@ -90,6 +90,27 @@ export interface FieldValidation {
    */
   warningOptions?: string[]
   dangerOptions?: string[]
+  /**
+   * How this `text` / `number` field may be filled from a label instead of typed.
+   *
+   * **Not the round's `scanMode`.** That one says how the operator reaches an *asset*; this says
+   * how one *question* may be answered on an asset they already have open. A round whose
+   * `scanMode` is `NONE` can still carry a field that wants a barcode, and a scan here must
+   * never run through `matchLogSheetEntryByTag` (it answers "which asset is this?" and would
+   * reject every correct nameplate read) nor change `filledVia`, which records how the entry
+   * was reached.
+   *
+   * Absent means the field is typed, which is every field that existed before this did.
+   * `manual` is **true unless explicitly false** — the safe direction, because a blob this
+   * build cannot read must still leave the operator a way to fill the form.
+   *
+   * Threaded through `FieldValidationSupport.build(...)` on the server, so unlike
+   * `allowNegative` below it survives an edit of the field.
+   */
+  scan?: {
+    sources?: Array<'NFC' | 'QR' | 'BARCODE'>
+    manual?: boolean
+  }
   /*
    * `allowNegative` used to live here. It is gone, and not just unused: the backend never had the
    * concept, the web panel could not set it, and `FieldValidationSupport.build(...)` rebuilds this

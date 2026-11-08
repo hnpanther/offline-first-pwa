@@ -14,6 +14,7 @@ import {
   InputAdornment,
   IconButton
 } from '@mui/material'
+import { useState } from 'react'
 import { Controller, useWatch, type Control, type RegisterOptions, type ControllerRenderProps } from 'react-hook-form'
 import type { FormField } from '@/types'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
@@ -31,6 +32,8 @@ import {
   type FieldValidationSeverity
 } from '@/utils/fieldValidation'
 import type { FieldValidation } from '@/types/sync'
+import type { ScanFieldConfig } from '@/services/scan/scanFieldFill'
+import { ScanFieldAdornment } from './ScanFieldAdornment'
 
 interface DynamicFormFieldProps {
   field: FormField
@@ -45,6 +48,14 @@ interface DynamicFormFieldProps {
   rules?: RegisterOptions
   /** Numeric warning/danger ranges from FieldDefinition.validation */
   rangeValidation?: FieldValidation
+  /**
+   * How this field may be read off a label instead of typed.
+   *
+   * Rendered as small icons **inside** the input, so the field keeps its label, helper text,
+   * severity colouring and validation — a scanned value is simply the value, arriving by a
+   * different route. Only `text` and `number` can carry one; every other branch ignores it.
+   */
+  scan?: ScanFieldConfig
 }
 
 /**
@@ -96,6 +107,8 @@ interface NumericFieldInputProps {
   error?: string
   rangeSeverity: FieldValidationSeverity
   helper: { text: string; color?: 'warning.main' | 'error.main' } | null
+  scan?: ScanFieldConfig
+  onScanError: (message: string | null) => void
 }
 
 function NumericFieldInput({
@@ -104,7 +117,9 @@ function NumericFieldInput({
   f,
   error,
   rangeSeverity,
-  helper
+  helper,
+  scan,
+  onScanError
 }: NumericFieldInputProps) {
   return (
     <TextField
@@ -140,11 +155,18 @@ function NumericFieldInput({
         dir: 'ltr',
         autoComplete: 'off'
       }}
+      // Scan-only means the keyboard is not the way in. The scan buttons stay live, because
+      // they are the only way in — disabling the whole control would make the field unfillable.
+      disabled={scan != null && !scan.manual}
       InputProps={{
-        // Every number field, unconditionally — see fieldValidation.ts. The keyboard this field
-        // asks for has no minus key, so without this button a negative reading is unrecordable.
         endAdornment: (
           <InputAdornment position="end">
+            {/* Composed, not replaced: the ± button is on every number field unconditionally
+                (see fieldValidation.ts) because the decimal keyboard has no minus key, so a
+                negative reading would otherwise be unrecordable. */}
+            {scan && (
+              <ScanFieldAdornment config={scan} onValue={f.onChange} onError={onScanError} />
+            )}
             <IconButton
               aria-label="تغییر علامت عدد"
               edge="end"
@@ -173,8 +195,17 @@ function NumericFieldInput({
   )
 }
 
-export function DynamicFormField({ field, control, error, rules, rangeValidation }: DynamicFormFieldProps) {
+export function DynamicFormField({
+  field,
+  control,
+  error,
+  rules,
+  rangeValidation,
+  scan
+}: DynamicFormFieldProps) {
   const label = field.required ? `${field.label} *` : field.label
+  // A failed read belongs beside the field it failed for, not in a toast that outlives it.
+  const [scanError, setScanError] = useState<string | null>(null)
   const options = normalizeFieldOptions(field.options)
   const effectiveRangeValidation = resolveRangeValidation(field, rangeValidation)
   // A choice carries severity too, so the watch has to cover it. Leaving the old
@@ -229,6 +260,8 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                 error={error}
                 rangeSeverity={rangeSeverity}
                 helper={helper}
+                scan={scan}
+                onScanError={setScanError}
               />
             </Box>
           )}
@@ -253,7 +286,25 @@ export function DynamicFormField({ field, control, error, rules, rangeValidation
                 rows={field.type === 'textarea' ? 3 : undefined}
                 placeholder={field.placeholder}
                 error={!!error || rangeSeverity === 'danger'}
-                helperText={helper?.text}
+                // Scan-only: the keyboard is not the way in, but the icons beside it are, so
+                // only the text entry is disabled and the field stays fillable.
+                disabled={scan != null && !scan.manual}
+                InputProps={
+                  scan
+                    ? {
+                        endAdornment: (
+                          <InputAdornment position="end">
+                            <ScanFieldAdornment
+                              config={scan}
+                              onValue={f.onChange}
+                              onError={setScanError}
+                            />
+                          </InputAdornment>
+                        )
+                      }
+                    : undefined
+                }
+                helperText={helper?.text ?? scanError ?? undefined}
                 FormHelperTextProps={
                   helper?.color
                     ? { sx: { color: helper.color, fontWeight: 600 } }

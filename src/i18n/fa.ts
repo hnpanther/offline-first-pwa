@@ -9,7 +9,8 @@ const fa = {
     logSheets: 'Log Sheet ها',
     logSheetActive: 'لاگ شیت‌های باز',
     logSheetHistory: 'سوابق لاگ شیت‌ها',
-    nfcInspect: 'بازرسی تگ NFC'
+    nfcInspect: 'بازرسی تگ NFC',
+    deviceCheck: 'بررسی سخت‌افزار دستگاه'
   },
   auth: {
     loginTitle: 'ورود به سیستم',

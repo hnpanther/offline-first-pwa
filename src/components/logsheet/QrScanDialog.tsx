@@ -99,8 +99,15 @@ export function QrScanDialog({ open, onDetected, onClose }: QrScanDialogProps) {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
               دوربین را روی برچسب QR دارایی بگیرید.
             </Typography>
+{/* Two elements, and they must stay two.
+
+                The video is a DOM node this component inserts by hand, so the element it goes
+                into has to be one React never renders children into — `containerRef`'s Box is
+                deliberately empty in JSX. Putting the spinner inside it crashed the whole app:
+                `replaceChildren` deleted the <CircularProgress> React had rendered there, and
+                React's next attempt to remove that child threw NotFoundError, which is an
+                unhandled render error and therefore a white screen. See AGENTS.md #169. */}
             <Box
-              ref={containerRef}
               sx={{
                 position: 'relative',
                 minHeight: 200,
@@ -108,10 +115,17 @@ export function QrScanDialog({ open, onDetected, onClose }: QrScanDialogProps) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 bgcolor: 'action.hover',
-                borderRadius: 1
+                borderRadius: 1,
+                overflow: 'hidden'
               }}
             >
-              {starting && <CircularProgress size={28} />}
+              <Box ref={containerRef} sx={{ width: '100%', display: 'flex' }} />
+              {starting && (
+                <CircularProgress
+                  size={28}
+                  sx={{ position: 'absolute', top: '50%', left: '50%', mt: '-14px', ml: '-14px' }}
+                />
+              )}
             </Box>
           </>
         )}
