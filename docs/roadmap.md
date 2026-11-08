@@ -729,12 +729,15 @@ default."*
 >   per-round setting already is that switch, at the resolution the decision is actually made:
 >   labels are printed per area, not per plant. A second global flag would be a second place to
 >   look when a button fails to appear.
-> - **`BarcodeDetector`, with no bundled decoder.** The table below weighs the two; the platform
->   API won on size and on speed-with-a-live-camera. What it costs is a device without the API
->   getting no QR scanning at all, so `qrScanSupport()` reports that as a first-class state and
->   the page says so where the button would have been, instead of opening a camera that reads
->   nothing. If field tablets turn out to lack it, a bundled decoder is a drop-in behind the same
->   function.
+> - **Both decoders ship, and the reason is a measurement.** This first went out on
+>   `BarcodeDetector` alone, on the argument below that the platform API wins on size and on
+>   speed with a live camera. It does — but it is **not present everywhere**: a current Chromium
+>   browser on Windows reports `window.BarcodeDetector === undefined`, because Shape Detection
+>   ships on Android and macOS rather than on every Chromium platform. Betting the feature on it
+>   meant QR silently not working on whatever the plant buys. `jsqr` is now the fallback, a
+>   **dynamic import in its own 130 KB / 47 KB-gzipped chunk**, so a device with the platform API
+>   never downloads it and a device without one still has it offline (workbox precaches every
+>   chunk). The argument below was right about cost and wrong about availability.
 > - **The native door is open and unused.** `startQrScan` prefers a Capacitor plugin named `Qr`
 >   if a build registers one, exactly as `nativeNfc` does. None is written: a native decoder
 >   means an ML Kit or ZXing Gradle dependency, and adding one that cannot be fetched, built or

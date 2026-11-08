@@ -1499,9 +1499,8 @@ export function LogSheetFillPage() {
 
             {qrAllowed && qrSupport !== 'available' && (
               <Alert severity="warning" sx={{ mb: 1.5 }}>
-                {qrSupport === 'noDecoder'
-                  ? 'این دستگاه از خواندن QR Code پشتیبانی نمی‌کند. شناسه را دستی وارد کنید یا از دستگاه دیگری استفاده کنید.'
-                  : 'دوربینی برای اسکن QR Code در دسترس نیست. دسترسی دوربین را بررسی کنید.'}
+                دوربینی برای اسکن QR Code در دسترس نیست. دسترسی دوربین را بررسی کنید یا شناسه را
+                دستی وارد کنید.
               </Alert>
             )}
 

@@ -74,6 +74,13 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Offline-first** — work continues without network; data lives in IndexedDB on the device
 - **PWA** — installable on Android tablets; app shell cached by Workbox
 - **NFC tag scanning** — Web NFC on Android Chrome; manual tag entry for supervisors / senior operators
+- **QR scanning, where the round asks for it** — each round carries a `scanMode` (`NFC`, `QR`,
+  `NFC_OR_QR`, `NONE`) frozen by the server, and the fill page offers exactly the buttons that
+  round allows. A QR label carries the same value the tag would, so nothing needs a second
+  identifier. Decoding prefers the platform's `BarcodeDetector` and falls back to a bundled
+  `jsqr` chunk where it is absent — measured, not assumed: a current Chromium on Windows has no
+  `BarcodeDetector`. A `NONE` round needs no scan at all: the operator opens the asset and
+  records the reading
 - **Log sheet inbox (kartabl)** — assigned work, pickup pool, supervisor team view
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
@@ -135,6 +142,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 | Local storage | Dexie 4 (IndexedDB), schema version **1** (single version) |
 | Global state | Zustand |
 | Forms | React Hook Form |
+| QR decoding | `BarcodeDetector` where the platform has it, else `jsqr` — a dynamic import in its own chunk (130 KB raw / 47 KB gzipped), precached so it still works offline |
 | Routing | React Router v6 |
 | Font | Vazirmatn (self-hosted) |
 | i18n | Custom module `src/i18n/` + `fa.ts` (`i18next` is listed in `package.json` but not used in app code) |

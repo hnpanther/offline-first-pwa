@@ -1,19 +1,26 @@
 /**
  * Reading a QR code with the device's camera.
  *
- * <h2>Why there is no QR library in this bundle</h2>
+ * <h2>Two decoders, and why both are here</h2>
  *
- * Decoding a QR code is `BarcodeDetector`, a platform API present in Chrome on Android since 83
- * and therefore in the Android System WebView the packaged app runs in. Shipping a JavaScript
- * decoder beside it would add a dependency, a build step and ~40 KB to every tablet in order to
- * re-implement something the platform already does in native code — and do it slower, which on a
- * field tablet holding a camera stream is the difference between a scan that lands and one the
- * operator gives up on.
+ * `BarcodeDetector` is a platform API that decodes in native code. Where it exists it is the
+ * right answer by a wide margin: on a tablet holding a live camera stream, decode speed is the
+ * difference between a scan that lands and one the operator gives up on.
  *
- * What that trade costs is honesty about the gap: a device without the API gets **no QR
- * scanning at all**, so this module reports that as a first-class state rather than failing at
- * the moment the operator presses the button. The fallback is the one that already exists —
- * typing the id, under the same rules as the NFC fault path.
+ * **It does not exist everywhere, and that was measured rather than assumed.** A current
+ * Chromium browser on Windows reports `window.BarcodeDetector === undefined`: the Shape
+ * Detection API ships on Android and macOS, not on every platform Chromium runs on. Betting the
+ * whole feature on it would mean QR silently not working on whatever the plant actually buys,
+ * discovered by an operator standing in front of a sticker.
+ *
+ * So `jsqr` is the fallback — no dependencies of its own, and **loaded only when the platform
+ * API is missing**. It is a dynamic import, which the build confirms: it lands in its own chunk
+ * of **130 KB raw / 47 KB gzipped**, so a device that has `BarcodeDetector` never downloads or
+ * parses a byte of it. A device that needs it still has it offline, because workbox precaches
+ * every emitted chunk and this one is among the 34 entries.
+ *
+ * This reverses an earlier decision in this file, and the reason is worth keeping: the argument
+ * for "no library" was correct about cost and wrong about availability.
  *
  * <h2>The native door, left open</h2>
  *
@@ -35,9 +42,9 @@ import { nativePlugin } from '@/services/device/nativeApp'
 export type QrScanSupport =
   /** A camera and a decoder are both available. */
   | 'available'
-  /** The decoder exists but no camera was granted or found. */
+  /** A decoder is available but no camera was found. */
   | 'noCamera'
-  /** This browser has no barcode decoder — see the module note. */
+  /** No camera API at all — a desktop browser with the permission blocked, or an odd WebView. */
   | 'noDecoder'
 
 interface DetectedBarcode {
@@ -78,11 +85,59 @@ export function nativeQrAvailable(): boolean {
  */
 export function qrScanSupport(): QrScanSupport {
   if (nativeQrAvailable()) return 'available'
-  if (!barcodeDetector()) return 'noDecoder'
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-    return 'noCamera'
-  }
+  // The decoder is no longer the thing that can be missing — `jsqr` ships with the app. What
+  // can be missing is the camera, which is why this now asks about that and nothing else.
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices) return 'noDecoder'
+  if (!navigator.mediaDevices.getUserMedia) return 'noCamera'
   return 'available'
+}
+
+/** Reads one video frame and returns the QR payload in it, or null. */
+type FrameDecoder = (video: HTMLVideoElement) => Promise<string | null>
+
+/**
+ * The decoder this device will use, chosen once per scan session.
+ *
+ * <p>Native first, always. `jsqr` is imported <b>dynamically and only on the fallback path</b>,
+ * so a tablet with the platform API never downloads or parses it — and a tablet without one
+ * still has it offline, because the service worker precaches every built chunk.
+ */
+async function frameDecoder(): Promise<FrameDecoder> {
+  const Detector = barcodeDetector()
+  if (Detector) {
+    const detector = new Detector({ formats: ['qr_code'] })
+    return async video => {
+      const codes = await detector.detect(video)
+      return codes.map(c => (c.rawValue ?? '').trim()).find(v => v.length > 0) ?? null
+    }
+  }
+
+  const { default: jsQR } = await import('jsqr')
+  // One canvas for the whole session. Allocating per frame would churn a buffer the size of the
+  // video sixty times a second, which on a field tablet is felt as the camera stuttering.
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    throw new Error('بوم تصویر در دسترس نیست؛ خواندن QR ممکن نشد.')
+  }
+
+  return async video => {
+    const width = video.videoWidth
+    const height = video.videoHeight
+    if (!width || !height) return null
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
+    }
+    context.drawImage(video, 0, 0, width, height)
+    // `dontInvert`: a printed label is dark-on-light. Asking the decoder to also try the
+    // inverted reading doubles the work of every frame for a case this plant does not have.
+    const found = jsQR(context.getImageData(0, 0, width, height).data, width, height, {
+      inversionAttempts: 'dontInvert'
+    })
+    const value = (found?.data ?? '').trim()
+    return value.length > 0 ? value : null
+  }
 }
 
 export interface QrScanSession {
@@ -120,11 +175,6 @@ export async function startQrScan(): Promise<QrScanSession> {
     }
   }
 
-  const Detector = barcodeDetector()
-  if (!Detector) {
-    throw new Error('این دستگاه از خواندن QR Code پشتیبانی نمی‌کند.')
-  }
-
   // `environment` is the rear camera on a tablet. Not `exact`, so a device with only a front
   // camera still scans rather than throwing OverconstrainedError at the operator.
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -146,7 +196,7 @@ export async function startQrScan(): Promise<QrScanSession> {
     video.srcObject = null
   }
 
-  const detector = new Detector({ formats: ['qr_code'] })
+  const decodeFrame = await frameDecoder()
 
   const result = new Promise<string>((resolve, reject) => {
     const tick = async () => {
@@ -156,8 +206,7 @@ export async function startQrScan(): Promise<QrScanSession> {
       }
       if (video.readyState >= 2) {
         try {
-          const codes = await detector.detect(video)
-          const value = codes.map(c => (c.rawValue ?? '').trim()).find(v => v.length > 0)
+          const value = await decodeFrame(video)
           if (value) {
             stop()
             resolve(value)

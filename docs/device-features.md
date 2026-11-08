@@ -150,23 +150,33 @@ This is why `filledVia` keeps `'qr'` apart from `'nfc'` all the way to the serve
 different evidence, and a column that merged them would have every report overstate what half
 its rows prove.
 
-## The decoder, and the device that does not have one
+## Two decoders, and why both ship
 
-`BarcodeDetector` — a platform API, present in Chrome on Android since 83 and therefore in a
-current Android System WebView. No JavaScript decoder is bundled: it would add a dependency and
-~40 KB to every tablet in order to re-implement, more slowly, something the platform does in
-native code — and on a tablet holding a live camera stream, slower is the difference between a
-scan that lands and one the operator gives up on.
+| | Used when | Cost |
+|---|---|---|
+| `BarcodeDetector` | the platform has it | nothing — native code, and the fastest option by a wide margin on a live camera stream |
+| `jsqr` | it does not | its own chunk, **130 KB raw / 47 KB gzipped**, downloaded only on those devices |
 
-What that costs is a device without the API getting **no QR scanning at all**, so
-`qrScanSupport()` reports `noDecoder` / `noCamera` / `available` as a first-class state and the
-page says so where the button would have been. Opening a camera that reads nothing would be
-worse, because the operator could not tell it from a bad sticker.
+**The second one is there because the first is not everywhere, and that was measured.** A
+current Chromium browser on Windows reports `window.BarcodeDetector === undefined` — the Shape
+Detection API ships on Android and macOS, not on every platform Chromium runs on. An earlier
+version of this feature bet on the platform API alone and reported `noDecoder` where it was
+missing; that is a QR feature that silently does not work on whatever the plant actually buys,
+discovered by an operator standing in front of a sticker.
 
-`startQrScan` prefers a Capacitor plugin named `Qr` if a build registers one, exactly as
-`nativeNfc` does. None is written today — a native decoder means an ML Kit or ZXing Gradle
-dependency — and that door is the packaged app's fallback if the WebView turns out to lack
-`BarcodeDetector`.
+`jsqr` is a **dynamic import**, so a tablet with the platform API never downloads or parses it.
+It is still available offline: workbox precaches every emitted chunk, and this one is among
+them. It decodes with `inversionAttempts: 'dontInvert'` — a printed label is dark-on-light, and
+asking for the inverted reading too doubles the work of every frame for a case this plant does
+not have — onto one canvas reused for the whole session, because allocating a video-sized buffer
+sixty times a second is felt as the camera stuttering.
+
+`qrScanSupport()` therefore now answers a narrower question: **is there a camera**. It returns
+`available` / `noCamera` / `noDecoder`, the last meaning no camera API at all.
+
+`startQrScan` still prefers a Capacitor plugin named `Qr` if a build registers one, exactly as
+`nativeNfc` does. None is written — a native decoder means an ML Kit or ZXing Gradle dependency
+— and with the bundled fallback in place it is now an optimisation rather than a gap.
 
 ## The camera is stopped by the dialog that started it
 
