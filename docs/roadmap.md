@@ -769,14 +769,39 @@ mistake the single `decodeRecordData` exists to prevent.
 | Where | Web NFC | `BarcodeDetector` |
 |---|---|---|
 | Chrome on Android | available | available |
-| **Android's WebView — i.e. inside the APK** | **absent** | **absent** |
+| **Android's WebView — i.e. inside the APK** | **absent** | **present, and may not work** |
 | Everywhere else | absent | absent |
+
+> **Corrected after the first live Android run — and the original wrong row is why the bug
+> happened.** This table said `BarcodeDetector` was *absent* in the WebView. If that were true,
+> `typeof window.BarcodeDetector` would be a sufficient support check, and that is exactly what
+> the code did. It is not true: the API is exposed in Android WebView (Chrome 83+), but it is
+> backed by a Play Services module fetched on demand — Chrome has it, a plain WebView host does
+> not. So the constructor succeeded, `getSupportedFormats()` resolved with an **empty list**
+> (which the spec defines as "cannot decode", and nothing read), and every `detect()` call
+> rejected into a frame loop that swallowed errors forever. The camera opened and nothing ever
+> happened. **Present-but-broken is a worse failure mode than absent, because every cheap
+> feature check says yes.** See `device-features.md` for the two gates now required, and
+> AGENTS.md #172 in the backend repo.
 
 `device-features.md` records the first row of that trap already: *"not iOS, not desktop, and — the
 one that catches people — not Android's WebView"*. `BarcodeDetector` is a Chrome API with exactly
 the same shape of availability, so building on it would make QR scanning vanish inside the
 packaged app with no error anywhere — the same failure NFC needed a native plugin
 (`android/app/src/main/java/com/hnp/mfdcs/NfcPlugin.java`) to escape.
+
+> **What was actually built, and it is not "no second path".** Both decoders ship. The platform
+> one is kept because it is faster on a live stream and because it is the **only** one that reads
+> a linear barcode — `jsqr` decodes QR and no 1-D symbology at all. What the recommendation below
+> got right is that a bundled decoder must exist; what it got wrong is that one is enough. The
+> cost of two is paid in a selection rule, not in a second permission story: the platform decoder
+> is used only after `getSupportedFormats()` lists a wanted format **and** a trial `detect()`
+> completes, and a failure on a real frame fails over to `jsqr` once, mid-session.
+>
+> **The consequence to keep in mind: in the APK a `BARCODE`-only field may be unfillable by
+> camera.** It is refused in words rather than silently, and the device-check page answers it per
+> tablet — but the only real fixes are a native plugin (ML Kit / ZXing) or getting the WebView's
+> own binding a model to load.
 
 **Recommended: one bundled JavaScript decoder fed by `getUserMedia`, and no second path.** It
 works in Chrome and in the WebView alike, which is strictly better than the position NFC is in —

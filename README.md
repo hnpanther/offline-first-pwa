@@ -95,10 +95,15 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
   microphone, QR/barcode scanning, GPS and storage **on the tablet itself**, with no server
   involved. It reports rather than fixes, asks for each permission only when its own button is
   pressed, and shows the raw answer (`NDEFReader تعریف نشده`) instead of a verdict — so an
-  administrator standing next to a tablet can tell a missing permission from a missing API
+  administrator standing next to a tablet can tell a missing permission from a missing API.
+  Its «رمزگشا» button opens no camera and asks for no permission: it reports which decoder this
+  device would use, which code families it can read, and what `BarcodeDetector` listed — an
+  empty list being the platform's own way of saying it cannot decode at all
 - **Scan a value into a field** — a `text` or `number` field whose definition allows it shows
   small NFC / camera icons inside the input; the scanned payload becomes the field's value and
-  goes through that field's own validation unchanged
+  goes through that field's own validation unchanged. A field that allows only a linear barcode
+  is refused in words on a device whose platform decoder is unavailable, because the bundled
+  fallback reads QR and nothing else — see [docs/device-features.md](docs/device-features.md)
 
 ---
 

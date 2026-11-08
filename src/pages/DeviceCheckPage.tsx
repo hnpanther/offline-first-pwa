@@ -17,7 +17,7 @@ import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner'
 import MyLocationIcon from '@mui/icons-material/MyLocation'
 import StorageIcon from '@mui/icons-material/Storage'
 import { isNFCSupported, startNFCScan, stopNFCScan, resolveNfcTagId } from '@/services/nfc'
-import { qrScanSupport, startQrScan } from '@/services/scan/qrScanner'
+import { decoderReport, qrScanSupport, startQrScan } from '@/services/scan/qrScanner'
 import { getStorageStatus } from '@/utils/storageQuota'
 
 /**
@@ -69,10 +69,24 @@ interface CheckRowProps {
   actionLabel: string
   onRun: () => void
   onCancel?: () => void
+  /** A second, cheaper check beside the main one — one that needs no permission. */
+  secondaryLabel?: string
+  onSecondary?: () => void
   children?: React.ReactNode
 }
 
-function CheckRow({ icon, title, hint, outcome, actionLabel, onRun, onCancel, children }: CheckRowProps) {
+function CheckRow({
+  icon,
+  title,
+  hint,
+  outcome,
+  actionLabel,
+  onRun,
+  onCancel,
+  secondaryLabel,
+  onSecondary,
+  children
+}: CheckRowProps) {
   const running = outcome.state === 'running'
   return (
     <Card variant="outlined">
@@ -100,15 +114,28 @@ function CheckRow({ icon, title, hint, outcome, actionLabel, onRun, onCancel, ch
 
         {children}
 
-        <Button
-          size="small"
-          variant="outlined"
-          fullWidth
-          onClick={running && onCancel ? onCancel : onRun}
-          disabled={running && !onCancel}
-        >
-          {running && onCancel ? 'لغو' : actionLabel}
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            size="small"
+            variant="outlined"
+            fullWidth
+            onClick={running && onCancel ? onCancel : onRun}
+            disabled={running && !onCancel}
+          >
+            {running && onCancel ? 'لغو' : actionLabel}
+          </Button>
+          {secondaryLabel && onSecondary && (
+            <Button
+              size="small"
+              variant="text"
+              fullWidth
+              onClick={onSecondary}
+              disabled={running}
+            >
+              {secondaryLabel}
+            </Button>
+          )}
+        </Stack>
       </CardContent>
     </Card>
   )
@@ -205,7 +232,25 @@ export function DeviceCheckPage() {
     }
     setScan({ state: 'running' })
     try {
-      const session = await startQrScan()
+      // Which decoder this device would use, before the camera opens. This is the answer an
+      // admin is actually standing there to get: a platform decoder that lists no formats is
+      // the Android failure that read as «QR does not work», and a device that falls back to
+      // the bundled decoder cannot read a linear barcode at all.
+      const report = await decoderReport()
+      const readable =
+        `رمزگشا: ${report.decoder}` +
+        ` — می‌خواند: ${report.families.join(' + ')}` +
+        (report.nativeSupportedFormats
+          ? ` — BarcodeDetector: ${
+              report.nativeSupportedFormats.length
+                ? report.nativeSupportedFormats.join(', ')
+                : 'فهرست خالی (در دسترس نیست)'
+            }`
+          : ' — BarcodeDetector موجود نیست')
+
+      // Both families, because an admin wants to know what this tablet can do, not what one
+      // field happens to ask for.
+      const session = await startQrScan({ families: ['qr', 'barcode'] })
       stopScanSession.current = session.stop
       scanContainer.current?.replaceChildren(session.video)
       session.video.style.width = '100%'
@@ -213,7 +258,7 @@ export function DeviceCheckPage() {
       session.stop()
       stopScanSession.current = null
       scanContainer.current?.replaceChildren()
-      setScan({ state: 'ok', detail: `خوانده شد: ${value}` })
+      setScan({ state: 'ok', detail: `خوانده شد: ${value} — ${readable}` })
     } catch (err) {
       stopScanSession.current?.()
       stopScanSession.current = null
@@ -221,6 +266,30 @@ export function DeviceCheckPage() {
       setScan({
         state: 'fail',
         detail: err instanceof Error ? `${err.name}: ${err.message}` : 'اسکن ناموفق بود.'
+      })
+    }
+  }
+
+  /** The decoder answer on its own, with no camera opened and no permission requested. */
+  const runDecoderProbe = async () => {
+    setScan({ state: 'running' })
+    try {
+      const report = await decoderReport()
+      const formats = report.nativeSupportedFormats
+      setScan({
+        state: 'ok',
+        detail:
+          `رمزگشا: ${report.decoder} — می‌خواند: ${report.families.join(' + ')} — ` +
+          (formats === null
+            ? 'BarcodeDetector موجود نیست؛ رمزگشای داخلی برنامه استفاده می‌شود (فقط QR).'
+            : formats.length === 0
+              ? 'BarcodeDetector فهرست خالی برگرداند، یعنی در دسترس نیست؛ رمزگشای داخلی (فقط QR) جایگزین می‌شود.'
+              : `BarcodeDetector: ${formats.join(', ')}`)
+      })
+    } catch (err) {
+      setScan({
+        state: 'fail',
+        detail: err instanceof Error ? `${err.name}: ${err.message}` : 'بررسی رمزگشا ناموفق بود.'
       })
     }
   }
@@ -338,11 +407,13 @@ export function DeviceCheckPage() {
         <CheckRow
           icon={<QrCodeScannerIcon fontSize="small" color="primary" />}
           title="اسکن QR و بارکد"
-          hint="دوربین را روی یک برچسب بگیرید. مقدار خوانده‌شده نمایش داده می‌شود و هیچ‌جا ذخیره نمی‌شود."
+          hint="دوربین را روی یک برچسب بگیرید. مقدار خوانده‌شده نمایش داده می‌شود و هیچ‌جا ذخیره نمی‌شود. «رمزگشا» دوربین را باز نمی‌کند و فقط می‌گوید این دستگاه چه چیزی را می‌تواند بخواند."
           outcome={scan}
           actionLabel="آزمایش اسکن"
           onRun={() => void runScan()}
           onCancel={cancelScan}
+          secondaryLabel="رمزگشا"
+          onSecondary={() => void runDecoderProbe()}
         >
           {/* React renders nothing into this element; the scanner puts its <video> here by
               hand. Mixing the two crashed the app once — see AGENTS.md #169. */}

@@ -150,33 +150,102 @@ This is why `filledVia` keeps `'qr'` apart from `'nfc'` all the way to the serve
 different evidence, and a column that merged them would have every report overstate what half
 its rows prove.
 
-## Two decoders, and why both ship
+## Two decoders, and choosing between them is not `typeof`
 
 | | Used when | Cost |
 |---|---|---|
-| `BarcodeDetector` | the platform has it | nothing — native code, and the fastest option by a wide margin on a live camera stream |
-| `jsqr` | it does not | its own chunk, **130 KB raw / 47 KB gzipped**, downloaded only on those devices |
+| `BarcodeDetector` | it **proves** it works, per the two gates below | nothing — native code, the fastest option by a wide margin on a live camera stream, and the only one that reads a linear barcode |
+| `jsqr` | it does not | its own chunk, **130 KB raw / 47 KB gzipped**, downloaded only on those devices. QR only |
 
-**The second one is there because the first is not everywhere, and that was measured.** A
-current Chromium browser on Windows reports `window.BarcodeDetector === undefined` — the Shape
-Detection API ships on Android and macOS, not on every platform Chromium runs on. An earlier
-version of this feature bet on the platform API alone and reported `noDecoder` where it was
-missing; that is a QR feature that silently does not work on whatever the plant actually buys,
-discovered by an operator standing in front of a sticker.
+### The bug that set the rule
 
-`jsqr` is a **dynamic import**, so a tablet with the platform API never downloads or parses it.
-It is still available offline: workbox precaches every emitted chunk, and this one is among
-them. It decodes with `inversionAttempts: 'dontInvert'` — a printed label is dark-on-light, and
-asking for the inverted reading too doubles the work of every frame for a case this plant does
-not have — onto one canvas reused for the whole session, because allocating a video-sized buffer
-sixty times a second is felt as the camera stuttering.
+On Android the camera opened, the operator aimed at a sticker the phone's own camera app read
+instantly, and **nothing ever happened** — no error, no message, no result.
 
-`qrScanSupport()` therefore now answers a narrower question: **is there a camera**. It returns
-`available` / `noCamera` / `noDecoder`, the last meaning no camera API at all.
+The decoder was chosen by `typeof window.BarcodeDetector`. That is not a support check. The
+[spec](https://wicg.github.io/shape-detection-api/) is explicit that a platform which cannot
+detect barcodes still exposes the constructor and resolves `getSupportedFormats()` with an
+**empty list**. On Android the detector is backed by a Play Services module fetched on demand —
+Chrome has it, a plain WebView host does not — so the constructor succeeded and every single
+`detect()` call rejected.
+
+And the frame loop caught *every* error and always retried. Correct for one frame; for a
+permanently broken decoder it is an infinite silent loop. That is the whole of "nothing
+happens".
+
+### Two gates before the platform decoder is trusted
+
+1. **`getSupportedFormats()` must list a format we actually want.** An empty list, a missing
+   method, or a list with nothing relevant all mean "use the fallback". `usableNativeFormats()`
+   is a pure function so this can be tested without a device; `[]` is the input that broke it.
+2. **A trial `detect()` against a 2×2 canvas must complete.** A detector can pass gate 1 and
+   still reject on first real use, because the module is fetched on demand. Answering that
+   during setup means falling back; answering it in the frame loop meant swallowing it forever.
+
+The detector is constructed only with formats the platform listed — asking for one it does not
+know is how a working decoder gets discarded for no reason.
+
+### A frame-decode error has three outcomes, not one
+
+`decideOnDecodeError()` returns `failover` / `retry` / `giveUp`:
+
+- **`failover`** — the first time the platform decoder throws on a real frame, switch to `jsqr`
+  mid-session and carry on. Once only, and only away from native: `jsqr` is the last resort.
+- **`retry`** — a bounded number of times. A frame can fail while the camera reconfigures, and
+  ending the session on that would make the scanner flaky, which is its own bug report.
+- **`giveUp`** — after `HARD_FAILURE_LIMIT` (12) consecutive failures, reject with the real
+  error. This branch did not exist, which is why the loop ran forever.
+
+A decode that merely finds no code **resets** the counter: the decoder worked.
+
+### A reader the device cannot be is refused in words
+
+`jsqr` reads QR and no linear symbology at all. So a field whose administrator allowed only
+`BARCODE`, on a device with no usable platform decoder, gets a refusal — «این دستگاه بارکد خطی
+را نمی‌خواند» — rather than a camera that physically cannot read the label in the operator's
+hand. `ScanFieldAdornment` passes the families the field allows, and the session asks the
+platform for exactly those.
+
+**In the packaged APK this is a real limitation, not a theoretical one:** if the WebView's
+`BarcodeDetector` is unavailable, QR still works through the fallback and a linear barcode
+cannot be read at all. The device-check page answers that for a given tablet in one tap.
+
+### The camera is asked for a frame worth decoding
+
+`facingMode: 'environment'`, plus `width/height: { ideal: 1280 × 720 }` and a best-effort
+`focusMode: 'continuous'`. The Android default is often 640×480 fixed-focus, and a blurry or
+too-small frame of a dense label decodes as nothing at all — indistinguishable from the same
+silence. All of it `ideal` rather than `exact`, so a camera that cannot manage it still opens.
+
+`jsqr` is a **dynamic import**, so a tablet with a working platform API never downloads or
+parses it. It is still available offline: workbox precaches every emitted chunk, and this one is
+among them. It decodes with `inversionAttempts: 'dontInvert'` — a printed label is
+dark-on-light, and asking for the inverted reading too doubles the work of every frame for a
+case this plant does not have — onto one canvas reused for the whole session, because allocating
+a video-sized buffer sixty times a second is felt as the camera stuttering.
+
+`qrScanSupport()` answers a deliberately narrow question: **is there a camera**. It returns
+`available` / `noCamera` / `noDecoder`, the last meaning no camera API at all. It does not probe
+the decoder, because that is async and this is called while rendering the fill page; which
+decoder serves is settled when the scan starts, and if none can, the dialog says so.
 
 `startQrScan` still prefers a Capacitor plugin named `Qr` if a build registers one, exactly as
 `nativeNfc` does. None is written — a native decoder means an ML Kit or ZXing Gradle dependency
-— and with the bundled fallback in place it is now an optimisation rather than a gap.
+— and it is the one route that would give the APK linear barcodes without relying on the
+WebView's own binding.
+
+### The session reports on itself
+
+`QrScanSession.stats()` carries the decoder in use, the number of frames handed to it, and the
+last error. After four seconds with no result `QrScanDialog` shows that line, because the one
+state an operator cannot diagnose is "the camera is on and nothing is happening":
+
+- **frames 0** → the camera, not the decoder.
+- **frames rising, no error** → aim, light, distance or a dirty label.
+- **an error** → the decoder itself, named.
+
+That line is what turns the next report from a plant into something answerable instead of
+"QR does not work".
 
 ## The camera is stopped by the dialog that started it
 

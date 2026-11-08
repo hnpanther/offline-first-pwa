@@ -3,7 +3,7 @@ import { CircularProgress, IconButton, Stack, Tooltip } from '@mui/material'
 import NfcIcon from '@mui/icons-material/Nfc'
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner'
 import { QrScanDialog } from '@/components/logsheet/QrScanDialog'
-import { qrScanSupport } from '@/services/scan/qrScanner'
+import { qrScanSupport, type CodeFamily } from '@/services/scan/qrScanner'
 import { claimNextTagForField } from '@/services/scan/nfcFieldCapture'
 import { scannedFieldValue, type ScanFieldConfig } from '@/services/scan/scanFieldFill'
 import { resolveNfcTagId } from '@/services/nfc'
@@ -71,16 +71,20 @@ export function ScanFieldAdornment({ config, onValue, onError }: ScanFieldAdornm
   }
 
   const offersNfc = config.sources.includes('NFC') && nfcSupported
-  // QR and 1-D barcode share one camera session: the platform decoder is asked for the formats
-  // it supports, and the bundled fallback reads QR. One button for both, labelled by what the
-  // field actually allows.
-  const offersCamera = config.sources.includes('QR') || config.sources.includes('BARCODE')
+  // QR and 1-D barcode share one camera session, but they are not the same request: the session
+  // asks the platform decoder only for the symbologies this field allows, and the bundled
+  // fallback reads QR alone. A field that allows only a linear barcode, on a device whose
+  // platform decoder is unavailable, is refused in words by the dialog — rather than shown a
+  // camera that physically cannot read the label the operator is holding.
+  const wantsQr = config.sources.includes('QR')
+  const wantsBarcode = config.sources.includes('BARCODE')
+  const offersCamera = wantsQr || wantsBarcode
+  const cameraFamilies: CodeFamily[] = [
+    ...(wantsQr ? (['qr'] as const) : []),
+    ...(wantsBarcode ? (['barcode'] as const) : [])
+  ]
   const cameraLabel =
-    config.sources.includes('QR') && config.sources.includes('BARCODE')
-      ? 'اسکن QR یا بارکد'
-      : config.sources.includes('QR')
-        ? 'اسکن QR'
-        : 'اسکن بارکد'
+    wantsQr && wantsBarcode ? 'اسکن QR یا بارکد' : wantsQr ? 'اسکن QR' : 'اسکن بارکد'
 
   const beginNfc = () => {
     onError(null)
@@ -142,6 +146,8 @@ export function ScanFieldAdornment({ config, onValue, onError }: ScanFieldAdornm
 
       <QrScanDialog
         open={qrOpen}
+        families={cameraFamilies}
+        title={cameraLabel}
         onDetected={value => {
           setQrOpen(false)
           take(value)
