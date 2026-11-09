@@ -954,3 +954,60 @@ it. The warning is the honest version — it says what is true, and leaves the o
 The first report of a round whose questions came back blank on the panel while the operator is
 certain they answered them. By then the data is gone and nobody can prove what happened, which
 is the shape of bug this warning exists to make impossible to have.
+
+---
+
+# 15. A choice you can search and type into, lookup lists, and a signature — the device half
+
+*The device side of backend roadmap §31 and §32*
+([`backend-offline-first/docs/roadmap.md`](../../JavaProject/backend-offline-first/docs/roadmap.md)).
+Nothing here is built; the reasoning, the server rules and the declined fingerprint field (§33)
+live there. This section records only what is particular to the tablet.
+
+## What happens today
+
+| Fact | Where |
+|---|---|
+| A `select` is an MUI `Select`; a `multiselect` is a **column of checkboxes**, one per option | `components/forms/DynamicFormField.tsx` |
+| The `shrink` / `notched` labels on the select are forced on purpose — a replacement must keep the label from overlapping the value | the comment above the `select` case |
+| Options arrive in the field definition, already on the device in the bundle — searching them needs no network | `normalizeFieldOptions` |
+| Nothing normalises Persian for comparison | searched, none found |
+| Dexie is at `version(3)`; `version(1)` is closed, and a new store is a new `version(n)` block | `services/storage/db.ts`, [storage.md](storage.md) |
+
+## Searchable choice and free entry (backend §31, phase 1)
+
+- Above a threshold of options (around 8), `select` becomes `Autocomplete` and `multiselect`
+  becomes `Autocomplete multiple` with chips; below it, nothing changes. The threshold and the
+  normaliser live in one pure module with a test, as `fillPageHints.ts` does for the fill page's
+  wording.
+- **Free entry only when the field says `validation.allowCustom === true`** (`freeSolo`). Never
+  inferred: only a server that accepts a typed value can write that flag, so a tablet that offers
+  free entry is always talking to a server that will take it — a typed answer can never become a
+  sync item the server refuses.
+- **The value keeps its shape** — a string, or an array of strings — so the queue, the merge, the
+  archive and the restore need nothing new. The one place to check is the scan path (backend AGENTS.md #172 and #178):
+  a scanned value on a choice field must still be checked against the options unless
+  `allowCustom` is set.
+- The normaliser (`ي→ی`, `ك→ک`, ZWNJ and tatweel removed, Persian/Arabic digits to Latin) is for
+  **matching only**; what is stored is exactly what was chosen or typed. Its test cases are the
+  same table as the server's, so the two cannot disagree on what matches.
+
+## Lookup lists (backend §31, phase 2)
+
+- A new Dexie store in a **new `version(4)` block**, keyed on `[list+code]` with an index on the
+  normalised label, synced on its own and incrementally by `updated_at` — never inside a sheet's
+  bundle.
+- A list that has not finished its first sync says so in the field («فهرست هنوز دریافت نشده»)
+  rather than looking empty, because an empty list on a tablet that is offline reads as "nobody
+  matches".
+- The value written is the code plus the label as shown, as the server stores it.
+- Personal data on a shared tablet: the store must follow the same per-user rules as the rest of
+  a user's data there ([sync.md](sync.md)) — decide this before building it, not after.
+
+## Signature (backend §32)
+
+- A canvas pad (pointer events; works with a finger or a stylus), saved as a PNG **into the
+  existing attachment queue**, so it is uploaded, retried and archived exactly as a photo is.
+- The pad lives in the round's questions card first (the «امضای سرپرست شیفت» case).
+- The hash of the answers it was given over is computed on the device at signing time and sent
+  with it; an answer edited afterwards shows the signature as taken before the change.
