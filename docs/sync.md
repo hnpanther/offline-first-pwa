@@ -386,7 +386,9 @@ device:
 | `VOIDED` / other | Server refused | Keep the data, show why |
 
 > **A refused submission is never discarded.** The operator did the work. The server stores the
-> payload in `log_sheet_void_submissions` and the device keeps its copy, so a supervisor can
+> payload in `log_sheet_void_submissions` — the per-asset readings and, since backend V14, the
+> round's own answers (`sheetFormData`), which before it were discarded on that path — and the
+> device keeps its copy, so a supervisor can
 > un-void it and nothing is lost to a timing problem. See `docs/log-sheets.md` in the backend
 > repository.
 
