@@ -823,6 +823,15 @@ round to «click an Asset» and showed «0 / 0 Asset پر شده». `editingHint
 `roundProgress` choose from what the round actually is, and each wrong case is a test in
 `fillPageHints.test.ts`. A new line on that page that names assets, NFC or QR belongs there too.
 
+### A voided round is recognised by `lastSubmitOutcome`, never by `syncError`
+`syncError` holds the server's own translated sentence; matching it against this client's
+constants is how an ownership void («این لاگ‌شیت دیگر به شما تخصیص ندارد») slipped past both
+`isRevokedAssignment` and `isSupersededSyncError`, so its photos were uploaded into a 403 every
+pass and counted in the badge for ever. `isVoidedSubmission` reads the outcome the server stated.
+Its files go up as the void's evidence (backend V15); a 403 on one is final and parks it with its
+bytes kept — while every *other* 403 stays retryable, because on a shared tablet it usually means
+the wrong person is signed in.
+
 ### "Is there work here?" means answered assets OR answered round questions
 `sheetHasLocalWork` is the one definition, used by every decision on the archive path — archive
 before clearing, reset a reassigned draft, archive before a server overwrite, keep an archive card

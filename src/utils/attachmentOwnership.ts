@@ -53,6 +53,13 @@ export function isAttachmentUploadableByUser(
   const owner = resolveLocalWorkOwner(sheet)
   if (!owner || owner !== userId) return false
 
+  // A round the server VOIDED for this operator — taken over, reassigned, released or cancelled
+  // after they finished it — still has a home for its files: the server keeps the void, and since
+  // backend V15 it accepts the photographs that void names as its evidence. Checked before the two
+  // refusals below because a void is exactly what they describe, and they used to strand these
+  // files here: either never sent, or sent into a 403 forever (PWA roadmap §16, backend §35).
+  if (isVoidedSubmission(sheet)) return true
+
   // Ownership says whose work it is; these two say whether the server will still take it.
   if (isRevokedAssignment(sheet)) return false
   if (isSupersededSyncError(sheet)) return false
@@ -83,4 +90,19 @@ export function isAttachmentUploadableByUser(
 export function shouldReviveParkedAttachment(failedStatus: number | undefined): boolean {
   if (failedStatus === undefined) return true
   return failedStatus === 403
+}
+
+/**
+ * A submission this device made and the server answered with a void — `SUPERSEDED` (taken over,
+ * reassigned, released, or completed by somebody else) or `CANCELLED`.
+ *
+ * Read from `lastSubmitOutcome`, the outcome as the server stated it, and never from `syncError`:
+ * that is the server's own translated sentence, and matching it against this client's constants is
+ * how an ownership void slipped past both `isRevokedAssignment` and `isSupersededSyncError`.
+ */
+export function isVoidedSubmission(
+  sheet: Pick<LogSheet, 'status' | 'syncStatus' | 'lastSubmitOutcome'> | undefined
+): boolean {
+  if (!sheet || sheet.status !== 'submitted' || sheet.syncStatus !== 'failed') return false
+  return sheet.lastSubmitOutcome === 'SUPERSEDED' || sheet.lastSubmitOutcome === 'CANCELLED'
 }

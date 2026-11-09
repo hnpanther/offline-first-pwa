@@ -294,3 +294,57 @@ describe('syncPendingAttachments', () => {
     expect(uploadAttachment).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * A round the server voided for this operator (PWA roadmap §16, backend §35).
+ *
+ * The ownership void stored the server's translated sentence as `syncError` and left
+ * `serverStatus` alone, so neither "revoked" nor "superseded" recognised it: every pass uploaded
+ * each photo into a 403, the 403 was retryable by design, and the badge read «n رکورد در انتظار»
+ * for ever. Decided now from `lastSubmitOutcome`.
+ */
+describe('a voided round', () => {
+  const voided = {
+    status: 'submitted' as const,
+    syncStatus: 'failed' as const,
+    lastSubmitOutcome: 'SUPERSEDED',
+    syncError: 'این لاگ‌شیت دیگر به شما تخصیص ندارد.'
+  }
+
+  it('sends its photographs as the void’s evidence', async () => {
+    await seedOwningSheet(voided)
+    await saveAttachment(attachment())
+
+    const result = await syncPendingAttachments()
+
+    expect(uploadAttachment).toHaveBeenCalledTimes(1)
+    expect(result.remaining).toBe(0)
+    expect((await getAttachment('att-1'))?.syncStatus).toBe('synced')
+  })
+
+  it('parks a photograph the server refuses, keeps its bytes, and stops counting it', async () => {
+    await seedOwningSheet(voided)
+    await saveAttachment(attachment())
+    uploadAttachment.mockRejectedValue(new ApiError(403, 'این لاگ‌شیت مال شما نیست.'))
+
+    const first = await syncPendingAttachments()
+    const second = await syncPendingAttachments()
+
+    const row = await getAttachment('att-1')
+    expect(row?.permanentFailure).toBe(true)
+    expect(row?.blob).toBeTruthy()
+    expect(first.remaining).toBe(0)
+    // Not offered again on the next pass — this is what held the badge up.
+    expect(second.uploaded + second.failed).toBe(0)
+    expect(uploadAttachment).toHaveBeenCalledTimes(1)
+  })
+
+  it('still retries a 403 on a round the operator holds — the shared-tablet case', async () => {
+    await saveAttachment(attachment())
+    uploadAttachment.mockRejectedValue(new ApiError(403, 'forbidden'))
+
+    await syncPendingAttachments()
+
+    expect((await getAttachment('att-1'))?.permanentFailure).toBeFalsy()
+  })
+})

@@ -10,7 +10,7 @@ import {
 } from '@/services/storage/attachments'
 import { getLogSheet, getLogSheetByServerId } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
-import { isAttachmentUploadableByUser } from '@/utils/attachmentOwnership'
+import { isAttachmentUploadableByUser, isVoidedSubmission } from '@/utils/attachmentOwnership'
 import { toIdString } from '@/utils/ids'
 import type { LocalAttachment, LogSheet } from '@/types'
 
@@ -214,6 +214,22 @@ async function drainPendingDeletes(
 
 type UploadOutcome = 'uploaded' | 'failed' | 'aborted'
 
+/**
+ * A file of a round the server voided, refused by the server — parked, never deleted.
+ *
+ * Every other 403 stays retryable (see `isPermanentFailure`: on a shared tablet it usually means
+ * the wrong person is signed in). This one is a final answer about this sheet: the operator no
+ * longer holds it, and a server that will not take the file as the void's evidence (an older one,
+ * or an id the void does not name) will not take it on the next pass either. Retrying it held the
+ * pending badge up for ever — «۱ رکورد در انتظار» per photograph — and uploaded the whole file
+ * into a refusal every thirty seconds (PWA roadmap §16). Parked rows keep their bytes, their
+ * reason on screen and the manual retry, and are offered once more when the owner signs in.
+ */
+async function isRefusedVoidEvidence(attachment: LocalAttachment, err: unknown): Promise<boolean> {
+  if (!(err instanceof ApiError) || err.status !== 403) return false
+  return isVoidedSubmission(await getLogSheet(attachment.logSheetLocalId))
+}
+
 async function uploadOne(
   attachment: LocalAttachment,
   signal?: AbortSignal
@@ -250,7 +266,7 @@ async function uploadOne(
     await markAttachmentFailed(
       attachment.id,
       message,
-      isPermanentFailure(err),
+      isPermanentFailure(err) || (await isRefusedVoidEvidence(attachment, err)),
       err instanceof ApiError ? err.status : undefined
     )
     return 'failed'

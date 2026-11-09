@@ -1011,3 +1011,67 @@ live there. This section records only what is particular to the tablet.
 - The pad lives in the round's questions card first (the «امضای سرپرست شیفت» case).
 - The hash of the answers it was given over is computed on the device at signing time and sent
   with it; an answer edited afterwards shows the signature as taken before the change.
+
+---
+
+# 16. A voided round's photos were retried forever and held the pending badge up — **built**
+
+*Raised on 2026-11-09 as: "in history, a log sheet that no longer belongs to the operator, whose
+sync was voided and shows a send error, makes the bar at the top say «1 رکورد در انتظار» — or n."*
+**Built on 2026-11-09**: `isVoidedSubmission` (from `lastSubmitOutcome`) makes a voided round's
+files uploadable as the void's evidence, and a 403 on such a file parks it — bytes kept, out of the
+badge — instead of retrying it for ever (`attachmentSync.isRefusedVoidEvidence`). Tests in
+`attachmentSync.test.ts`. The server half, built at the same time, is backend roadmap
+§35 ([`backend-offline-first/docs/roadmap.md`](../../JavaProject/backend-offline-first/docs/roadmap.md)).
+
+## What happens today
+
+| Fact | Where |
+|---|---|
+| The badge is `pendingSheets + pendingFaultReports + getOwnPendingAttachments()` — every queued file this user may still deliver counts as one record | `SyncManager.getPendingCount` |
+| A takeover / reassignment / release that lands before the submit makes the server answer `outcome: 'SUPERSEDED'` with the error «این لاگ‌شیت دیگر به شما تخصیص ندارد.» (translated server-side) | backend `LogSheetService`, `ErrorTranslator` |
+| `normalizeLogSheetSyncError` returns that text unchanged for `SUPERSEDED`; it matches `isOwnershipReassignError` (`تخصیص ندارد`), so the sheet is stored `syncStatus: 'failed'`, that text as `syncError`, `lastSubmitOutcome: 'SUPERSEDED'` — and **`serverStatus` is not touched** | `services/sync/index.ts`, the `isOwnershipReassignError` branch |
+| A file is uploadable unless `isRevokedAssignment(sheet)` (needs `syncError` to equal the **client's** `REVOKED` constant) or `isSupersededSyncError(sheet)` (needs a **completed** `serverStatus`, or the client's `SUPERSEDED` constant). Neither holds here: the text is the server's, and the server sheet is still `IN_PROGRESS` under its new owner | `utils/attachmentOwnership.isAttachmentUploadableByUser`, `utils/logSheetStatus` |
+| `reconcileInboxRevocations` deliberately never marks a **submitted** sheet revoked ("handled by batch submit outcomes instead") — so nothing later corrects it | `services/sync/logSheetSync.ts` |
+| Each pass uploads the file, the server answers **403**, and a 403 is deliberately **not** permanent (on a shared tablet it can mean the wrong person is signed in), so the row stays queued and counted | `attachmentSync.isPermanentFailure` |
+
+So the badge counts **the number of photos** on voided rounds, the history shows them with a send
+error, and none of it ever drains. «1 رکورد» is a round with one photo; sheet 52 would show two.
+The sheet itself is not counted — a failed sheet is excluded — which is why the number matches
+the files, not the rounds.
+
+A round voided because **somebody else completed it** does not do this: that branch stores
+`serverStatus: 'SUBMITTED'` and the structural check catches it. It is the *ownership* void —
+the common one — that slips through.
+
+## Why it matters
+
+A badge that never drains teaches operators that the badge means nothing, which is how a real
+undelivered reading gets ignored. And every pass spends an upload of the full photo on a request
+the server will refuse.
+
+## The fix
+
+**1. Decide from the recorded outcome, not from text.** `lastSubmitOutcome` is already stored
+structurally on the row. `SUPERSEDED` (and `CANCELLED`) are this user's final answer for that
+sheet, whatever wording came with them — the same lesson as `isSupersededSyncError`'s own comment
+about server-translated messages never equalling the client's constants. A file of such a sheet
+is not live work.
+
+**2. Until backend §35 exists: park, do not delete.** Mark those rows parked with a reason the
+operator can read — «کار پیش از ارسال این فایل از شما گرفته شد؛ فایل روی همین دستگاه نگه داشته
+می‌شود» — out of the queue and out of the badge, and **never purged**: they are the only copy.
+Leave the 403 rule for live sheets exactly as it is; this keys off the outcome, not the status.
+
+**3. Once backend §35 exists: deliver them as void evidence.** Route a voided round's parked
+files to the void-evidence upload; they leave the badge when they are delivered, or when the
+server refuses them for a reason that is about the file.
+
+**4. Tests**: an ownership void with photos → the badge does not count them and no upload is
+attempted; a void by somebody else's completion stays as it is; a live sheet's 403 on a shared
+tablet is still retried (the case `isPermanentFailure` was written for); nothing is purged.
+
+## What would make it urgent
+
+Already worth doing on its own: it is one predicate and a parked reason, and the badge is the one
+signal an operator has that work has not reached the server.
