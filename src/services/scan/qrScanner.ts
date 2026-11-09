@@ -145,10 +145,18 @@ export function qrScanSupport(): QrScanSupport {
   return 'available'
 }
 
-/** A code found in a frame: its payload, and which kind of code it was. */
+/** A code found in a frame: its payload, which kind of code it was, and whether to take it. */
 export interface Detection {
   value: string
   family: CodeFamily
+  /**
+   * Whether this read may complete the scan. Decided by WHICH detector produced it, never by the
+   * format name it reports: the main detector is built for the accepted kinds only, so whatever it
+   * returns is acceptable by construction — exactly how scanning worked before the wrong-kind
+   * message existed. Re-judging its reads by `format === 'qr_code'` rejected a correct QR on any
+   * platform that names the format differently. Only the occasional wide probe yields `false`.
+   */
+  accepted: boolean
 }
 
 /** Reads one video frame and returns the code in it, or null when there is none yet. */
@@ -159,7 +167,25 @@ interface ActiveDecoder {
   decode: FrameDecoder
   /** Families this decoder can actually read, after the platform was asked. */
   families: CodeFamily[]
+  /** A line for the diagnostics, when the decoder has something to say beyond its name. */
+  detail?: () => string | null
 }
+
+/**
+ * How long the platform decoder may read nothing before the rescue starts.
+ *
+ * Found on Android: the platform `BarcodeDetector` passed its trial, ran 434 frames without one
+ * error, and returned nothing for a QR or a barcode held in front of it — while the phone's own
+ * camera read the same label at once. A decoder that is "working" by every signal the scanner had
+ * (it constructs, it answers, it never throws) and still sees nothing is the one case failover on
+ * errors cannot catch. Two causes fit and the rescue covers both: the platform's decoding module
+ * is unavailable (it is fetched and updated on demand), or the WebView cannot read pixels straight
+ * from a `<video>` — handing it a still frame on a canvas instead.
+ */
+export const RESCUE_AFTER_MS = 2000
+
+/** Which rescue read the last code, for the next scan's diagnostics. In memory only. */
+let lastRescue: 'canvas' | 'jsqr' | null = null
 
 /** Which kind of code a platform format name is. Anything that is not QR is a linear barcode. */
 export function familyOfFormat(format: string | undefined): CodeFamily {
@@ -178,16 +204,21 @@ export function familyOfFormat(format: string | undefined): CodeFamily {
 export function pickDetection(
   codes: readonly Pick<DetectedBarcode, 'rawValue' | 'format'>[],
   accepted: readonly CodeFamily[]
-): Detection | null {
-  let other: Detection | null = null
+): Omit<Detection, 'accepted'> | null {
+  let other: Omit<Detection, 'accepted'> | null = null
   for (const code of codes) {
     const value = (code.rawValue ?? '').trim()
     if (value.length === 0) continue
-    const detection: Detection = { value, family: familyOfFormat(code.format) }
+    const detection = { value, family: familyOfFormat(code.format) }
     if (accepted.includes(detection.family)) return detection
     other ??= detection
   }
   return other
+}
+
+/** The first non-empty payload, exactly as the scanner read codes before the wrong-kind message. */
+function firstPayload(codes: readonly Pick<DetectedBarcode, 'rawValue'>[]): string | null {
+  return codes.map(c => (c.rawValue ?? '').trim()).find(v => v.length > 0) ?? null
 }
 
 /**
@@ -197,6 +228,14 @@ export function pickDetection(
  * accepted search exactly as it always did.
  */
 export const WRONG_KIND_PROBE_EVERY = 8
+
+/**
+ * Nothing about the probe exists for the first seconds of a scan — not even the second detector.
+ * Almost every scan that works completes within them, and they are then exactly the scan that
+ * worked before this message existed; the probe is built lazily, only for a scan that is already
+ * not reading anything.
+ */
+export const WRONG_KIND_PROBE_AFTER_MS = 3000
 
 /**
  * Whether the platform decoder can serve this request, and with which formats — the decision
@@ -303,28 +342,120 @@ async function nativeDecoder(families: CodeFamily[]): Promise<ActiveDecoder | nu
       ? usableNativeFormats((['qr', 'barcode'] as CodeFamily[]).filter(f => !families.includes(f)), supported)
       : null
     let wideDetector: BarcodeDetectorLike | null = null
-    if (other) {
+    let probeDisabled = !other
+    const startedAt = Date.now()
+    let framesSeen = 0
+
+    const accepted = (value: string): Detection => ({
+      value,
+      family: usable.families[0] ?? 'qr',
+      accepted: true
+    })
+
+    // The rescue (see RESCUE_AFTER_MS). Each half switches itself off for good on its first error,
+    // so a rescue that cannot run costs nothing after one try.
+    let rescueTurn = 0
+    let rescueStarted = false
+    let canvas: HTMLCanvasElement | null = null
+    let context: CanvasRenderingContext2D | null = null
+    let canvasBroken = false
+    let bundled: ActiveDecoder | null = null
+    // QR only, and only for a caller that accepts QR: jsqr's reads are accepted by construction.
+    let bundledBroken = !families.includes('qr')
+
+    /** The same platform decoder, handed a still frame instead of the live video. */
+    const fromStillFrame = async (video: HTMLVideoElement): Promise<Detection | null> => {
+      if (canvasBroken) return null
       try {
-        wideDetector = new Detector({ formats: other.formats })
+        canvas ??= document.createElement('canvas')
+        context ??= canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) {
+          canvasBroken = true
+          return null
+        }
+        if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth
+        if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight
+        context.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const value = firstPayload(await detector.detect(canvas))
+        if (!value) return null
+        lastRescue = 'canvas'
+        return accepted(value)
       } catch {
-        wideDetector = null
+        canvasBroken = true
+        return null
       }
     }
-    let framesSeen = 0
+
+    /** The bundled decoder, for a platform decoding module that answers but sees nothing. */
+    const fromBundled = async (video: HTMLVideoElement): Promise<Detection | null> => {
+      if (bundledBroken) return null
+      try {
+        bundled ??= await jsqrDecoder()
+        const found = await bundled.decode(video)
+        if (!found) return null
+        lastRescue = 'jsqr'
+        return found
+      } catch {
+        bundledBroken = true
+        return null
+      }
+    }
 
     return {
       name: 'native',
       families: usable.families,
+      detail: () => {
+        const parts: string[] = []
+        if (rescueStarted) {
+          const routes = [
+            canvasBroken ? null : 'تصویر ثابت',
+            bundledBroken ? null : 'رمزگشای داخلی'
+          ].filter(Boolean)
+          parts.push(
+            routes.length > 0
+              ? `مسیرهای کمکی فعال: ${routes.join(' و ')}`
+              : 'مسیرهای کمکی در این دستگاه کار نمی‌کنند'
+          )
+        }
+        if (lastRescue) {
+          parts.push(
+            `خواندن موفق قبلی با: ${lastRescue === 'canvas' ? 'تصویر ثابت' : 'رمزگشای داخلی'}`
+          )
+        }
+        return parts.length > 0 ? parts.join(' — ') : null
+      },
       decode: async video => {
         if (!video.videoWidth || !video.videoHeight) return null
-        const found = pickDetection(await detector.detect(video), families)
-        if (found) return found
+
+        // After a silent stretch, two frames in three go to a rescue and the third to the read
+        // that worked, so nothing the original path could still do is given up.
+        if (Date.now() - startedAt >= RESCUE_AFTER_MS) {
+          rescueStarted = true
+          rescueTurn += 1
+          if (rescueTurn % 3 === 1) return fromStillFrame(video)
+          if (rescueTurn % 3 === 2) return fromBundled(video)
+        }
+
+        // Exactly the read that worked: the first payload the accepted-kinds detector returns.
+        const codes = await detector.detect(video)
+        const value = firstPayload(codes)
+        if (value) {
+          return accepted(value)
+        }
         framesSeen += 1
-        if (wideDetector && framesSeen % WRONG_KIND_PROBE_EVERY === 0) {
+        if (
+          !probeDisabled &&
+          other &&
+          Date.now() - startedAt >= WRONG_KIND_PROBE_AFTER_MS &&
+          framesSeen % WRONG_KIND_PROBE_EVERY === 0
+        ) {
           try {
-            return pickDetection(await wideDetector.detect(video), families)
+            wideDetector ??= new Detector({ formats: other.formats })
+            const seen = pickDetection(await wideDetector.detect(video), [])
+            return seen ? { ...seen, accepted: false } : null
           } catch {
             // The message is a courtesy; a failing probe must never cost the scan itself.
+            probeDisabled = true
             wideDetector = null
           }
         }
@@ -367,7 +498,7 @@ async function jsqrDecoder(): Promise<ActiveDecoder> {
         inversionAttempts: 'dontInvert'
       })
       const value = (found?.data ?? '').trim()
-      return value.length > 0 ? { value, family: 'qr' } : null
+      return value.length > 0 ? { value, family: 'qr', accepted: true } : null
     }
   }
 }
@@ -400,6 +531,8 @@ export interface QrScanStats {
   lastError: string | null
   /** Families the chosen decoder can read — narrower than asked for on some devices. */
   families: CodeFamily[]
+  /** A further line from the decoder — which rescue is running, or which one read last time. */
+  detail: string | null
   /**
    * The last kind of code seen that this caller does NOT accept — a QR held up to a field that
    * takes only linear barcodes, say. Null until that happens. Reported so the dialog can say so
@@ -456,7 +589,14 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
         return value
       }),
       stop: () => {},
-      stats: () => ({ decoder: 'native-app', framesTried: 0, lastError: null, families, ignoredFamily: null })
+      stats: () => ({
+        decoder: 'native-app',
+        framesTried: 0,
+        lastError: null,
+        families,
+        ignoredFamily: null,
+        detail: null
+      })
     }
   }
 
@@ -522,7 +662,8 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
     framesTried,
     lastError,
     families: active.families,
-    ignoredFamily
+    ignoredFamily,
+    detail: active.detail?.() ?? null
   })
 
   const result = new Promise<string>((resolve, reject) => {
@@ -537,7 +678,7 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
           const detection = await active.decode(video)
           // The decoder ran. Whether or not a code was in shot, it is working.
           consecutiveErrors = 0
-          if (detection && families.includes(detection.family)) {
+          if (detection?.accepted) {
             stop()
             resolve(detection.value)
             return

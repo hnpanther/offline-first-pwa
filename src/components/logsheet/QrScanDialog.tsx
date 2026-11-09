@@ -74,8 +74,8 @@ export function QrScanDialog({
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [stats, setStats] = useState<QrScanStats | null>(null)
-  // The session is polled from the start, so a code of the wrong kind is explained the moment it
-  // is seen; only the general diagnostics line waits, because on a scan that works it is noise.
+  // Set together with the first poll, after DIAGNOSTIC_DELAY_MS — on a scan that works, both the
+  // diagnostics line and the polling itself would be noise.
   const [showDiagnostics, setShowDiagnostics] = useState(false)
 
   // `families` is an array literal at most call sites, so a new identity on every render. Keyed
@@ -108,12 +108,17 @@ export function QrScanDialog({
         }
         setStarting(false)
 
+        // Polled only after a delay, exactly as before the wrong-kind message: nothing about a
+        // scan that works within the first seconds is changed by this dialog. The wrong-kind
+        // alert reads the same stats, so it appears from the delay on.
         const live = session
-        diagnosticTimer = setInterval(() => {
-          if (!cancelled) setStats(live.stats())
-        }, 500)
         diagnosticDelay = setTimeout(() => {
-          if (!cancelled) setShowDiagnostics(true)
+          if (cancelled) return
+          setStats(live.stats())
+          setShowDiagnostics(true)
+          diagnosticTimer = setInterval(() => {
+            if (!cancelled) setStats(live.stats())
+          }, 1000)
         }, DIAGNOSTIC_DELAY_MS)
 
         const value = await session.result
@@ -232,6 +237,11 @@ function ScanDiagnostics({ stats }: { stats: QrScanStats }) {
       {stats.lastError && (
         <Typography variant="caption" component="div" sx={{ direction: 'ltr' }}>
           {stats.lastError}
+        </Typography>
+      )}
+      {stats.detail && (
+        <Typography variant="caption" component="div">
+          {stats.detail}
         </Typography>
       )}
     </Alert>

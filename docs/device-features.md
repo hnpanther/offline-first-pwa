@@ -245,11 +245,34 @@ names exactly what will be read (`scanDialogText.ts`).
 **How, and the version that broke scanning.** The first cut searched all ten symbologies on every
 frame and acted on whichever code came first; scanning then stopped working in the field — a second
 code on a label, or a spurious linear read off printed text, set the wanted code aside on every
-frame, and each frame was slower. Now every frame runs the **accepted** kinds only, exactly as
-before; a second detector for the *other* kind runs on one frame in eight
-(`WRONG_KIND_PROBE_EVERY`) and only to name it, and is dropped if the platform will not build or run
-it. Within a frame `pickDetection` takes an accepted code over any other. Never widen the per-frame
-search again to get a message.
+frame, and each frame was slower. A first repair still re-judged each read by its format name
+(`format === 'qr_code'`), which rejects a correct QR on a platform that names it differently. Now
+the per-frame path is **byte-for-byte the one that worked**: a detector built for the accepted
+kinds only, whose first payload is taken without re-checking its kind (`Detection.accepted` comes
+from *which detector* read it), and `jsqr` unchanged. The wrong-kind probe does not even exist for
+the first three seconds (`WRONG_KIND_PROBE_AFTER_MS`); after that a second detector is built
+lazily and runs on one frame in eight (`WRONG_KIND_PROBE_EVERY`), only to name a code, and is
+dropped for good on its first error. The dialog polls the session only after its diagnostic
+delay, as before. Never widen or re-judge the per-frame path again to get a message.
+
+### A platform decoder that answers but never sees — the rescue
+
+Found on Android (2026-11-09): the platform `BarcodeDetector` passed its trial, ran 434 frames
+without a single error and returned nothing for a QR or a barcode, while the phone's own camera read
+the same labels at once. Failover only fires on **errors**, so a decoder that constructs, answers
+and stays silent was never replaced. After `RESCUE_AFTER_MS` (2 s) with nothing read, two frames in
+three now go to a rescue and the third to the original read:
+
+- **a still frame** — the same platform decoder handed the frame drawn onto a canvas instead of the
+  live `<video>`, for a WebView that cannot read pixels from video (QR **and** barcodes);
+- **the bundled `jsqr`** — for a platform decoding module that is unavailable (QR only, and only
+  for a caller that accepts QR).
+
+Each switches itself off for good on its first error. The diagnostics line says which routes are
+running, and — on the next scan — which one read the last code («خواندن موفق قبلی با: …»). That
+answer is the root cause: *still frame* means the WebView's video path; *bundled decoder* means the
+platform module, and then linear barcodes on that device need a bundled 1-D decoder (none exists
+today — `jsqr` reads QR only).
 
 ### The session reports on itself
 
