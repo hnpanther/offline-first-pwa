@@ -816,6 +816,26 @@ guaranteed to settle the deadlock is closed at the root. **A watchdog that force
 `syncInFlight` was considered and rejected** — it could let two syncs run at once, which is worse
 than the problem.
 
+### The device key lives in its own database — never move it into `offline-pwa-db`
+`openDatabase()` deletes and recreates `offline-pwa-db` on a `VersionError` whenever it holds no
+unsynced work, because everything else there is reference data the next sync refetches. The
+device-enrolment key (`services/device/deviceIdentity.ts`) is the one thing no sync can bring
+back: losing it means an approver has to enrol the tablet again, and the recreate path would fire
+on exactly the tablets that had just synced cleanly. So it lives in `mfdcs-device-identity`, one
+store, a schema never meant to change, touched by nothing else — not logout, not switching user,
+not the main schema's upgrades. `deviceIdentity.test.ts` deletes the main database and asserts the
+key survives. The key is created `extractable: false`; never change that to make something
+"easier" — a key that can be exported is a key that can be copied to another phone.
+
+### The login page's server dot is a real probe, and it bypasses `apiClient` on purpose
+`useServerReachability` → `serverProbe.ts` asks `GET /api/health` directly, not through
+`apiClient`, because `apiClient` records every outcome in the global `serverReachable` flag and
+`isSessionValid` reads that flag — a probe from the login page must not be able to change what the
+rest of the app believes. Green needs a 2xx **and** JSON `{"status":"ok"}`: nginx answers a dead
+backend with 502, and a wrong address can land on a web server whose SPA fallback answers every
+path with `200` and HTML. Only the newest probe may set the state, so a slow probe cannot paint
+green over red.
+
 ### `openDatabase` never deletes unsynced work
 On `VersionError` it used to `Dexie.delete` unconditionally, justified by a comment saying the
 case was reachable "only on a dev device" — which stops being true the moment a second schema

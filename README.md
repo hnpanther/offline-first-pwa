@@ -91,6 +91,16 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
 - **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
+- **Device enrolment** — when the server turns it on (backend Settings, off by default), a
+  tablet that is not enrolled sees «ثبت این دستگاه» under the login form: it shows a request
+  number to read to an approver, and takes the eight-digit code they give back (Persian digits
+  and spaces are fine). The device signs that code — and every later login — with a key it
+  generated and can never export, so a code overheard on the phone works on no other device.
+  With enrolment off the login is exactly what it was. See
+  [docs/device-features.md](docs/device-features.md#device-enrolment)
+- **A server dot that tells the truth** — the dot beside the server address on the login page
+  is green only when the backend itself answered `/api/health` within five seconds, red
+  otherwise, re-checked every 15 s while on screen. It used to be green unconditionally
 - **Device hardware check (admin)** — «بررسی سخت‌افزار دستگاه» tests NFC, camera, video,
   microphone, QR/barcode scanning, GPS and storage **on the tablet itself**, with no server
   involved. It reports rather than fixes, asks for each permission only when its own button is

@@ -119,9 +119,15 @@ function extractErrorMessage(body: unknown, fallback: string): string {
   return fallback
 }
 
-async function getBaseUrl(): Promise<string> {
-  const settings = await getSettings()
-  const configured = settings.serverUrl.replace(/\/$/, '')
+/**
+ * The prefix every request path is appended to, for a configured server address.
+ *
+ * Same-origin becomes `''` so requests stay relative. Exported so the login page's reachability
+ * probe asks exactly the address a login would — a probe that resolved it differently could
+ * show green for a server the login cannot reach.
+ */
+export function resolveBaseUrl(serverUrl: string): string {
+  const configured = serverUrl.replace(/\/$/, '')
   if (typeof window !== 'undefined') {
     try {
       if (new URL(configured).origin === window.location.origin) {
@@ -132,6 +138,11 @@ async function getBaseUrl(): Promise<string> {
     }
   }
   return configured
+}
+
+async function getBaseUrl(): Promise<string> {
+  const settings = await getSettings()
+  return resolveBaseUrl(settings.serverUrl)
 }
 
 async function buildHeaders(): Promise<Record<string, string>> {

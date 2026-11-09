@@ -22,6 +22,14 @@ export interface AuthSession {
 export interface LoginRequest {
   username: string
   password: string
+  /**
+   * Device proof, present only when the server enforces device enrolment. Absent, the login is
+   * byte-for-byte what it always was — which is what an older server, or one with enrolment
+   * off, expects.
+   */
+  deviceId?: number
+  nonce?: string
+  signature?: string
 }
 
 export interface LoginResponse {

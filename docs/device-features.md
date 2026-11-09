@@ -515,6 +515,65 @@ which looks installed to whoever did it, and is not.
 
 ---
 
+# Device enrolment
+
+**Code:** [`src/services/device/deviceIdentity.ts`](../src/services/device/deviceIdentity.ts),
+[`src/services/device/deviceAuth.ts`](../src/services/device/deviceAuth.ts),
+[`src/components/auth/DeviceEnrollmentCard.tsx`](../src/components/auth/DeviceEnrollmentCard.tsx)
+
+Off by default on the server (`auth.device_enrollment.enabled`). The server side, the threat model
+and what it does not cover are the backend's `docs/security.md` §3c; this is the device's half.
+
+## What changes on the tablet
+
+**With enrolment off, nothing.** A tablet that has never been enrolled sends the one login request
+it always sent. A tablet that *has* been enrolled first asks `/api/auth/challenge`; a server with
+enrolment off answers `{enforced: false}`, an older server answers 404, and either way the login
+goes out exactly as before.
+
+**With it on**, an unenrolled tablet's login is refused before the password is evaluated, and the
+login page shows «ثبت این دستگاه» **under** the form — the form keeps the username and password, so
+once the device is approved the operator presses «ورود» once more:
+
+1. «درخواست ثبت» creates the key and sends its public half; the tablet shows a **request number**.
+2. The operator reads it to an approver, who issues an eight-digit code from the panel.
+3. The code is typed (Persian/Arabic digits, spaces and dashes are normalised exactly as the
+   server does), signed together with the request number, and sent. Approved.
+
+From then on every login fetches a nonce and signs `mfdcs-login\n<nonce>\n<username>`.
+
+## The key
+
+`crypto.subtle.generateKey({name: 'ECDSA', namedCurve: 'P-256'}, false, ['sign', 'verify'])` —
+**`extractable: false`**: the private key can sign and can never be read out, not even by this
+app's own JavaScript. Signatures are IEEE P1363 (64 bytes), which is what the server verifies
+(backend AGENTS.md #173). WebCrypto exists only in a secure context: production is HTTPS and the
+APK is `https://localhost`; a developer on `http://<lan-ip>:5173` gets «ثبت دستگاه فقط روی اتصال
+امن…» instead of an obscure failure.
+
+It is stored in **its own IndexedDB database**, `mfdcs-device-identity`, not in `offline-pwa-db` —
+see AGENTS.md, "The device key lives in its own database". It is lost by clearing the app's data,
+reinstalling or a factory reset, and then a new enrolment is the right answer: a wiped device
+cannot prove it is the old one.
+
+## What each server answer does
+
+| Situation | The tablet |
+|---|---|
+| enrolment off, or an older server | logs in exactly as before |
+| not enrolled | the card: «درخواست ثبت» |
+| request made, no code yet | the card resumes with the stored request number; «بررسی دوباره» re-asks the server, which answers an already-approved key with *approved* — the case of a response lost on the way back |
+| wrong code | the server's sentence and how many tries remain; five wrong destroys the code |
+| request expired or unknown | back to «درخواست ثبت» |
+| device revoked or unknown | **stopped before the password is sent**; «درخواست ثبت تازه» discards the dead key and starts over — a new approval is still required |
+| enrolment switched on between the challenge and the login | one automatic retry with a proof, so an enrolled tablet never sees the card for that |
+
+A revoked device's running session ends through the existing "session ended" path: the next
+request gets 401 and the operator lands on the login page with the usual notice. Nothing about
+unsynced work changes — it stays on the device, as for any ended session.
+
+---
+
 # Support matrix
 
 | Feature | Chrome Android | Android app (APK) | Safari iOS | Desktop | Fallback |

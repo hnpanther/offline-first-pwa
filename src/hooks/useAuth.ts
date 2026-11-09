@@ -12,13 +12,22 @@ import {
   getSessionUserId,
   reviveOwnedSubmittedQueueOnLogin
 } from '@/services/auth/sessionContext'
-import { login as apiLogin, fetchBootstrap } from '@/services/api'
+import { fetchBootstrap } from '@/services/api'
+import { gateOf, loginWithDevice, type DeviceGate } from '@/services/device/deviceAuth'
 import { setUnauthorizedHandler } from '@/services/api/client'
 import { useAppStore } from '@/store'
 import type { AuthSession } from '@/types/auth'
 import { isSessionValid } from '@/types/auth'
 import { postLoginPath } from '@/utils/loginRedirect'
 import { toIdString } from '@/utils/ids'
+
+/**
+ * The outcome of a sign-in attempt.
+ *
+ * `deviceGate` is set when the device, not the password, stopped the login — the login screen
+ * then shows the enrolment card instead of a plain error.
+ */
+export type SignInResult = { ok: true } | { ok: false; message: string; deviceGate?: DeviceGate }
 
 /**
   * Binds the signed-in user to a stable `sessionUserId`.
@@ -116,16 +125,19 @@ export function useAuth() {
   const navigate = useNavigate()
 
   const signIn = useCallback(
-    async (username: string, password: string): Promise<string | null> => {
+    async (username: string, password: string): Promise<SignInResult> => {
       try {
-        const response = await apiLogin({ username, password })
+        // Attaches a device proof only when the server enforces enrolment; otherwise this is
+        // the same single login request it always was.
+        const response = await loginWithDevice(username, password)
         const session = await saveAuthSession(response)
         await bindSessionUserContext(response.username)
         setAuthSession(session)
-        return null
+        return { ok: true }
       } catch (err) {
-        if (err instanceof Error) return err.message
-        return 'خطا در ورود'
+        const deviceGate = gateOf(err) ?? undefined
+        if (err instanceof Error) return { ok: false, message: err.message, deviceGate }
+        return { ok: false, message: 'خطا در ورود' }
       }
     },
     [setAuthSession]

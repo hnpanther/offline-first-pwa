@@ -15,8 +15,18 @@ import { useForm, Controller } from 'react-hook-form'
 import { useAuth } from '@/hooks/useAuth'
 import { useAppStore } from '@/store'
 import { useSettings } from '@/hooks/useSettings'
+import { useServerReachability } from '@/hooks/useServerReachability'
+import { DeviceEnrollmentCard } from '@/components/auth/DeviceEnrollmentCard'
+import type { DeviceGate } from '@/services/device/deviceAuth'
+import type { Reachability } from '@/services/api/serverProbe'
 import { t } from '@/i18n'
 import { postLoginPath } from '@/utils/loginRedirect'
+
+const REACHABILITY_COLOR: Record<Reachability, string> = {
+  checking: 'text.disabled',
+  reachable: 'success.main',
+  unreachable: 'error.main'
+}
 
 interface LoginForm {
   username: string
@@ -37,6 +47,11 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [sessionNotice, setSessionNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  // Set when the device, not the password, stopped the login: the enrolment card replaces the
+  // error. Cleared once the device is approved, with a one-line notice to press «ورود» again.
+  const [deviceGate, setDeviceGate] = useState<DeviceGate | null>(null)
+  const [deviceApproved, setDeviceApproved] = useState(false)
+  const { reachability, recheck } = useServerReachability(settings.serverUrl)
 
   useEffect(() => {
     if (authLoaded && isAuthenticated) {
@@ -76,13 +91,20 @@ export function LoginPage() {
     setError(null)
     setSessionNotice(null)
     setSessionEnded(false)
+    setDeviceApproved(false)
     setSubmitting(true)
     try {
-      const err = await signIn(data.username.trim(), data.password)
-      if (err) {
-        setError(err)
-      } else {
+      const result = await signIn(data.username.trim(), data.password)
+      if (result.ok) {
+        setDeviceGate(null)
         navigate(postLoginPath(), { replace: true })
+      } else if (result.deviceGate) {
+        setDeviceGate(result.deviceGate)
+      } else {
+        setDeviceGate(null)
+        setError(result.message)
+        // So the dot agrees with the error under it.
+        recheck()
       }
     } finally {
       setSubmitting(false)
@@ -162,6 +184,7 @@ export function LoginPage() {
 
           {sessionNotice && <Alert severity="warning" sx={{ py: 0.25 }}>{sessionNotice}</Alert>}
           {error && <Alert severity="error" sx={{ py: 0.25 }}>{error}</Alert>}
+          {deviceApproved && <Alert severity="success" sx={{ py: 0.25 }}>{t.device.approved}</Alert>}
 
           <Box
             component="form"
@@ -220,6 +243,16 @@ export function LoginPage() {
             </Button>
           </Box>
 
+          {deviceGate && (
+            <DeviceEnrollmentCard
+              gate={deviceGate}
+              onApproved={() => {
+                setDeviceGate(null)
+                setDeviceApproved(true)
+              }}
+            />
+          )}
+
           <Box
             sx={{
               minWidth: 0,
@@ -234,7 +267,23 @@ export function LoginPage() {
               bgcolor: '#fafbfd'
             }}
           >
-            <Box sx={{ width: 6, height: 6, flex: '0 0 auto', borderRadius: '50%', bgcolor: 'success.main' }} />
+            {/* The server's real answer, not decoration: green only when the backend itself
+                replied to /api/health within the time limit. See serverProbe.ts for why a 502
+                from the proxy or an HTML page from a wrong address does not count. */}
+            <Box
+              role="status"
+              aria-label={t.auth.server[reachability]}
+              title={t.auth.server[reachability]}
+              data-reachability={reachability}
+              sx={{
+                width: 6,
+                height: 6,
+                flex: '0 0 auto',
+                borderRadius: '50%',
+                bgcolor: REACHABILITY_COLOR[reachability],
+                transition: 'background-color 200ms ease'
+              }}
+            />
             <Typography
               variant="caption"
               color="text.disabled"

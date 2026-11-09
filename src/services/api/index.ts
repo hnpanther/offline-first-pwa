@@ -26,6 +26,7 @@ import type {
 } from '@/types'
 import type { AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
+import type { EnrollmentStateResponse, LoginChallengeResponse } from '@/types/device'
 
 // ===========================================================================
 // Health
@@ -36,6 +37,53 @@ export async function login(
   signal?: AbortSignal
 ): Promise<LoginResponse> {
   return apiClient.post<LoginResponse>('/api/auth/login', credentials, signal, false)
+}
+
+// ===========================================================================
+// Device enrolment — all unauthenticated: the device asking is not yet trusted
+// ===========================================================================
+
+/** A nonce to sign at login, or `{enforced: false}` when the server does not enrol devices. */
+export async function fetchLoginChallenge(
+  deviceId: number,
+  keyFingerprint: string,
+  signal?: AbortSignal
+): Promise<LoginChallengeResponse> {
+  return apiClient.post<LoginChallengeResponse>(
+    '/api/auth/challenge',
+    { deviceId, keyFingerprint },
+    signal,
+    false
+  )
+}
+
+export async function requestDeviceEnrollment(
+  publicKey: string,
+  label: string | undefined,
+  signal?: AbortSignal
+): Promise<EnrollmentStateResponse> {
+  return apiClient.post<EnrollmentStateResponse>(
+    '/api/devices/enrollment-requests',
+    { publicKey, label },
+    signal,
+    false
+  )
+}
+
+export async function confirmDeviceEnrollment(
+  requestId: number,
+  enrollmentCode: string,
+  signature: string,
+  signal?: AbortSignal
+): Promise<EnrollmentStateResponse> {
+  // The id travels in the body, not the path: this endpoint is unauthenticated and must be on the
+  // server's exact-match list of pre-authentication paths, which a path variable cannot be.
+  return apiClient.post<EnrollmentStateResponse>(
+    '/api/devices/enrollment-requests/confirm',
+    { requestId, enrollmentCode, signature },
+    signal,
+    false
+  )
 }
 
 // ===========================================================================
