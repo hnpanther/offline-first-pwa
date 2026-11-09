@@ -238,11 +238,18 @@ WebView's own binding.
 
 A field set to accept only a linear barcode used to get a detector blind to QR, so a QR sticker in
 front of it produced a live camera and nothing else — under an instruction that said «QR یا
-بارکد». The platform detector now looks for **both** kinds whatever the field accepts. A code of
-an accepted kind is taken; one of the other kind is not, and the dialog says so at once
-(«یک QR Code دیده شد، اما اینجا فقط بارکد خطی پذیرفته می‌شود…»), pointing at the panel where the
-field's accepted kinds are set. The instruction line names exactly what will be read
-(`scanDialogText.ts`).
+بارکد». Now a code of the other kind is named: «یک QR Code دیده شد، اما اینجا فقط بارکد خطی پذیرفته
+می‌شود…», pointing at the panel where the field's accepted kinds are set, and the instruction line
+names exactly what will be read (`scanDialogText.ts`).
+
+**How, and the version that broke scanning.** The first cut searched all ten symbologies on every
+frame and acted on whichever code came first; scanning then stopped working in the field — a second
+code on a label, or a spurious linear read off printed text, set the wanted code aside on every
+frame, and each frame was slower. Now every frame runs the **accepted** kinds only, exactly as
+before; a second detector for the *other* kind runs on one frame in eight
+(`WRONG_KIND_PROBE_EVERY`) and only to name it, and is dropped if the platform will not build or run
+it. Within a frame `pickDetection` takes an accepted code over any other. Never widen the per-frame
+search again to get a message.
 
 ### The session reports on itself
 

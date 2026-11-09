@@ -166,13 +166,37 @@ export function familyOfFormat(format: string | undefined): CodeFamily {
   return format === 'qr_code' ? 'qr' : 'barcode'
 }
 
-function firstDetection(codes: DetectedBarcode[]): Detection | null {
+/**
+ * The code to act on in one frame: the first of a kind the caller accepts, else the first of any
+ * kind (so the dialog can name it), else null.
+ *
+ * Not simply the first code. A label can carry a QR **and** a linear barcode, and a detector
+ * looking for several symbologies can also report a spurious linear read off printed text; taking
+ * whichever came first set the wanted code aside on every frame in which the other one was listed
+ * ahead of it — a camera that sees the label and never reads it.
+ */
+export function pickDetection(
+  codes: readonly Pick<DetectedBarcode, 'rawValue' | 'format'>[],
+  accepted: readonly CodeFamily[]
+): Detection | null {
+  let other: Detection | null = null
   for (const code of codes) {
     const value = (code.rawValue ?? '').trim()
-    if (value.length > 0) return { value, family: familyOfFormat(code.format) }
+    if (value.length === 0) continue
+    const detection: Detection = { value, family: familyOfFormat(code.format) }
+    if (accepted.includes(detection.family)) return detection
+    other ??= detection
   }
-  return null
+  return other
 }
+
+/**
+ * How often a frame is also searched for the kinds the caller does NOT accept — only to say "that
+ * was a QR, this field takes a barcode". Every eighth frame is a few times a second: enough to
+ * name a wrong code within a moment of it being held up, while the other seven frames run the
+ * accepted search exactly as it always did.
+ */
+export const WRONG_KIND_PROBE_EVERY = 8
 
 /**
  * Whether the platform decoder can serve this request, and with which formats — the decision
@@ -256,16 +280,14 @@ async function nativeDecoder(families: CodeFamily[]): Promise<ActiveDecoder | nu
 
   try {
     const supported = await Detector.getSupportedFormats()
-    // Usable only if it can read a kind this caller WANTS…
     const usable = usableNativeFormats(families, supported)
     if (!usable) return null
-    // …but it looks for every kind the platform reads. A field that accepts only linear barcodes
-    // was given a detector blind to QR, so an operator holding up a QR sticker saw a live camera
-    // and nothing else, ever. Seeing the code and saying "this field does not take a QR" is the
-    // difference between a configuration the operator can report and a scanner that looks broken.
-    const everything = usableNativeFormats(['qr', 'barcode'], supported) ?? usable
 
-    const detector = new Detector({ formats: everything.formats })
+    // The detector every frame runs: the accepted kinds and nothing else — exactly what it was
+    // before the wrong-kind message existed. Searching all ten symbologies on every frame made
+    // each one slower and let a spurious or second code crowd out the wanted one; scanning
+    // stopped working in the field after that change, and this is the half that put it back.
+    const detector = new Detector({ formats: usable.formats })
 
     // The trial. A 2x2 canvas holds no code, so an empty result is success: what is being
     // checked is that the call completes at all.
@@ -274,12 +296,39 @@ async function nativeDecoder(families: CodeFamily[]): Promise<ActiveDecoder | nu
     probe.height = 2
     await detector.detect(probe)
 
+    // A second, wider detector used only now and then, and only to NAME a code of the wrong kind
+    // («یک QR Code دیده شد، اما اینجا فقط بارکد خطی…») — never to accept one. Optional: if the
+    // platform will not build or run it, scanning goes on without the message.
+    const other = families.length < 2
+      ? usableNativeFormats((['qr', 'barcode'] as CodeFamily[]).filter(f => !families.includes(f)), supported)
+      : null
+    let wideDetector: BarcodeDetectorLike | null = null
+    if (other) {
+      try {
+        wideDetector = new Detector({ formats: other.formats })
+      } catch {
+        wideDetector = null
+      }
+    }
+    let framesSeen = 0
+
     return {
       name: 'native',
       families: usable.families,
       decode: async video => {
         if (!video.videoWidth || !video.videoHeight) return null
-        return firstDetection(await detector.detect(video))
+        const found = pickDetection(await detector.detect(video), families)
+        if (found) return found
+        framesSeen += 1
+        if (wideDetector && framesSeen % WRONG_KIND_PROBE_EVERY === 0) {
+          try {
+            return pickDetection(await wideDetector.detect(video), families)
+          } catch {
+            // The message is a courtesy; a failing probe must never cost the scan itself.
+            wideDetector = null
+          }
+        }
+        return null
       }
     }
   } catch {
