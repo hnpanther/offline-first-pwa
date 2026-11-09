@@ -102,6 +102,20 @@ export interface RestorePlan {
   assets: RestorableAsset[]
 }
 
+/**
+ * The id under which the round's **own** answers appear in a restore plan.
+ *
+ * <p>The answers to «پرسش‌های این کار» belong to no asset, but they are restored by exactly the
+ * same rules: offered with both versions side by side, never copied back on their own, media
+ * references rebuilt from the files actually on the device. Modelling them as one more unit in the
+ * plan reuses all of that instead of a second, parallel path that could drift from it. Not a
+ * number, so it can never collide with an asset id.
+ */
+export const ROUND_RESTORE_ID = 'round'
+
+/** What the dialog calls that unit. */
+export const ROUND_RESTORE_LABEL = 'پرسش‌های این کار'
+
 export type RestoreRefusal =
   | 'no-archive'
   | 'no-live-sheet'
@@ -317,8 +331,46 @@ export async function buildRestorePlan(
     })
   }
 
+  // The round's own answers, first — the fill page shows them above the asset list too.
+  const round = roundRestorable(archiveRow.sheet, live, attachments)
+  if (round) assets.unshift(round)
+
   if (assets.length === 0) return null
   return { serverId: toIdString(serverId), userId, liveLocalId: live.localId, assets }
+}
+
+/**
+ * The round's own answers as one restorable unit, or `null` when there is nothing to offer.
+ *
+ * <p>Round-level media is stored with no asset (`LocalAttachment.assetId` absent), so it is indexed
+ * under the empty asset id — `toIdString(undefined)` — and `mergeEntry` is asked for exactly that.
+ * Labels come from the live sheet's frozen questions, falling back to the archive's, so the
+ * dialog names a question the way the fill page does.
+ */
+function roundRestorable(
+  archived: LogSheet,
+  live: LogSheet,
+  attachments: Map<string, LocalAttachment[]>
+): RestorableAsset | null {
+  const mine = archived.sheetFormData ?? {}
+  if (!hasEntryFormData(mine)) return null
+  const current = live.sheetFormData ?? {}
+  const merged = mergeEntry(mine, current, '', attachments)
+  if (!hasEntryFormData(merged.formData)) return null
+  if (sameFormData(merged.formData, current)) return null
+  const questions = live.sheetFieldDefinitions?.length
+    ? live.sheetFieldDefinitions
+    : (archived.sheetFieldDefinitions ?? [])
+  return {
+    assetId: ROUND_RESTORE_ID,
+    assetName: ROUND_RESTORE_LABEL,
+    mine,
+    current,
+    conflict: hasEntryFormData(current),
+    attachmentIds: merged.attachmentIds,
+    missingAttachmentIds: merged.missing,
+    fields: diffFields(merged.formData, current, questions)
+  }
 }
 
 /** The live sheet has to be this user's, and still open to edit. */
@@ -396,7 +448,21 @@ export async function restoreArchivedEntries(
     }
   })
 
-  await saveLogSheet({ ...live, entries, updatedAt: now })
+  // The round's own answers, by the same rules. Marked exactly as the questions card's own save
+  // marks them: `sheetFormLocallyEditedAt` is what makes the next merge keep them, and a queued
+  // progress report is what gets them to the server without waiting for the round to end.
+  let roundPatch: Partial<LogSheet> = {}
+  if (wanted.has(ROUND_RESTORE_ID)) {
+    const merged = mergeEntry(archiveRow.sheet.sheetFormData ?? {}, live.sheetFormData ?? {}, '', attachments)
+    roundPatch = {
+      sheetFormData: merged.formData,
+      sheetFormLocallyEditedAt: now,
+      progressSyncStatus: 'pending'
+    }
+    restoredAssetIds.push(ROUND_RESTORE_ID)
+  }
+
+  await saveLogSheet({ ...live, entries, ...roundPatch, updatedAt: now })
 
   // The archive is dropped only when nothing restorable is left behind, so a partial restore
   // keeps the rest reachable instead of stranding it the way the original bug did.

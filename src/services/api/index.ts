@@ -179,6 +179,12 @@ export interface LogSheetContextDto {
   assetClasses?: AssetClass[]
   fieldDefinitions?: FieldDefinition[]
   scopeDisplayLabel?: string | null
+  /**
+   * The round's own questions, resolved by the server exactly as its fill page resolves them.
+   * Present from the server that added it; an older server sends only the sheet's
+   * `sheetFieldDefinitionsSnapshot`, which is null on a custom sheet until its first answer.
+   */
+  sheetFieldDefinitions?: FieldDefinition[]
 }
 
 /** Self-contained server payload for one log sheet (metadata + entries + scoped context). */

@@ -129,8 +129,12 @@ A round can carry questions of its own — «آیا همه لوله‌ها با�
 rather than once per asset. They are field definitions with a different owner, so
 `DynamicClassForm` renders them unchanged; what is new is how they travel.
 
-**Downward, nothing changed.** The bundle serialises the whole sheet entity, so
-`sheetFieldDefinitionsSnapshot` and `sheetFormData` have always been in the payload. Declaring
+**Downward, the questions come from `context.sheetFieldDefinitions` first.** The bundle
+serialises the whole sheet entity, so `sheetFieldDefinitionsSnapshot` and `sheetFormData` have
+always been in the payload — but a **custom** sheet's snapshot is null until its first answer, so a
+round set up with questions after it was created arrived here empty. The server now sends the list
+its own fill page shows, resolved, in the bundle's context; `applyLogSheetBundle` prefers it and
+falls back to the sheet's column for an older server. Declaring
 them on `ServerLogSheet` is what lets `applyLogSheetBundle` copy them onto the stored row, as
 `sheetFieldDefinitions` and `sheetFormData`. Both are **plain, non-indexed properties — no Dexie
 version bump**, the same as `fieldDefinitions` and `fieldOverridesSnapshot` beside them.
@@ -578,6 +582,15 @@ must not have broken) and `liveReassignRoundTrip.test.ts` (the same sequence ove
 captured from a running server).
 
 ### Restoring an archived round
+
+**The round's own answers are part of all of this.** Archiving, resetting a reassigned draft,
+archiving before a server overwrite and keeping the archived card visible all used to ask only
+about answered *assets*; a round answered only at round level (every asset-less round) was then
+cleared on reassignment with no archive at all. `sheetHasLocalWork` — an answered asset **or** an
+answered round question — is the one definition now. In a restore the round appears as one more
+unit, «پرسش‌های این کار», under the reserved id `ROUND_RESTORE_ID`, offered first, with the same
+conflict and attachment rules as an asset; restoring it stamps `sheetFormLocallyEditedAt` and queues
+a progress report, exactly as the questions card's own save does.
 
 `restoreArchivedWork.ts` — `buildRestorePlan` and `restoreArchivedEntries`. The operator taps
 **بازگرداندن مقادیر** on the archived History card, ticks the assets they want, and those are

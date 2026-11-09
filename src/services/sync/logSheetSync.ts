@@ -114,8 +114,17 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     : {}
   // The round's own questions travel the same way and are frozen the same way: an empty or
   // absent list means "this payload says nothing about them", not "this round asks none".
+  //
+  // The context's resolved list first. The sheet's snapshot column is null on a CUSTOM sheet
+  // until its first answer freezes it — the approver adds questions after creating the round —
+  // so reading only the column showed an operator who had just picked the round up an empty
+  // form, with no way to give the first answer. The column stays as the fallback for a server
+  // that does not send the resolved list yet.
+  const resolvedSheetFields = bundle.context?.sheetFieldDefinitions ?? []
   const bundleSheetFields = normalizeFieldDefinitions(
-    serverSheet.sheetFieldDefinitionsSnapshot ?? []
+    resolvedSheetFields.length > 0
+      ? resolvedSheetFields
+      : (serverSheet.sheetFieldDefinitionsSnapshot ?? [])
   )
   const sheetFieldsPatch = bundleSheetFields.length > 0
     ? { sheetFieldDefinitions: bundleSheetFields }

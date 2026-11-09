@@ -25,9 +25,10 @@ import {
   isSupersededSyncError
 } from '@/utils/logSheetStatus'
 import {
+  archiveHoldsRoundAnswersTheLiveRowLacks,
   archiveHoldsWorkTheLiveRowLacks,
   resolveLocalWorkOwner,
-  sheetHasLocalEntryData
+  sheetHasLocalWork
 } from '@/utils/logSheetLocalData'
 import { toIdString } from '@/utils/ids'
 import { fetchBootstrap } from '@/services/api'
@@ -324,7 +325,7 @@ export async function loadLogSheetsForSessionUser(
     // Reproduced end to end: draft with values → assigned to somebody else → archive visible →
     // assigned back → one empty card and nothing else.
     //
-    // `sheetHasLocalEntryData` is what separates the two cases. A false revoke during sync
+    // `sheetHasLocalWork` is what separates the two cases. A false revoke during sync
     // leaves the live row holding its values, so it should win and the archive is noise. A
     // cleared row holds nothing, so the archive is the only copy and must stay visible.
     //
@@ -335,14 +336,20 @@ export async function loadLogSheetsForSessionUser(
     //
     // Which is why the check is per asset rather than per sheet. After a **partial** restore the
     // live row holds what came back and the archive still holds what did not; asking only
-    // `sheetHasLocalEntryData(liveRow)` would hide the card at that moment and strand the
+    // `sheetHasLocalWork(liveRow)` would hide the card at that moment and strand the
     // remainder — the original bug, reintroduced one restore later. Found by running a two-pass
     // restore in a browser, not by a test.
+    //
+    // The round's own answers are part of "the work", on both sides of this test: a live row
+    // holding only round answers still hides a stale archive, and an archive holding round
+    // answers the live row lacks stays visible — otherwise the answers would be on disk and
+    // shown nowhere, the same stranding one level up.
     if (
       liveRow &&
       resolveLocalWorkOwner(liveRow) === userId &&
-      sheetHasLocalEntryData(liveRow) &&
-      !archiveHoldsWorkTheLiveRowLacks(archived, liveRow)
+      sheetHasLocalWork(liveRow) &&
+      !archiveHoldsWorkTheLiveRowLacks(archived, liveRow) &&
+      !archiveHoldsRoundAnswersTheLiveRowLacks(archived, liveRow)
     ) {
       if (
         liveRow.status === 'submitted' &&

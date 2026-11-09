@@ -17,6 +17,7 @@ import {
   type QrScanSession,
   type QrScanStats
 } from '@/services/scan/qrScanner'
+import { scanInstruction, scanTitle, wrongKindMessage } from '@/services/scan/scanDialogText'
 
 interface QrScanDialogProps {
   open: boolean
@@ -73,6 +74,9 @@ export function QrScanDialog({
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [stats, setStats] = useState<QrScanStats | null>(null)
+  // The session is polled from the start, so a code of the wrong kind is explained the moment it
+  // is seen; only the general diagnostics line waits, because on a scan that works it is noise.
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
 
   // `families` is an array literal at most call sites, so a new identity on every render. Keyed
   // on its content instead: including the array itself would restart the camera continuously.
@@ -86,6 +90,7 @@ export function QrScanDialog({
     let diagnosticDelay: ReturnType<typeof setTimeout> | null = null
     setError(null)
     setStats(null)
+    setShowDiagnostics(false)
     setStarting(true)
 
     void (async () => {
@@ -103,15 +108,12 @@ export function QrScanDialog({
         }
         setStarting(false)
 
-        // Only after a delay, and only while the scan is still running: a line of diagnostics
-        // the instant the camera opens would be noise on every successful scan.
         const live = session
+        diagnosticTimer = setInterval(() => {
+          if (!cancelled) setStats(live.stats())
+        }, 500)
         diagnosticDelay = setTimeout(() => {
-          if (cancelled) return
-          setStats(live.stats())
-          diagnosticTimer = setInterval(() => {
-            if (!cancelled) setStats(live.stats())
-          }, 1000)
+          if (!cancelled) setShowDiagnostics(true)
         }, DIAGNOSTIC_DELAY_MS)
 
         const value = await session.result
@@ -138,13 +140,11 @@ export function QrScanDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, familyKey])
 
-  const asksForBarcode = (families ?? ['qr']).includes('barcode')
-
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xs">
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <QrCodeScannerIcon fontSize="small" color="primary" />
-        {title ?? (asksForBarcode ? 'اسکن QR یا بارکد' : 'اسکن QR Code')}
+        {title ?? scanTitle(families)}
       </DialogTitle>
       <DialogContent>
         {error ? (
@@ -152,9 +152,7 @@ export function QrScanDialog({
         ) : (
           <>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              {asksForBarcode
-                ? 'دوربین را روی برچسب QR یا بارکد بگیرید.'
-                : 'دوربین را روی برچسب QR دارایی بگیرید.'}
+              {scanInstruction(families)}
             </Typography>
             {/* Two elements, and they must stay two.
 
@@ -184,7 +182,12 @@ export function QrScanDialog({
                 />
               )}
             </Box>
-            {stats && <ScanDiagnostics stats={stats} />}
+            {stats?.ignoredFamily && (
+              <Alert severity="warning" sx={{ mt: 1.5 }} data-testid="scan-wrong-kind">
+                {wrongKindMessage(stats.ignoredFamily)}
+              </Alert>
+            )}
+            {showDiagnostics && stats && <ScanDiagnostics stats={stats} />}
           </>
         )}
       </DialogContent>

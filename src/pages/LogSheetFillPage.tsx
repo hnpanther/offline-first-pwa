@@ -64,6 +64,7 @@ import {
   type FormDraftCache
 } from '@/utils/formDraftCache'
 import { shouldShowFullPageLoader } from '@/utils/pageLoadState'
+import { editingHint, roundProgress, submittedHint } from '@/utils/fillPageHints'
 import { useNFC } from '@/hooks/useNFC'
 import { resolveNfcTagId } from '@/services/nfc'
 import { matchLogSheetEntryByTag } from '@/services/nfc/matchLogSheetEntry'
@@ -1239,11 +1240,16 @@ export function LogSheetFillPage() {
   // Nothing to scan. The operator opens an asset from the list and the reading is recorded as
   // manual, which is what it is — there was no tag and no sticker to prove otherwise.
   const noScanRequired = scanMode === 'NONE'
+  const editingGuide = editingHint({ hasAssets: entries.length > 0, scanMode, allowManualEntry })
   const sheetQuestions = logSheet.sheetFieldDefinitions ?? []
   const sheetAnswers = logSheet.sheetFormData ?? {}
   const hasAnythingToAnswer = entries.length > 0 || sheetQuestions.length > 0
-  const totalCount = entries.length
-  const filledCount = entries.filter(e => getEntryCompletion(e).isComplete).length
+  const progress = roundProgress({
+    assetsTotal: entries.length,
+    assetsDone: entries.filter(e => getEntryCompletion(e).isComplete).length,
+    questionKeys: sheetQuestions.map(q => q.key),
+    answers: sheetAnswers
+  })
 
   return (
     <Box sx={{ maxWidth: 720, mx: 'auto' }}>
@@ -1295,17 +1301,19 @@ export function LogSheetFillPage() {
               </Typography>
             )}
           </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-            <LinearProgress
-              variant="determinate"
-              value={totalCount > 0 ? (filledCount / totalCount) * 100 : 0}
-              sx={{ flex: 1, height: 8, borderRadius: 4 }}
-              color={filledCount === totalCount && totalCount > 0 ? 'success' : 'primary'}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-              {filledCount} / {totalCount} Asset پر شده
-            </Typography>
-          </Box>
+          {progress.total > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <LinearProgress
+                variant="determinate"
+                value={(progress.done / progress.total) * 100}
+                sx={{ flex: 1, height: 8, borderRadius: 4 }}
+                color={progress.done === progress.total ? 'success' : 'primary'}
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                {progress.done} / {progress.total} {progress.unit}
+              </Typography>
+            </Box>
+          )}
         </CardContent>
       </Card>
 
@@ -1584,17 +1592,15 @@ export function LogSheetFillPage() {
         </Card>
       )}
 
-      {canEdit && (
+      {canEdit && editingGuide && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          {allowManualEntry
-            ? 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، تگ NFC را اسکن کنید یا شناسه را دستی وارد کنید.'
-            : 'برای مشاهده روی Asset کلیک کنید. برای ویرایش، تگ NFC را اسکن کنید. اگر تگ خراب است، با «اعلام خرابی NFC» ثبت دستی همان Asset باز می‌شود.'}
+          {editingGuide}
         </Alert>
       )}
 
       {isSynced && (
         <Alert severity="success" sx={{ mb: 2 }}>
-          این Log Sheet ارسال شده است. برای مشاهده اطلاعات روی هر Asset کلیک کنید.
+          {submittedHint(entries.length > 0)}
         </Alert>
       )}
 

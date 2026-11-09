@@ -1,7 +1,7 @@
 import { db } from '@/services/storage/db'
 import type { LogSheet, LogSheetUserArchive } from '@/types'
 import { toIdString } from '@/utils/ids'
-import { resolveLocalWorkOwner, sheetHasLocalEntryData } from '@/utils/logSheetLocalData'
+import { resolveLocalWorkOwner, sheetHasLocalWork } from '@/utils/logSheetLocalData'
 import {
   SYNC_OUTCOME_MESSAGES,
   isLogSheetExpiredForSync,
@@ -42,7 +42,9 @@ export async function archiveLogSheetForUser(
   options?: { markRevoked?: boolean }
 ): Promise<void> {
   if (!sheet.serverId) return
-  const hasWork = sheet.status === 'submitted' || sheetHasLocalEntryData(sheet)
+  // Answered round questions count as work. They used not to, and a round answered only at
+  // round level was then cleared on reassignment with no archive at all.
+  const hasWork = sheet.status === 'submitted' || sheetHasLocalWork(sheet)
   if (!hasWork) return
   const serverId = toIdString(sheet.serverId)
   const snapshot: LogSheet = {

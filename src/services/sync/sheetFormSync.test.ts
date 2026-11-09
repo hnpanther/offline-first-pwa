@@ -111,6 +111,41 @@ beforeEach(async () => {
 // ---------------------------------------------------------------- coming down
 
 describe('a bundle brings the questions and the answers', () => {
+  it('takes a custom round’s questions from the resolved list while the sheet has no snapshot', async () => {
+    // A custom round's snapshot column is null until its first answer — the approver adds the
+    // questions after creating it. Reading only that column showed an empty round on pickup.
+    const custom = bundle(null, false)
+    custom.sheet.templateId = null
+    custom.entries = []
+    custom.context = {
+      fieldDefinitions: [],
+      sheetFieldDefinitions: [
+        { id: 7, key: 'area_clear', label: 'آیا محوطه پاک بود؟', dataType: 'checkbox', required: false, order: 1 },
+        { id: 8, key: 'note', label: 'یادداشت', dataType: 'text', required: false, order: 2 }
+      ]
+    }
+
+    await applyLogSheetBundle(custom)
+
+    const stored = (await db.logSheets.toArray())[0]
+    expect(stored.sheetFieldDefinitions?.map(q => q.key)).toEqual(['area_clear', 'note'])
+  })
+
+  it('prefers the resolved list over the column when a server sends both', async () => {
+    const both = bundle(null, true)
+    both.context = {
+      fieldDefinitions: [],
+      sheetFieldDefinitions: [
+        { id: 9, key: 'resolved_one', label: 'حل‌شده', dataType: 'text', required: false, order: 1 }
+      ]
+    }
+
+    await applyLogSheetBundle(both)
+
+    const stored = (await db.logSheets.toArray())[0]
+    expect(stored.sheetFieldDefinitions?.map(q => q.key)).toEqual(['resolved_one'])
+  })
+
   it('copies both onto the stored sheet, with no contract change', async () => {
     await applyLogSheetBundle(bundle({ pipes_checked: 'از سرور' }))
 

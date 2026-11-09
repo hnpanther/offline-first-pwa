@@ -15,6 +15,42 @@ export function sheetHasLocalEntryData(
   return (sheet.entries ?? []).some(e => hasEntryFormData(e.formData))
 }
 
+/** Whether the round's own questions hold an answer on this device. */
+export function sheetHasRoundAnswers(sheet: Pick<LogSheet, 'sheetFormData'>): boolean {
+  return hasEntryFormData(sheet.sheetFormData)
+}
+
+/**
+ * Whether this row holds work worth keeping: an answered asset, or an answered question of the
+ * round itself.
+ *
+ * <p>Every "is there anything to lose here?" decision — archive before clearing, reset a
+ * reassigned draft, archive before a server overwrite, keep an archive visible — used to ask only
+ * about the assets. A round answered only at round level (every asset-less round, and any round
+ * where the operator started with its questions) then counted as empty: reassigning it away
+ * cleared it **without an archive**, and the unsynced answers were gone. Asking this instead keeps
+ * the two kinds of work on one rule.
+ */
+export function sheetHasLocalWork(sheet: Pick<LogSheet, 'entries' | 'sheetFormData'>): boolean {
+  return sheetHasLocalEntryData(sheet) || sheetHasRoundAnswers(sheet)
+}
+
+/**
+ * Does the archive hold an answered round question the live row has nothing for?
+ *
+ * <p>Per question, for the same reason {@link archiveHoldsWorkTheLiveRowLacks} is per asset: a
+ * live row that holds some answers must not hide an archive that holds others.
+ */
+export function archiveHoldsRoundAnswersTheLiveRowLacks(
+  archived: Pick<LogSheet, 'sheetFormData'>,
+  liveRow: Pick<LogSheet, 'sheetFormData'>
+): boolean {
+  const live = liveRow.sheetFormData ?? {}
+  return Object.entries(archived.sheetFormData ?? {}).some(
+    ([key, value]) => hasEntryFormData({ [key]: value }) && !hasEntryFormData({ [key]: live[key] })
+  )
+}
+
 /**
  * Does the archive still hold an answered asset the live row has nothing for?
  *

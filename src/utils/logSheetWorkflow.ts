@@ -4,7 +4,7 @@ import {
   isAssigneeMismatch,
   resolveLocalWorkOwner,
   serverAssigneeId,
-  sheetHasLocalEntryData
+  sheetHasLocalWork
 } from '@/utils/logSheetLocalData'
 import { isOwnershipReassignError, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 
@@ -64,10 +64,12 @@ export function alignLocalWorkflowWithServer(
     return 'reset-draft'
   }
 
+  // Round-level answers are work too: a draft answered only at round level, now assigned to
+  // somebody else, is reset — and archived first — exactly like one with answered assets.
   if (
     assigneeMismatch &&
     existing.status === 'draft' &&
-    sheetHasLocalEntryData(existing)
+    sheetHasLocalWork(existing)
   ) {
     return 'reset-draft'
   }
@@ -92,7 +94,7 @@ export function alignLocalWorkflowWithServer(
  * `cleanupLocalLogSheets`).
  */
 export function shouldArchiveBeforeServerOverwrite(
-  existing: Pick<LogSheet, 'status' | 'syncStatus' | 'entries'>,
+  existing: Pick<LogSheet, 'status' | 'syncStatus' | 'entries' | 'sheetFormData'>,
   preserveLocal: boolean
 ): boolean {
   // The local work is this user's own and still matches the server assignee — nothing lost.
@@ -101,7 +103,7 @@ export function shouldArchiveBeforeServerOverwrite(
   // left to preserve. Re-archiving here would overwrite the good snapshot with the other
   // operator's data on a second pass (StrictMode, concurrent inbox refresh, later reopen).
   if (existing.status === 'submitted' && existing.syncStatus === 'synced') return false
-  return sheetHasLocalEntryData(existing)
+  return sheetHasLocalWork(existing)
 }
 
 /** Keep local form data only when the current session user owns the local work. */

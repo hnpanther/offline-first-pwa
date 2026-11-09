@@ -74,8 +74,8 @@ export type QrScanSupport =
 /**
  * The platform names for each family.
  *
- * Linear formats are listed explicitly rather than asking for everything: a detector told to
- * look for twelve symbologies spends every frame looking for eleven that are not on the label.
+ * Listed explicitly rather than asking for every symbology the platform knows (PDF417, Aztec,
+ * Data Matrix…): those are not on a plant's labels, and each one is work on every frame.
  */
 const NATIVE_FORMATS: Record<CodeFamily, string[]> = {
   qr: ['qr_code'],
@@ -145,8 +145,14 @@ export function qrScanSupport(): QrScanSupport {
   return 'available'
 }
 
-/** Reads one video frame and returns the payload in it, or null when there is none yet. */
-type FrameDecoder = (video: HTMLVideoElement) => Promise<string | null>
+/** A code found in a frame: its payload, and which kind of code it was. */
+export interface Detection {
+  value: string
+  family: CodeFamily
+}
+
+/** Reads one video frame and returns the code in it, or null when there is none yet. */
+type FrameDecoder = (video: HTMLVideoElement) => Promise<Detection | null>
 
 interface ActiveDecoder {
   name: DecoderName
@@ -155,8 +161,17 @@ interface ActiveDecoder {
   families: CodeFamily[]
 }
 
-function firstPayload(codes: DetectedBarcode[]): string | null {
-  return codes.map(c => (c.rawValue ?? '').trim()).find(v => v.length > 0) ?? null
+/** Which kind of code a platform format name is. Anything that is not QR is a linear barcode. */
+export function familyOfFormat(format: string | undefined): CodeFamily {
+  return format === 'qr_code' ? 'qr' : 'barcode'
+}
+
+function firstDetection(codes: DetectedBarcode[]): Detection | null {
+  for (const code of codes) {
+    const value = (code.rawValue ?? '').trim()
+    if (value.length > 0) return { value, family: familyOfFormat(code.format) }
+  }
+  return null
 }
 
 /**
@@ -240,10 +255,17 @@ async function nativeDecoder(families: CodeFamily[]): Promise<ActiveDecoder | nu
   if (!Detector || typeof Detector.getSupportedFormats !== 'function') return null
 
   try {
-    const usable = usableNativeFormats(families, await Detector.getSupportedFormats())
+    const supported = await Detector.getSupportedFormats()
+    // Usable only if it can read a kind this caller WANTS…
+    const usable = usableNativeFormats(families, supported)
     if (!usable) return null
+    // …but it looks for every kind the platform reads. A field that accepts only linear barcodes
+    // was given a detector blind to QR, so an operator holding up a QR sticker saw a live camera
+    // and nothing else, ever. Seeing the code and saying "this field does not take a QR" is the
+    // difference between a configuration the operator can report and a scanner that looks broken.
+    const everything = usableNativeFormats(['qr', 'barcode'], supported) ?? usable
 
-    const detector = new Detector({ formats: usable.formats })
+    const detector = new Detector({ formats: everything.formats })
 
     // The trial. A 2x2 canvas holds no code, so an empty result is success: what is being
     // checked is that the call completes at all.
@@ -257,7 +279,7 @@ async function nativeDecoder(families: CodeFamily[]): Promise<ActiveDecoder | nu
       families: usable.families,
       decode: async video => {
         if (!video.videoWidth || !video.videoHeight) return null
-        return firstPayload(await detector.detect(video))
+        return firstDetection(await detector.detect(video))
       }
     }
   } catch {
@@ -296,7 +318,7 @@ async function jsqrDecoder(): Promise<ActiveDecoder> {
         inversionAttempts: 'dontInvert'
       })
       const value = (found?.data ?? '').trim()
-      return value.length > 0 ? value : null
+      return value.length > 0 ? { value, family: 'qr' } : null
     }
   }
 }
@@ -329,6 +351,12 @@ export interface QrScanStats {
   lastError: string | null
   /** Families the chosen decoder can read — narrower than asked for on some devices. */
   families: CodeFamily[]
+  /**
+   * The last kind of code seen that this caller does NOT accept — a QR held up to a field that
+   * takes only linear barcodes, say. Null until that happens. Reported so the dialog can say so
+   * instead of looking like a scanner that never reads anything.
+   */
+  ignoredFamily: CodeFamily | null
 }
 
 export interface QrScanSession {
@@ -379,7 +407,7 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
         return value
       }),
       stop: () => {},
-      stats: () => ({ decoder: 'native-app', framesTried: 0, lastError: null, families })
+      stats: () => ({ decoder: 'native-app', framesTried: 0, lastError: null, families, ignoredFamily: null })
     }
   }
 
@@ -438,12 +466,14 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
   let lastError: string | null = null
   let consecutiveErrors = 0
   let fallbackTried = active.name !== 'native'
+  let ignoredFamily: CodeFamily | null = null
 
   const stats = (): QrScanStats => ({
     decoder: active.name,
     framesTried,
     lastError,
-    families: active.families
+    families: active.families,
+    ignoredFamily
   })
 
   const result = new Promise<string>((resolve, reject) => {
@@ -455,13 +485,18 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
       if (video.readyState >= 2) {
         framesTried += 1
         try {
-          const value = await active.decode(video)
+          const detection = await active.decode(video)
           // The decoder ran. Whether or not a code was in shot, it is working.
           consecutiveErrors = 0
-          if (value) {
+          if (detection && families.includes(detection.family)) {
             stop()
-            resolve(value)
+            resolve(detection.value)
             return
+          }
+          if (detection) {
+            // A real code, of a kind this caller does not take. Not accepted — the field's rule
+            // stands — but recorded, so the dialog can say why nothing is happening.
+            ignoredFamily = detection.family
           }
         } catch (err) {
           lastError = describe(err)

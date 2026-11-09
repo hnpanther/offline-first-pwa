@@ -816,6 +816,24 @@ guaranteed to settle the deadlock is closed at the root. **A watchdog that force
 `syncInFlight` was considered and rejected** — it could let two syncs run at once, which is worse
 than the problem.
 
+### The fill page's guides and progress come from `fillPageHints.ts` — never a fixed sentence
+A round may have no assets, and may identify the ones it has by NFC, QR, either or nothing. The
+fixed sentences written when every round was "assets by NFC" told an operator on a questions-only
+round to «click an Asset» and showed «0 / 0 Asset پر شده». `editingHint`, `submittedHint` and
+`roundProgress` choose from what the round actually is, and each wrong case is a test in
+`fillPageHints.test.ts`. A new line on that page that names assets, NFC or QR belongs there too.
+
+### "Is there work here?" means answered assets OR answered round questions
+`sheetHasLocalWork` is the one definition, used by every decision on the archive path — archive
+before clearing, reset a reassigned draft, archive before a server overwrite, keep an archive card
+visible. Do not reach for `sheetHasLocalEntryData` there: it looks only at assets, and a round
+answered only at round level was cleared on reassignment with no archive (backend AGENTS.md #179).
+
+### A round's questions come from the bundle's context, not the sheet's column
+`applyLogSheetBundle` reads `context.sheetFieldDefinitions` first and the sheet's
+`sheetFieldDefinitionsSnapshot` only as a fallback. A custom sheet's column is null until its first
+answer, so reading it alone showed an empty round (backend AGENTS.md #177).
+
 ### The device key lives in its own database — never move it into `offline-pwa-db`
 `openDatabase()` deletes and recreates `offline-pwa-db` on a `VersionError` whenever it holds no
 unsynced work, because everything else there is reference data the next sync refetches. The

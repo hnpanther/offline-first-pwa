@@ -234,6 +234,16 @@ decoder serves is settled when the scan starts, and if none can, the dialog says
 — and it is the one route that would give the APK linear barcodes without relying on the
 WebView's own binding.
 
+### A code of the wrong kind is named, not ignored
+
+A field set to accept only a linear barcode used to get a detector blind to QR, so a QR sticker in
+front of it produced a live camera and nothing else — under an instruction that said «QR یا
+بارکد». The platform detector now looks for **both** kinds whatever the field accepts. A code of
+an accepted kind is taken; one of the other kind is not, and the dialog says so at once
+(«یک QR Code دیده شد، اما اینجا فقط بارکد خطی پذیرفته می‌شود…»), pointing at the panel where the
+field's accepted kinds are set. The instruction line names exactly what will be read
+(`scanDialogText.ts`).
+
 ### The session reports on itself
 
 `QrScanSession.stats()` carries the decoder in use, the number of frames handed to it, and the
