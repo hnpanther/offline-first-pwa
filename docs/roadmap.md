@@ -1021,7 +1021,10 @@ sync was voided and shows a send error, makes the bar at the top say «1 رکو�
 **Built on 2026-11-09**: `isVoidedSubmission` (from `lastSubmitOutcome`) makes a voided round's
 files uploadable as the void's evidence, and a 403 on such a file parks it — bytes kept, out of the
 badge — instead of retrying it for ever (`attachmentSync.isRefusedVoidEvidence`). Tests in
-`attachmentSync.test.ts`. The server half, built at the same time, is backend roadmap
+`attachmentSync.test.ts`. A row parked by that 403 is also exempt from the cleanup that retires a
+week-old failed sheet with its parked files (`deleteSyncedAttachmentsForLogSheet`), so the wrong
+deploy order cannot turn "parked" into "deleted" (`attachmentsDb.test.ts`). The server half,
+built at the same time, is backend roadmap
 §35 ([`backend-offline-first/docs/roadmap.md`](../../JavaProject/backend-offline-first/docs/roadmap.md)).
 
 ## What happens today

@@ -283,6 +283,12 @@ export async function deleteAttachmentsForLogSheet(logSheetLocalId: string): Pro
  * Rows still genuinely waiting are left behind: they hold their own `logSheetServerId`, so the
  * queue can still deliver them, and dropping them would discard the operator's evidence.
  *
+ * **A row parked by a 403 is kept too.** The only 403 that parks is a voided round's photograph
+ * the server would not take as that void's evidence (`isRefusedVoidEvidence`) — a server without
+ * backend V15, or a deploy done in the wrong order. Its bytes are the only copy of real field
+ * evidence, and the refusal is about the server, not the file: deleting it a week later with the
+ * sheet is the loss PWA roadmap §16 promised never to cause.
+ *
  * @returns how many rows were removed
  */
 export async function deleteSyncedAttachmentsForLogSheet(
@@ -291,7 +297,10 @@ export async function deleteSyncedAttachmentsForLogSheet(
   return db.attachments
     .where('logSheetLocalId')
     .equals(logSheetLocalId)
-    .filter(row => row.syncStatus === 'synced' || row.permanentFailure === true)
+    .filter(
+      row =>
+        row.syncStatus === 'synced' || (row.permanentFailure === true && row.failedStatus !== 403)
+    )
     .delete()
 }
 

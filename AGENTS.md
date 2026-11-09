@@ -830,7 +830,9 @@ constants is how an ownership void («این لاگ‌شیت دیگر به شم�
 pass and counted in the badge for ever. `isVoidedSubmission` reads the outcome the server stated.
 Its files go up as the void's evidence (backend V15); a 403 on one is final and parks it with its
 bytes kept — while every *other* 403 stays retryable, because on a shared tablet it usually means
-the wrong person is signed in.
+the wrong person is signed in. **And a 403-parked row is never deleted**: the cleanup that retires
+a week-old failed sheet drops its other parked files, but not these — the refusal is about the
+server (an old one, or the wrong deploy order), and the bytes are the only copy.
 
 ### "Is there work here?" means answered assets OR answered round questions
 `sheetHasLocalWork` is the one definition, used by every decision on the archive path — archive

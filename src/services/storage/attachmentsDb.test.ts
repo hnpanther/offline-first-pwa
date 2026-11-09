@@ -255,6 +255,22 @@ describe('deleting a sheet’s attachments', () => {
     expect(await getAttachment('waiting')).toBeDefined()
   })
 
+  it('keeps a voided round’s photograph the server refused, whatever happens to the sheet', async () => {
+    // Parked by a 403 only for a voided round whose evidence the server would not take (an older
+    // server, or the wrong deploy order). That refusal is about the server, not the file, and the
+    // bytes are the only copy — PWA roadmap §16 promised they would never be deleted.
+    await saveAttachment(
+      attachment({ id: 'void-evidence', syncStatus: 'failed', permanentFailure: true, failedStatus: 403 })
+    )
+    await saveAttachment(
+      attachment({ id: 'refused-file', syncStatus: 'failed', permanentFailure: true, failedStatus: 400 })
+    )
+
+    expect(await deleteSyncedAttachmentsForLogSheet('sheet-local-1')).toBe(1)
+    expect(await getAttachment('void-evidence')).toBeDefined()
+    expect(await getAttachment('refused-file')).toBeUndefined()
+  })
+
   it('leaves another sheet’s uploaded attachments alone', async () => {
     await saveAttachment(attachment({ id: 'mine', syncStatus: 'synced' }))
     await saveAttachment(
