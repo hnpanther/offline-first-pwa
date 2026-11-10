@@ -53,12 +53,17 @@ server {
 
     # First load and every service-worker update go over plant Wi-Fi: compress text.
     # Already-compressed formats (woff2, png, webm) are deliberately absent.
+    #
+    # `application/wasm` is here because the scanner's decoder is a 925 KB WebAssembly file
+    # (zxing_reader.wasm) — the single largest asset the app serves, and one that compresses to
+    # roughly a third. It is precached once per install, so this is felt on exactly the download
+    # that happens over the worst link.
     gzip              on;
     gzip_vary         on;
     gzip_min_length   1024;
     gzip_proxied      any;
     gzip_types        text/plain text/css application/javascript application/json
-                      image/svg+xml application/manifest+json;
+                      image/svg+xml application/manifest+json application/wasm;
 
     # A single attachment may be up to 25 MB (app.attachments.max-file-size-bytes). nginx's
     # default is 1 MB and its 413 reads to an operator as "upload failed".

@@ -54,6 +54,40 @@ type Outcome =
 
 const IDLE: Outcome = { state: 'idle' }
 
+/**
+ * One line about this device's decoder, for an administrator standing next to a tablet.
+ *
+ * <p>It leads with the only thing that can go wrong now — whether the WebAssembly file loaded —
+ * and names its URL when it did not, because the one realistic cause is that the install is
+ * missing it (a service worker that precached everything else, or an APK built before the decoder
+ * was bundled). That is a fact somebody can act on; «اسکن کار نمی‌کند» is not.
+ *
+ * <p>What `BarcodeDetector` claims is reported **last and as context only**. Nothing in the scan
+ * path consults it any more, and on the devices this decoder was introduced for it is actively
+ * misleading: it answers with a plausible list of formats and then reads nothing at all. It is
+ * here so that a tablet whose history includes that failure can still be recognised.
+ */
+function describeDecoder(report: Awaited<ReturnType<typeof decoderReport>>): string {
+  const platform =
+    report.platformDetectorFormats === null
+      ? 'BarcodeDetector موجود نیست (بی‌اهمیت؛ استفاده نمی‌شود)'
+      : report.platformDetectorFormats.length === 0
+        ? 'BarcodeDetector فهرست خالی داد (بی‌اهمیت؛ استفاده نمی‌شود)'
+        : `BarcodeDetector: ${report.platformDetectorFormats.join(', ')} (استفاده نمی‌شود)`
+
+  if (report.loaded === false) {
+    return (
+      `رمزگشا بارگذاری نشد — فایل ${report.wasmUrl} در این نسخهٔ نصب‌شده نیست.` +
+      ` علت: ${report.error ?? 'نامشخص'} — ${platform}`
+    )
+  }
+
+  return (
+    `رمزگشا: ${report.decoder}${report.loaded === true ? ` ${report.version}` : ''}` +
+    ` — می‌خواند: ${report.families.join(' + ')} — ${platform}`
+  )
+}
+
 function OutcomeChip({ outcome }: { outcome: Outcome }) {
   if (outcome.state === 'idle') return <Chip size="small" variant="outlined" label="آزمایش نشده" />
   if (outcome.state === 'running') return <Chip size="small" color="info" label="در حال آزمایش…" />
@@ -232,21 +266,11 @@ export function DeviceCheckPage() {
     }
     setScan({ state: 'running' })
     try {
-      // Which decoder this device would use, before the camera opens. This is the answer an
-      // admin is actually standing there to get: a platform decoder that lists no formats is
-      // the Android failure that read as «QR does not work», and a device that falls back to
-      // the bundled decoder cannot read a linear barcode at all.
-      const report = await decoderReport()
-      const readable =
-        `رمزگشا: ${report.decoder}` +
-        ` — می‌خواند: ${report.families.join(' + ')}` +
-        (report.nativeSupportedFormats
-          ? ` — BarcodeDetector: ${
-              report.nativeSupportedFormats.length
-                ? report.nativeSupportedFormats.join(', ')
-                : 'فهرست خالی (در دسترس نیست)'
-            }`
-          : ' — BarcodeDetector موجود نیست')
+      // Whether the decoder loaded, before the camera opens. The question this answers has got
+      // much smaller than it used to be: the decoder ships inside the app, so there is no longer
+      // a platform module whose absence silently removes linear barcodes — just one file that
+      // either loaded or did not, and a reason when it did not.
+      const readable = describeDecoder(await decoderReport())
 
       // Both families, because an admin wants to know what this tablet can do, not what one
       // field happens to ask for.
@@ -275,16 +299,11 @@ export function DeviceCheckPage() {
     setScan({ state: 'running' })
     try {
       const report = await decoderReport()
-      const formats = report.nativeSupportedFormats
       setScan({
-        state: 'ok',
-        detail:
-          `رمزگشا: ${report.decoder} — می‌خواند: ${report.families.join(' + ')} — ` +
-          (formats === null
-            ? 'BarcodeDetector موجود نیست؛ رمزگشای داخلی برنامه استفاده می‌شود (فقط QR).'
-            : formats.length === 0
-              ? 'BarcodeDetector فهرست خالی برگرداند، یعنی در دسترس نیست؛ رمزگشای داخلی (فقط QR) جایگزین می‌شود.'
-              : `BarcodeDetector: ${formats.join(', ')}`)
+        // A decoder that did not load is a fault, not a report: it means the WebAssembly file is
+        // missing from this install, and no amount of aiming the camera will fix it.
+        state: report.loaded === false ? 'fail' : 'ok',
+        detail: describeDecoder(report)
       })
     } catch (err) {
       setScan({
@@ -407,7 +426,7 @@ export function DeviceCheckPage() {
         <CheckRow
           icon={<QrCodeScannerIcon fontSize="small" color="primary" />}
           title="اسکن QR و بارکد"
-          hint="دوربین را روی یک برچسب بگیرید. مقدار خوانده‌شده نمایش داده می‌شود و هیچ‌جا ذخیره نمی‌شود. «رمزگشا» دوربین را باز نمی‌کند و فقط می‌گوید این دستگاه چه چیزی را می‌تواند بخواند."
+          hint="دوربین را روی یک برچسب QR یا بارکد خطی بگیرید. مقدار خوانده‌شده نمایش داده می‌شود و هیچ‌جا ذخیره نمی‌شود. «رمزگشا» دوربین را باز نمی‌کند و فقط می‌گوید رمزگشای داخلی برنامه بارگذاری می‌شود یا نه — این تنها چیزی است که می‌تواند اشکال داشته باشد، چون رمزگشا دیگر به گوگل پلی سرویس و به شبکه نیازی ندارد."
           outcome={scan}
           actionLabel="آزمایش اسکن"
           onRun={() => void runScan()}

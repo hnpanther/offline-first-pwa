@@ -77,9 +77,10 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **QR scanning, where the round asks for it** — each round carries a `scanMode` (`NFC`, `QR`,
   `NFC_OR_QR`, `NONE`) frozen by the server, and the fill page offers exactly the buttons that
   round allows. A QR label carries the same value the tag would, so nothing needs a second
-  identifier. Decoding prefers the platform's `BarcodeDetector` and falls back to a bundled
-  `jsqr` chunk where it is absent — measured, not assumed: a current Chromium on Windows has no
-  `BarcodeDetector`. A `NONE` round needs no scan at all: the operator opens the asset and
+  identifier. Decoding is done by **ZXing compiled into the app** (`zxing-wasm`), so it needs no
+  Play Services module and no network at all — the platform's `BarcodeDetector` is not used, because
+  on an air-gapped Android handheld it answers every frame with «no code here» rather than
+  failing. A `NONE` round needs no scan at all: the operator opens the asset and
   records the reading
 - **Log sheet inbox (kartabl)** — assigned work, pickup pool, supervisor team view
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
@@ -106,14 +107,15 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
   involved. It reports rather than fixes, asks for each permission only when its own button is
   pressed, and shows the raw answer (`NDEFReader تعریف نشده`) instead of a verdict — so an
   administrator standing next to a tablet can tell a missing permission from a missing API.
-  Its «رمزگشا» button opens no camera and asks for no permission: it reports which decoder this
-  device would use, which code families it can read, and what `BarcodeDetector` listed — an
-  empty list being the platform's own way of saying it cannot decode at all
+  Its «رمزگشا» button opens no camera and asks for no permission: it reports whether the bundled
+  decoder loaded, which version it is, and the exact URL of its WebAssembly file when it did not —
+  the one remaining way scanning can be broken on a device, now that the decoder no longer depends
+  on anything the platform downloads
 - **Scan a value into a field** — a `text` or `number` field whose definition allows it shows
   small NFC / camera icons inside the input; the scanned payload becomes the field's value and
-  goes through that field's own validation unchanged. A field that allows only a linear barcode
-  is refused in words on a device whose platform decoder is unavailable, because the bundled
-  fallback reads QR and nothing else — see [docs/device-features.md](docs/device-features.md)
+  goes through that field's own validation unchanged. QR **and** linear barcodes read on every
+  device, including a handheld that has never had a network —
+  see [docs/device-features.md](docs/device-features.md)
 
 ---
 
@@ -165,7 +167,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 | Local storage | Dexie 4 (IndexedDB), schema version **1** (single version) |
 | Global state | Zustand |
 | Forms | React Hook Form |
-| QR decoding | `BarcodeDetector` where the platform has it, else `jsqr` — a dynamic import in its own chunk (130 KB raw / 47 KB gzipped), precached so it still works offline |
+| QR / barcode decoding | `zxing-wasm` 3.1.6 (`zxing-cpp` as WebAssembly) — one decoder for both deliveries, reading QR and nine linear symbologies. `zxing_reader.wasm` is 925 KB and **must stay in the workbox `globPatterns`**, or scanning dies as soon as a tablet is offline. The platform `BarcodeDetector` is deliberately unused |
 | Routing | React Router v6 |
 | Font | Vazirmatn (self-hosted) |
 | i18n | Custom module `src/i18n/` + `fa.ts` (`i18next` is listed in `package.json` but not used in app code) |

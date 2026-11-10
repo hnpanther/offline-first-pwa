@@ -149,7 +149,17 @@ export default defineConfig(({ mode, command }) => {
           ]
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest}'],
+          // `wasm` is the scanner's decoder (`services/scan/zxingModule.ts`), and it is NOT
+          // optional. Leave it out and every chunk, font and icon is precached while the one file
+          // QR and barcode reading cannot run without is skipped — so scanning works at the desk
+          // and dies the moment the tablet leaves Wi-Fi, which is where it spends its life. That
+          // is the exact bug the bundled decoder replaced, reintroduced one glob at a time.
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,webmanifest,wasm}'],
+          // Workbox's default ceiling is 2 MiB, and a file over it is dropped from the precache
+          // **silently**. `zxing_reader.wasm` is 925 KB today — comfortable, but it is by far the
+          // largest asset here, and a future ZXing release could cross that line with no warning
+          // and no symptom until a tablet is offline. Raised deliberately, for that one file.
+          maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/api\//],
           cleanupOutdatedCaches: true,

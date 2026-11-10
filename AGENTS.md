@@ -1056,6 +1056,46 @@ callback new on reconnect) and one reserved empty interface in the store.
   machine. Full rules in `docs/apk.md` §5 *"Which CA ends up in the APK"* and
   `docs/deployment.md` § Renewal.
 
+- **A platform capability that is *downloaded on demand* is not a capability on an air-gapped
+  device — and `BarcodeDetector` is the worst case of it, because every feature check says yes.**
+  Scanning was built on `window.BarcodeDetector`. On Android that API is backed by a Google Play
+  Services module fetched over the network; these handhelds have none, ever. The failure is
+  silent and total: the constructor exists, `getSupportedFormats()` answers with a real list,
+  `detect()` resolves without throwing, and returns an **empty array for every frame for ever**.
+  Measured on the device: 434 frames, no errors, no reads, while the phone's own camera app read
+  the same label instantly. Four increasingly careful defences were built and **none could ever
+  fire** — a `typeof` check, an empty-format-list gate, a trial `detect()`, a failover on the
+  first frame error, and finally a 2-second rescue that re-read the frame off a canvas (through
+  the *same* dead module) and through `jsqr` (QR only). Each waited for a signal that never
+  arrives. The fix was not a fifth check: the decoder is now `zxing-wasm` compiled into the app,
+  and «offline» stopped being a condition scanning can fail under. **Do not reintroduce
+  `BarcodeDetector` as a fast path.** It is reported on the device-check page, labelled «استفاده
+  نمی‌شود», only so a tablet with this history can still be recognised. Background: `docs/roadmap.md`
+  §12 and `docs/device-features.md`.
+
+- **`wasm` must stay in `vite.config.ts`'s workbox `globPatterns`, and an oversized precache entry
+  is dropped in silence.** The scanner's decoder is `zxing_reader.wasm` (925 KB). The glob list
+  covered `js,css,html,ico,png,svg,woff,woff2,webmanifest` — no `wasm` — so without that one
+  addition the service worker precaches every chunk, font and icon and leaves out the only file
+  QR and barcode reading cannot run without: scanning works at the desk and dies the moment the
+  tablet leaves Wi-Fi, which is where it spends its life. The check is that
+  `zxing_reader-<hash>.wasm` appears in `dist/sw.js`'s precache manifest (34 entries → 35).
+  `maximumFileSizeToCacheInBytes` is raised to 3 MiB for the same class of reason: workbox's
+  default is 2 MiB, and a file over it is omitted with no error — 925 KB is comfortable today,
+  but this is by far the largest asset here and a ZXing upgrade could cross that line with no
+  symptom until a tablet is offline.
+
+- **`locateFile` is called even when `wasmBinary` is supplied, so it proves nothing about whether
+  a fetch happened.** Emscripten computes the path it *would* use while setting the module up and
+  only later prefers the supplied bytes. Two consequences, in opposite directions: a `locateFile`
+  that throws fails during setup even though no request was ever going to be made (so it cannot
+  be used to assert offline safety), and seeing `locateFile` consulted is **not** evidence that
+  anything was downloaded. The only way to tell is an address that would fail if it were fetched
+  — `zxingDecode.test.ts` points it at `http://127.0.0.1:1/` and still decodes, which is what
+  proves the decoder never reaches for jsDelivr. `zxing-wasm`'s own default `locateFile` is a
+  jsDelivr URL baked in at *its* build time, so this is not a theoretical CDN: it is the shipped
+  default, and the app overrides both `wasmBinary` and `locateFile` to be sure.
+
 - **`registerPlugin()` must run before `super.onCreate`.** The bridge is built there and the plugin
   registry frozen. Registered after, `window.Capacitor.Plugins.Nfc` is undefined, `isNFCSupported()`
   answers false, and scanning disappears from the app with nothing logged anywhere — the same

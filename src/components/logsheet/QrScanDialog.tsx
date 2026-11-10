@@ -204,8 +204,7 @@ export function QrScanDialog({
 }
 
 const DECODER_LABEL: Record<QrScanStats['decoder'], string> = {
-  native: 'رمزگشای دستگاه',
-  jsqr: 'رمزگشای داخلی برنامه',
+  zxing: 'رمزگشای داخلی برنامه (ZXing)',
   'native-app': 'اسکنر نیتیو'
 }
 

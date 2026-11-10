@@ -6,39 +6,45 @@
  * On Android the camera opened, the operator aimed at a sticker, and **nothing ever happened**.
  * Not an error — nothing. The phone's own camera app read the same sticker instantly.
  *
- * Two defects stacked to produce that:
+ * The cause was the decoder, and specifically where it came from. `window.BarcodeDetector` on
+ * Android is backed by a Google Play Services module that is **downloaded on demand**. These
+ * handhelds have no network, ever, so the module was never fetched — and the way that surfaces is
+ * the worst possible one: the constructor exists, `getSupportedFormats()` answers with a real
+ * list, `detect()` resolves without throwing, and returns an empty array for every frame for ever.
+ * Measured on the device: 434 frames, no errors, no reads.
  *
- * 1. `window.BarcodeDetector` being defined was taken as proof that it works. It is not. The
- *    spec is explicit: a browser that cannot detect barcodes still exposes the constructor and
- *    resolves `getSupportedFormats()` with an **empty list**. On Android the detector is backed
- *    by a Play Services module that is downloaded on demand and is simply absent for an app
- *    that has not pulled it in — Chrome has it, a plain WebView host does not. So the detector
- *    was constructed happily and then rejected every single `detect()` call.
- * 2. The frame loop caught **every** error and treated it as "the operator is still aiming".
- *    That is right for one frame and catastrophic for all of them: a permanently broken decoder
- *    became an infinite silent loop, which is exactly "nothing happens".
+ * Three rounds of defence were built against that — proving the detector with a trial `detect()`,
+ * failing over on an error, then a rescue that re-read the frame off a canvas and through a second
+ * bundled decoder. None of them could work, because **nothing ever reported a failure**. A
+ * decoder that answers «no code here» 434 times is indistinguishable from an operator with bad aim.
  *
- * So the rules here are: **prove the decoder works before trusting it**, **fail over to the
- * bundled one when it stops working**, and **never fail silently forever**.
+ * So the decoder is no longer something the platform provides. ZXing (`zxing-wasm`, the C++
+ * `zxing-cpp` reader compiled to WebAssembly) is compiled into the app, and «offline» stops being
+ * a condition scanning can fail under. One decoder, one code path, in the browser and in the APK.
  *
- * <h2>Two decoders, and why both are here</h2>
+ * <h2>What replacing `BarcodeDetector` actually bought</h2>
  *
- * `BarcodeDetector` decodes in native code, and on a tablet holding a live camera stream that
- * speed is the difference between a scan that lands and one the operator gives up on. It is
- * also the **only** one of the two that reads linear barcodes at all.
+ * <ul>
+ *   <li>**Linear barcodes work at all.** The old fallback was `jsqr`, which reads QR and no linear
+ *       symbology whatsoever. So on these devices a field set to `BARCODE` could never be scanned:
+ *       the platform decoder was blind and the fallback did not implement the format. ZXing reads
+ *       Code 128, Code 39, Code 93, Codabar, EAN-8/13, ITF and UPC-A/E in the same pass.</li>
+ *   <li>**No «prove it works» dance, no failover, no rescue.** All of it existed to survive one
+ *       decoder's absence, and about 250 lines went with it.</li>
+ *   <li>**One behaviour to support.** A fault is now in the app, reproducible at a desk, rather
+ *       than a property of which Play Services modules a given tablet happened to pull down.</li>
+ * </ul>
  *
- * `jsqr` is the fallback: no dependencies, QR only, loaded **only when the platform API cannot
- * be used**. It is a dynamic import, which the build confirms — its own chunk of 130 KB raw /
- * 47 KB gzipped, so a device with a working `BarcodeDetector` never downloads or parses a byte
- * of it, and a device that needs it still has it offline because workbox precaches every
- * emitted chunk.
+ * The cost is a 925 KB WebAssembly file, precached once. On a fleet that downloads the app over
+ * plant Wi-Fi once and then never again, that is the cheap half of the trade.
  *
- * <h2>Why the session reports on itself</h2>
+ * <h2>Two passes over a frame, and why the fast one is first</h2>
  *
- * {@link QrScanSession.stats} exists because "nothing happens" was impossible to tell apart
- * from "the camera never produced a frame" and from "the decoder is refusing". The dialog shows
- * which decoder ran, how many frames it has looked at, and the last error — so the next report
- * from a plant arrives with its own diagnosis instead of needing one.
+ * ZXing's defaults optimise for accuracy: rotation, inversion and `tryHarder` all on. That is the
+ * right setting for a label the operator is struggling with and the wrong one for the first second,
+ * when it just costs frames. So every frame gets a cheap read of exactly the accepted formats, and
+ * only after {@link THOROUGH_AFTER_MS} does every third frame get the expensive one. A scan that
+ * was going to work is unaffected; a scan that is not working gets more help the longer it runs.
  *
  * <h2>What a scan yields</h2>
  *
@@ -46,22 +52,40 @@
  * `asset_entries.nfc_tag_id` holds — the identifier the tag already carries. No parsing, no URL
  * unwrapping, no prefix stripping: inventing a transformation here would mean a sticker printed
  * from the panel and a sticker printed from a label machine resolving differently, and the one
- * that failed would be the one in the plant.
+ * that failed would be the one in the plant. `textMode: 'Plain'` is part of that promise — ZXing's
+ * own default is `HRI`, which reformats GS1 content with bracketed application identifiers and
+ * would hand back something no tag ever stored.
  */
 
 import { nativePlugin } from '@/services/device/nativeApp'
+import type { ScanDecoder } from './zxingModule'
+import type { ReadInputBarcodeFormat, ReaderOptions, ReadResult } from 'zxing-wasm/reader'
+
+/**
+ * The decoder, reached only through a dynamic import.
+ *
+ * <p>Type-only imports above, so nothing ZXing ships is linked into this module. That matters
+ * because the fill page imports *this* file eagerly — it must, to decide whether to render a scan
+ * button — and a static import here would put the Emscripten glue in the main chunk for every
+ * page load on every tablet, scanning or not.
+ */
+function decoderModule() {
+  return import('./zxingModule')
+}
 
 /** What the caller wants to read. A field's `BARCODE` source means linear, not QR. */
 export type CodeFamily = 'qr' | 'barcode'
 
 /**
- * Which decoder actually ran. Reported, never guessed.
+ * Which decoder ran. Reported, never guessed.
  *
- * There is no "none" member on purpose: a session that could not choose a decoder throws during
- * setup rather than existing in a state that has to be reported, so every value here names a
- * decoder that really did run.
+ * Two members, and `'zxing'` is every browser and every APK build. `'native-app'` is reserved for
+ * a packaged build that registers its own reader plugin; no build does today, and the branch is
+ * kept because the NFC reader uses exactly that shape.
+ *
+ * `'native'` (the platform `BarcodeDetector`) and `'jsqr'` are gone — see the file header.
  */
-export type DecoderName = 'native' | 'jsqr' | 'native-app'
+export type DecoderName = 'zxing' | 'native-app'
 
 export type QrScanSupport =
   /** A camera and a decoder are both available. */
@@ -72,55 +96,75 @@ export type QrScanSupport =
   | 'noDecoder'
 
 /**
- * The platform names for each family.
+ * The ZXing formats for each family, for the **fast** per-frame pass.
  *
- * Listed explicitly rather than asking for every symbology the platform knows (PDF417, Aztec,
- * Data Matrix…): those are not on a plant's labels, and each one is work on every frame.
+ * Listed explicitly rather than asking for `All`: Data Matrix, Aztec, PDF417 and MaxiCode are not
+ * on a plant's labels, and every enabled symbology is work on every frame. The linear set is the
+ * one the platform decoder was asked for before, name for name, so no label that used to scan has
+ * quietly stopped being looked for.
  */
-const NATIVE_FORMATS: Record<CodeFamily, string[]> = {
-  qr: ['qr_code'],
+export const FAST_FORMATS: Record<CodeFamily, ReadInputBarcodeFormat[]> = {
+  qr: ['QRCode'],
   barcode: [
-    'code_128',
-    'code_39',
-    'code_93',
-    'codabar',
-    'ean_13',
-    'ean_8',
-    'itf',
-    'upc_a',
-    'upc_e'
+    'Code128',
+    'Code39',
+    'Code93',
+    'Codabar',
+    'EAN13',
+    'EAN8',
+    'ITF',
+    'UPCA',
+    'UPCE'
   ]
+}
+
+/**
+ * The extra formats the thorough pass adds — the QR variants small nameplates carry.
+ *
+ * In `zxing-cpp` these are separate bits from `QRCode`, so a Micro QR is simply not looked for
+ * unless named. They are not on the fast pass because almost every label in this plant is a
+ * standard QR, and a scan that completes in the first second should not pay for the exceptions.
+ */
+const THOROUGH_EXTRA_FORMATS: Record<CodeFamily, ReadInputBarcodeFormat[]> = {
+  qr: ['MicroQRCode', 'RMQRCode'],
+  barcode: ['ITF14', 'DataBar', 'DataBarExp']
 }
 
 /**
  * Consecutive decoder throws tolerated before the scan gives up and says so.
  *
  * Not one: a frame can fail while the camera reconfigures, and ending the session on that would
- * make the scanner flaky. Not unbounded: that was the bug.
+ * make the scanner flaky. Not unbounded: that was half of the original bug — a loop that caught
+ * every error and always retried is a silent infinite loop for a decoder that is broken.
  */
 const HARD_FAILURE_LIMIT = 12
 
-interface DetectedBarcode {
-  rawValue?: string
-  format?: string
-}
+/**
+ * How long the cheap read runs alone before the expensive one joins it.
+ *
+ * A scan that works at all works well inside this, so the common case never pays for rotation,
+ * inversion and `tryHarder`. Past it the operator is already struggling, and spending three times
+ * as long on every third frame is the right trade.
+ */
+export const THOROUGH_AFTER_MS = 1500
 
-interface BarcodeDetectorLike {
-  detect(source: CanvasImageSource): Promise<DetectedBarcode[]>
-}
+/**
+ * How often a frame is also searched for the kinds the caller does NOT accept — only to say «that
+ * was a QR, this field takes a barcode». Every eighth frame is a few times a second: enough to
+ * name a wrong code within a moment of it being held up, while the other seven frames run the
+ * accepted search alone.
+ */
+export const WRONG_KIND_PROBE_EVERY = 8
 
-interface BarcodeDetectorConstructor {
-  new (options?: { formats?: string[] }): BarcodeDetectorLike
-  getSupportedFormats?: () => Promise<string[]>
-}
+/**
+ * Nothing about the probe exists for the first seconds of a scan. Almost every scan that works
+ * completes within them, and the probe is built lazily, only for a scan that is already not
+ * reading anything.
+ */
+export const WRONG_KIND_PROBE_AFTER_MS = 3000
 
 interface NativeQrPlugin {
   scan: () => Promise<{ value?: string | null } | null>
-}
-
-function barcodeDetector(): BarcodeDetectorConstructor | undefined {
-  if (typeof window === 'undefined') return undefined
-  return (window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
 }
 
 /** The packaged app's own reader, when a build registers one. Absent in every browser. */
@@ -132,11 +176,13 @@ export function nativeQrAvailable(): boolean {
 /**
  * Whether this device can open a camera at all.
  *
- * Deliberately does **not** request camera permission and does **not** probe the decoder: it is
- * called while rendering the fill page to decide whether to offer the button, a permission
- * prompt on page load is the fastest way to teach an operator to press «deny», and the decoder
- * probe is asynchronous. Which decoder will serve is settled when the scan actually starts —
- * and if none can, the dialog says so in words.
+ * Deliberately does **not** request camera permission: it is called while rendering the fill page
+ * to decide whether to offer the button, and a permission prompt on page load is the fastest way
+ * to teach an operator to press «رد».
+ *
+ * It no longer has to hedge about the decoder either. The decoder ships with the app, so the only
+ * open question on any device is the camera — which is the whole point of the change this file
+ * records.
  */
 export function qrScanSupport(): QrScanSupport {
   if (nativeQrAvailable()) return 'available'
@@ -150,129 +196,60 @@ export interface Detection {
   value: string
   family: CodeFamily
   /**
-   * Whether this read may complete the scan. Decided by WHICH detector produced it, never by the
-   * format name it reports: the main detector is built for the accepted kinds only, so whatever it
-   * returns is acceptable by construction — exactly how scanning worked before the wrong-kind
-   * message existed. Re-judging its reads by `format === 'qr_code'` rejected a correct QR on any
-   * platform that names the format differently. Only the occasional wide probe yields `false`.
+   * Whether this read may complete the scan. Decided by WHICH pass produced it, never by the
+   * format name it reports: the per-frame read is asked for the accepted formats only, so whatever
+   * it returns is acceptable by construction. Re-judging its reads by their reported format name
+   * once rejected a correct QR on a platform that spelled the format differently. Only the
+   * occasional wide probe yields `false`.
    */
   accepted: boolean
 }
 
-/** Reads one video frame and returns the code in it, or null when there is none yet. */
-type FrameDecoder = (video: HTMLVideoElement) => Promise<Detection | null>
-
-interface ActiveDecoder {
-  name: DecoderName
-  decode: FrameDecoder
-  /** Families this decoder can actually read, after the platform was asked. */
-  families: CodeFamily[]
-  /** A line for the diagnostics, when the decoder has something to say beyond its name. */
-  detail?: () => string | null
-}
-
 /**
- * How long the platform decoder may read nothing before the rescue starts.
+ * Which kind of code a ZXing result is, from its **symbology** rather than its format.
  *
- * Found on Android: the platform `BarcodeDetector` passed its trial, ran 434 frames without one
- * error, and returned nothing for a QR or a barcode held in front of it — while the phone's own
- * camera read the same label at once. A decoder that is "working" by every signal the scanner had
- * (it constructs, it answers, it never throws) and still sees nothing is the one case failover on
- * errors cannot catch. Two causes fit and the rescue covers both: the platform's decoding module
- * is unavailable (it is fetched and updated on demand), or the WebView cannot read pixels straight
- * from a `<video>` — handing it a still frame on a canvas instead.
+ * The symbology is the root: `QRCodeModel2`, `MicroQRCode` and `RMQRCode` all report `QRCode`, so
+ * one comparison covers every QR variant instead of a list that a new variant falls out of.
+ * Anything that is not QR is reported as a linear barcode, which is true of everything this
+ * scanner is ever asked for.
  */
-export const RESCUE_AFTER_MS = 2000
-
-/** Which rescue read the last code, for the next scan's diagnostics. In memory only. */
-let lastRescue: 'canvas' | 'jsqr' | null = null
-
-/** Which kind of code a platform format name is. Anything that is not QR is a linear barcode. */
-export function familyOfFormat(format: string | undefined): CodeFamily {
-  return format === 'qr_code' ? 'qr' : 'barcode'
+export function familyOfFormat(symbology: string | undefined): CodeFamily {
+  return symbology === 'QRCode' ? 'qr' : 'barcode'
 }
 
 /**
  * The code to act on in one frame: the first of a kind the caller accepts, else the first of any
  * kind (so the dialog can name it), else null.
  *
- * Not simply the first code. A label can carry a QR **and** a linear barcode, and a detector
+ * Not simply the first code. A label can carry a QR **and** a linear barcode, and a decoder
  * looking for several symbologies can also report a spurious linear read off printed text; taking
  * whichever came first set the wanted code aside on every frame in which the other one was listed
  * ahead of it — a camera that sees the label and never reads it.
  */
 export function pickDetection(
-  codes: readonly Pick<DetectedBarcode, 'rawValue' | 'format'>[],
+  codes: readonly { text?: string; symbology?: string }[],
   accepted: readonly CodeFamily[]
 ): Omit<Detection, 'accepted'> | null {
   let other: Omit<Detection, 'accepted'> | null = null
   for (const code of codes) {
-    const value = (code.rawValue ?? '').trim()
+    const value = (code.text ?? '').trim()
     if (value.length === 0) continue
-    const detection = { value, family: familyOfFormat(code.format) }
+    const detection = { value, family: familyOfFormat(code.symbology) }
     if (accepted.includes(detection.family)) return detection
     other ??= detection
   }
   return other
 }
 
-/** The first non-empty payload, exactly as the scanner read codes before the wrong-kind message. */
-function firstPayload(codes: readonly Pick<DetectedBarcode, 'rawValue'>[]): string | null {
-  return codes.map(c => (c.rawValue ?? '').trim()).find(v => v.length > 0) ?? null
+/** The first non-empty payload, for a pass whose formats are all acceptable by construction. */
+function firstPayload(codes: readonly ReadResult[]): string | null {
+  return codes.map(c => (c.text ?? '').trim()).find(v => v.length > 0) ?? null
 }
 
-/**
- * How often a frame is also searched for the kinds the caller does NOT accept — only to say "that
- * was a QR, this field takes a barcode". Every eighth frame is a few times a second: enough to
- * name a wrong code within a moment of it being held up, while the other seven frames run the
- * accepted search exactly as it always did.
- */
-export const WRONG_KIND_PROBE_EVERY = 8
-
-/**
- * Nothing about the probe exists for the first seconds of a scan — not even the second detector.
- * Almost every scan that works completes within them, and they are then exactly the scan that
- * worked before this message existed; the probe is built lazily, only for a scan that is already
- * not reading anything.
- */
-export const WRONG_KIND_PROBE_AFTER_MS = 3000
-
-/**
- * Whether the platform decoder can serve this request, and with which formats — the decision
- * the Android bug got wrong.
- *
- * <p>Kept pure and exported so it can be tested without a camera, a DOM or a device, because
- * the input that broke it is a single value nobody looked at: `supported` being an **empty
- * array**. Per the spec that is how a browser says "I cannot detect barcodes" while still
- * exposing the constructor, and treating it as "fine" is what produced a detector that
- * rejected every frame in silence.
- *
- * @param supported what `BarcodeDetector.getSupportedFormats()` resolved with. Null or
- *        undefined for a platform that has no such method at all.
- * @returns the formats to construct the detector with and the families it will then cover, or
- *        null to mean "do not use the platform decoder". Never a partial yes.
- */
-export function usableNativeFormats(
-  families: CodeFamily[],
-  supported: readonly string[] | null | undefined
-): { families: CodeFamily[]; formats: string[] } | null {
-  if (!Array.isArray(supported) || supported.length === 0) return null
-
-  const covered = families.filter(f => NATIVE_FORMATS[f].some(n => supported.includes(n)))
-  if (covered.length === 0) return null
-
-  // Only formats the platform actually listed. Constructing a detector with a format it does
-  // not know is how a working decoder gets thrown away for no reason.
-  const formats = covered.flatMap(f => NATIVE_FORMATS[f].filter(n => supported.includes(n)))
-  return { families: covered, formats }
-}
-
-/** What to do when a decoder throws on a frame. */
+/** What to do when a decode throws on a frame. */
 export type DecodeErrorAction =
   /** Ordinary: the operator is still aiming, or one frame arrived malformed. */
   | 'retry'
-  /** The platform decoder is not working. Switch to the bundled one and carry on. */
-  | 'failover'
   /** It has failed too many times in a row. Tell the operator instead of spinning. */
   | 'giveUp'
 
@@ -280,246 +257,49 @@ export type DecodeErrorAction =
  * The decision the old loop never made.
  *
  * <p>It caught every error and always retried, which is correct for a single frame and is a
- * silent infinite loop for a decoder that is broken. Three outcomes instead of one, and the
- * difference between them is the whole fix.
+ * silent infinite loop for a decoder that keeps throwing. There is deliberately no third outcome
+ * any more: `'failover'` existed to escape the platform decoder, and there is no longer a platform
+ * decoder to escape. One decoder that is part of the app either works on this device or is broken
+ * for a reason worth reporting.
  *
  * @param consecutiveErrors failures **since the last frame the decoder handled**, counting the
  *        one being decided now. A decode that merely found nothing resets this, because the
  *        decoder worked.
  */
-export function decideOnDecodeError(state: {
-  decoder: DecoderName
-  fallbackTried: boolean
-  wantsQr: boolean
-  consecutiveErrors: number
-}): DecodeErrorAction {
-  // One switch, and only away from the platform decoder: the bundled one is the last resort,
-  // so there is nowhere to fail over to from it. It needs QR in the request, since that is the
-  // only thing it reads.
-  if (state.decoder === 'native' && !state.fallbackTried && state.wantsQr) {
-    return 'failover'
-  }
-  return state.consecutiveErrors >= HARD_FAILURE_LIMIT ? 'giveUp' : 'retry'
+export function decideOnDecodeError(consecutiveErrors: number): DecodeErrorAction {
+  return consecutiveErrors >= HARD_FAILURE_LIMIT ? 'giveUp' : 'retry'
 }
 
 /**
- * The platform decoder, **only if it proves it works**.
+ * The reader options for one pass.
  *
- * <p>Two gates, and both are needed. `getSupportedFormats()` is the spec's own answer to "is
- * detection available" — an empty list means no. A trial `detect()` catches the case that gate
- * misses: a detector can list formats and still reject on first real use, because the Android
- * backing module is fetched on demand. Answering that here means falling back; answering it in
- * the frame loop meant swallowing it forever.
+ * <p>`textMode: 'Plain'` is the load-bearing one: it is the promise that a scan yields the tag's
+ * own bytes. ZXing defaults to `'HRI'`, which rewrites GS1 payloads with bracketed application
+ * identifiers — a transformation that would make a scanned value stop matching the stored
+ * `nfc_tag_id` for exactly the labels that carry structured data.
  *
- * @returns the decoder, or null to say "use the fallback" — never a half-working one.
+ * <p>`maxNumberOfSymbols: 1` because a frame's second code is never wanted and finding it costs
+ * the rest of the pass. `tryDenoise` is left off: it is marked experimental upstream and is
+ * matrix-only, so it would help nothing this scanner is asked for.
+ *
+ * <p>Exported for `zxingDecode.test.ts`, which decodes real generated symbols with **these**
+ * options rather than a copy of them. A test that restated the settings would keep passing while
+ * the ones the operator's camera uses drifted.
  */
-async function nativeDecoder(families: CodeFamily[]): Promise<ActiveDecoder | null> {
-  const Detector = barcodeDetector()
-  if (!Detector || typeof Detector.getSupportedFormats !== 'function') return null
-
-  try {
-    const supported = await Detector.getSupportedFormats()
-    const usable = usableNativeFormats(families, supported)
-    if (!usable) return null
-
-    // The detector every frame runs: the accepted kinds and nothing else — exactly what it was
-    // before the wrong-kind message existed. Searching all ten symbologies on every frame made
-    // each one slower and let a spurious or second code crowd out the wanted one; scanning
-    // stopped working in the field after that change, and this is the half that put it back.
-    const detector = new Detector({ formats: usable.formats })
-
-    // The trial. A 2x2 canvas holds no code, so an empty result is success: what is being
-    // checked is that the call completes at all.
-    const probe = document.createElement('canvas')
-    probe.width = 2
-    probe.height = 2
-    await detector.detect(probe)
-
-    // A second, wider detector used only now and then, and only to NAME a code of the wrong kind
-    // («یک QR Code دیده شد، اما اینجا فقط بارکد خطی…») — never to accept one. Optional: if the
-    // platform will not build or run it, scanning goes on without the message.
-    const other = families.length < 2
-      ? usableNativeFormats((['qr', 'barcode'] as CodeFamily[]).filter(f => !families.includes(f)), supported)
-      : null
-    let wideDetector: BarcodeDetectorLike | null = null
-    let probeDisabled = !other
-    const startedAt = Date.now()
-    let framesSeen = 0
-
-    const accepted = (value: string): Detection => ({
-      value,
-      family: usable.families[0] ?? 'qr',
-      accepted: true
-    })
-
-    // The rescue (see RESCUE_AFTER_MS). Each half switches itself off for good on its first error,
-    // so a rescue that cannot run costs nothing after one try.
-    let rescueTurn = 0
-    let rescueStarted = false
-    let canvas: HTMLCanvasElement | null = null
-    let context: CanvasRenderingContext2D | null = null
-    let canvasBroken = false
-    let bundled: ActiveDecoder | null = null
-    // QR only, and only for a caller that accepts QR: jsqr's reads are accepted by construction.
-    let bundledBroken = !families.includes('qr')
-
-    /** The same platform decoder, handed a still frame instead of the live video. */
-    const fromStillFrame = async (video: HTMLVideoElement): Promise<Detection | null> => {
-      if (canvasBroken) return null
-      try {
-        canvas ??= document.createElement('canvas')
-        context ??= canvas.getContext('2d', { willReadFrequently: true })
-        if (!context) {
-          canvasBroken = true
-          return null
-        }
-        if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth
-        if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight
-        context.drawImage(video, 0, 0, canvas.width, canvas.height)
-        const value = firstPayload(await detector.detect(canvas))
-        if (!value) return null
-        lastRescue = 'canvas'
-        return accepted(value)
-      } catch {
-        canvasBroken = true
-        return null
-      }
-    }
-
-    /** The bundled decoder, for a platform decoding module that answers but sees nothing. */
-    const fromBundled = async (video: HTMLVideoElement): Promise<Detection | null> => {
-      if (bundledBroken) return null
-      try {
-        bundled ??= await jsqrDecoder()
-        const found = await bundled.decode(video)
-        if (!found) return null
-        lastRescue = 'jsqr'
-        return found
-      } catch {
-        bundledBroken = true
-        return null
-      }
-    }
-
-    return {
-      name: 'native',
-      families: usable.families,
-      detail: () => {
-        const parts: string[] = []
-        if (rescueStarted) {
-          const routes = [
-            canvasBroken ? null : 'تصویر ثابت',
-            bundledBroken ? null : 'رمزگشای داخلی'
-          ].filter(Boolean)
-          parts.push(
-            routes.length > 0
-              ? `مسیرهای کمکی فعال: ${routes.join(' و ')}`
-              : 'مسیرهای کمکی در این دستگاه کار نمی‌کنند'
-          )
-        }
-        if (lastRescue) {
-          parts.push(
-            `خواندن موفق قبلی با: ${lastRescue === 'canvas' ? 'تصویر ثابت' : 'رمزگشای داخلی'}`
-          )
-        }
-        return parts.length > 0 ? parts.join(' — ') : null
-      },
-      decode: async video => {
-        if (!video.videoWidth || !video.videoHeight) return null
-
-        // After a silent stretch, two frames in three go to a rescue and the third to the read
-        // that worked, so nothing the original path could still do is given up.
-        if (Date.now() - startedAt >= RESCUE_AFTER_MS) {
-          rescueStarted = true
-          rescueTurn += 1
-          if (rescueTurn % 3 === 1) return fromStillFrame(video)
-          if (rescueTurn % 3 === 2) return fromBundled(video)
-        }
-
-        // Exactly the read that worked: the first payload the accepted-kinds detector returns.
-        const codes = await detector.detect(video)
-        const value = firstPayload(codes)
-        if (value) {
-          return accepted(value)
-        }
-        framesSeen += 1
-        if (
-          !probeDisabled &&
-          other &&
-          Date.now() - startedAt >= WRONG_KIND_PROBE_AFTER_MS &&
-          framesSeen % WRONG_KIND_PROBE_EVERY === 0
-        ) {
-          try {
-            wideDetector ??= new Detector({ formats: other.formats })
-            const seen = pickDetection(await wideDetector.detect(video), [])
-            return seen ? { ...seen, accepted: false } : null
-          } catch {
-            // The message is a courtesy; a failing probe must never cost the scan itself.
-            probeDisabled = true
-            wideDetector = null
-          }
-        }
-        return null
-      }
-    }
-  } catch {
-    // Includes a constructor that throws, which some WebView hosts do when the Play Services
-    // binding is missing. The fallback is why that is survivable rather than fatal.
-    return null
-  }
-}
-
-/** The bundled decoder. QR only — there is no linear symbology in `jsqr`. */
-async function jsqrDecoder(): Promise<ActiveDecoder> {
-  const { default: jsQR } = await import('jsqr')
-  // One canvas for the whole session. Allocating per frame would churn a buffer the size of the
-  // video sixty times a second, which on a field tablet is felt as the camera stuttering.
-  const canvas = document.createElement('canvas')
-  const context = canvas.getContext('2d', { willReadFrequently: true })
-  if (!context) {
-    throw new Error('بوم تصویر در دسترس نیست؛ خواندن QR ممکن نشد.')
-  }
-
+export function readerOptions(formats: ReadInputBarcodeFormat[], thorough: boolean): ReaderOptions {
   return {
-    name: 'jsqr',
-    families: ['qr'],
-    decode: async video => {
-      const width = video.videoWidth
-      const height = video.videoHeight
-      if (!width || !height) return null
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width
-        canvas.height = height
-      }
-      context.drawImage(video, 0, 0, width, height)
-      // `dontInvert`: a printed label is dark-on-light. Asking the decoder to also try the
-      // inverted reading doubles the work of every frame for a case this plant does not have.
-      const found = jsQR(context.getImageData(0, 0, width, height).data, width, height, {
-        inversionAttempts: 'dontInvert'
-      })
-      const value = (found?.data ?? '').trim()
-      return value.length > 0 ? { value, family: 'qr', accepted: true } : null
-    }
+    formats,
+    textMode: 'Plain',
+    maxNumberOfSymbols: 1,
+    // The expensive three. Rotation matters for a linear label held across a portrait tablet;
+    // inversion matters for an engraved or etched plate; tryHarder is ZXing's own escalation.
+    tryHarder: thorough,
+    tryRotate: thorough,
+    tryInvert: thorough,
+    // Left on in both passes: ZXing's own image pyramid is how a label photographed too close
+    // still resolves, and it is cheap next to the options above.
+    tryDownscale: true
   }
-}
-
-/**
- * The decoder this session will use.
- *
- * <p>Native first, because it is faster and because it is the only one that reads a linear
- * barcode. When it cannot be used and the caller wanted *only* a linear barcode, this refuses
- * out loud: opening a camera that physically cannot read the label the operator is holding is
- * the silent failure all over again, one layer up.
- */
-async function chooseDecoder(families: CodeFamily[]): Promise<ActiveDecoder> {
-  const native = await nativeDecoder(families)
-  if (native) return native
-  if (!families.includes('qr')) {
-    throw new Error(
-      'این دستگاه بارکد خطی را نمی‌خواند. مقدار را دستی وارد کنید یا از QR استفاده کنید.'
-    )
-  }
-  return jsqrDecoder()
 }
 
 export interface QrScanStats {
@@ -529,9 +309,9 @@ export interface QrScanStats {
   framesTried: number
   /** The last decoder error, already readable. Null while nothing has gone wrong. */
   lastError: string | null
-  /** Families the chosen decoder can read — narrower than asked for on some devices. */
+  /** Families the decoder is reading. No longer narrowed by the device — see the file header. */
   families: CodeFamily[]
-  /** A further line from the decoder — which rescue is running, or which one read last time. */
+  /** A further line from the decoder: which pass is running, and the frame size it reads. */
   detail: string | null
   /**
    * The last kind of code seen that this caller does NOT accept — a QR held up to a field that
@@ -585,7 +365,7 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
       video,
       result: native.scan().then(res => {
         const value = (res?.value ?? '').trim()
-        if (!value) throw new Error('هیچ کد QR خوانده نشد.')
+        if (!value) throw new Error('هیچ کدی خوانده نشد.')
         return value
       }),
       stop: () => {},
@@ -600,19 +380,33 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
     }
   }
 
+  // Started here and awaited below, so the chunk and its ~925 KB of WebAssembly are read and
+  // instantiated while the camera is still warming up. Sequentially this would add its whole cost
+  // to the wait before the operator sees a picture; concurrently it is free, because
+  // `getUserMedia` takes longer than it does.
+  const decoderReady = decoderModule().then(m => m.loadDecoder())
+
   // `environment` is the rear camera on a tablet. Not `exact`, so a device with only a front
   // camera still scans rather than throwing OverconstrainedError at the operator.
   //
   // The resolution is asked for, not accepted: the default on many Android devices is 640x480,
   // and a dense label at the distance someone holds a tablet does not survive that. `ideal`
   // rather than `exact`, so a camera that cannot manage it still opens.
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: 'environment',
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    }
-  })
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'environment',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    })
+  } catch (err) {
+    // The decoder load is already in flight and memoised; nothing to release. Swallowing its
+    // rejection keeps an unhandled promise out of the console on a denied camera.
+    void decoderReady.catch(() => {})
+    throw err
+  }
 
   // Continuous autofocus where the device exposes it. A fixed-focus frame of a small label is
   // blurry at arm's length, and a blurry frame decodes as nothing at all — which looks exactly
@@ -641,29 +435,54 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
     video.srcObject = null
   }
 
-  let active: ActiveDecoder
+  let decoder: ScanDecoder
   try {
-    active = await chooseDecoder(families)
+    decoder = await decoderReady
   } catch (err) {
-    // No decoder at all: release the camera rather than leaving the sensor powered behind a
-    // dialog that is about to show an error.
+    // The decoder could not be loaded — `DecoderUnavailableError`, which already says in Persian
+    // that the install is missing a file. Release the camera rather than leaving the sensor
+    // powered behind a dialog that is about to show an error.
     stop()
     throw err
   }
 
+  // One canvas for the whole session. Allocating per frame would churn a buffer the size of the
+  // video sixty times a second, which on a field tablet is felt as the camera stuttering.
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    stop()
+    throw new Error('بوم تصویر در دسترس نیست؛ خواندن کد ممکن نشد.')
+  }
+
+  const fastFormats = families.flatMap(f => FAST_FORMATS[f])
+  const thoroughFormats = [...fastFormats, ...families.flatMap(f => THOROUGH_EXTRA_FORMATS[f])]
+  const otherFamilies = (['qr', 'barcode'] as CodeFamily[]).filter(f => !families.includes(f))
+  const otherFormats = otherFamilies.flatMap(f => FAST_FORMATS[f])
+
+  const startedAt = Date.now()
   let framesTried = 0
   let lastError: string | null = null
   let consecutiveErrors = 0
-  let fallbackTried = active.name !== 'native'
   let ignoredFamily: CodeFamily | null = null
+  let thoroughRuns = 0
+  let probeRuns = 0
+  let frameSize = ''
 
   const stats = (): QrScanStats => ({
-    decoder: active.name,
+    decoder: 'zxing',
     framesTried,
     lastError,
-    families: active.families,
+    families,
     ignoredFamily,
-    detail: active.detail?.() ?? null
+    detail: [
+      `ZXing ${decoder.version}`,
+      frameSize ? `فریم ${frameSize}` : null,
+      thoroughRuns > 0 ? `جست‌وجوی دقیق: ${thoroughRuns} بار` : null,
+      probeRuns > 0 ? `جست‌وجوی کد نامرتبط: ${probeRuns} بار` : null
+    ]
+      .filter(Boolean)
+      .join(' — ')
   })
 
   const result = new Promise<string>((resolve, reject) => {
@@ -672,46 +491,57 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
         reject(new Error('اسکن متوقف شد.'))
         return
       }
-      if (video.readyState >= 2) {
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
         framesTried += 1
         try {
-          const detection = await active.decode(video)
+          if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth
+          if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight
+          context.drawImage(video, 0, 0, canvas.width, canvas.height)
+          frameSize = `${canvas.width}×${canvas.height}`
+          // Read once and reused by every pass below: the pixels do not change between them, and
+          // getImageData on a 1280x720 frame is the single most expensive call in the loop.
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height)
+
+          const elapsed = Date.now() - startedAt
+          // After a silent stretch, every third frame gets the expensive read. Not every frame:
+          // the cheap pass is what reads an ordinary label, and starving it would make a scan
+          // that was about to work slower instead of more likely.
+          const thorough = elapsed >= THOROUGH_AFTER_MS && framesTried % 3 === 0
+          if (thorough) thoroughRuns += 1
+
+          const value = firstPayload(
+            await decoder.readBarcodes(
+              pixels,
+              readerOptions(thorough ? thoroughFormats : fastFormats, thorough)
+            )
+          )
           // The decoder ran. Whether or not a code was in shot, it is working.
           consecutiveErrors = 0
-          if (detection?.accepted) {
+          if (value) {
             stop()
-            resolve(detection.value)
+            resolve(value)
             return
           }
-          if (detection) {
-            // A real code, of a kind this caller does not take. Not accepted — the field's rule
-            // stands — but recorded, so the dialog can say why nothing is happening.
-            ignoredFamily = detection.family
+
+          // Nothing of the accepted kind. Now and then, look for the other kind too — not to
+          // accept it, only so the dialog can say «a QR was seen; this field takes a barcode».
+          if (
+            otherFormats.length > 0 &&
+            elapsed >= WRONG_KIND_PROBE_AFTER_MS &&
+            framesTried % WRONG_KIND_PROBE_EVERY === 0
+          ) {
+            probeRuns += 1
+            const seen = pickDetection(
+              await decoder.readBarcodes(pixels, readerOptions(otherFormats, false)),
+              []
+            )
+            // Recorded, never accepted: the field's rule stands.
+            if (seen) ignoredFamily = seen.family
           }
         } catch (err) {
           lastError = describe(err)
           consecutiveErrors += 1
-
-          const action = decideOnDecodeError({
-            decoder: active.name,
-            fallbackTried,
-            wantsQr: families.includes('qr'),
-            consecutiveErrors
-          })
-
-          if (action === 'failover') {
-            // The platform decoder passed its probe and then failed on a real frame. One
-            // switch to the bundled decoder, mid-session, rather than spinning: this is the
-            // Android case the whole file is built around.
-            fallbackTried = true
-            try {
-              active = await jsqrDecoder()
-              consecutiveErrors = 0
-            } catch (fallbackErr) {
-              // Nothing left to try. The next error decides, now that failover is spent.
-              lastError = describe(fallbackErr)
-            }
-          } else if (action === 'giveUp') {
+          if (decideOnDecodeError(consecutiveErrors) === 'giveUp') {
             stop()
             reject(new Error(`خواندن کد روی این دستگاه ممکن نشد (${lastError}).`))
             return
@@ -736,35 +566,85 @@ export async function startQrScan(options: QrScanOptions = {}): Promise<QrScanSe
 /**
  * What this device can decode, for the admin device check.
  *
- * <p>Opens no camera: it probes the decoders only. This is the page an admin opens when an
- * operator says scanning does not work, so it answers what was previously unanswerable —
- * whether this tablet can read a linear barcode at all, and which decoder a QR would use.
+ * <p>Opens no camera: it loads the decoder and reports whether that succeeded. This is the page an
+ * admin opens when an operator says scanning does not work, and the question it now answers is a
+ * different and much smaller one than before. There is no longer a platform decoder whose absence
+ * silently removes linear barcodes; there is one file that either loaded or did not.
+ *
+ * <p>`platformDetectorFormats` is kept, and is **reported only**. It is what
+ * `BarcodeDetector.getSupportedFormats()` says on this device, which is useful for understanding a
+ * tablet's history — on the devices this change was made for it answers with a plausible list and
+ * then reads nothing — but nothing in the scan path consults it any more.
  */
 export interface DecoderReport {
   decoder: DecoderName
   families: CodeFamily[]
-  /** What the platform API listed, or null when it is absent. `[]` is its "unavailable". */
-  nativeSupportedFormats: string[] | null
+  /** The ZXing build compiled in, so a device's answer names a version. */
+  version: string
+  /** Where the WebAssembly file is served from, for diagnosing a precache miss. */
+  wasmUrl: string
+  /** Whether the decoder loaded. `null` for the native-app reader, which has no such file. */
+  loaded: boolean | null
+  /** Why it did not load, when it did not. */
+  error: string | null
+  /** What the unused platform API claims, for context only. `[]` is its "unavailable". */
+  platformDetectorFormats: string[] | null
 }
 
 export async function decoderReport(): Promise<DecoderReport> {
-  if (nativeQrAvailable()) {
-    return { decoder: 'native-app', families: ['qr', 'barcode'], nativeSupportedFormats: null }
-  }
-
-  const Detector = barcodeDetector()
-  let nativeSupportedFormats: string[] | null = null
+  const Detector = (
+    typeof window === 'undefined'
+      ? undefined
+      : (window as unknown as {
+          BarcodeDetector?: { getSupportedFormats?: () => Promise<string[]> }
+        }).BarcodeDetector
+  )
+  let platformDetectorFormats: string[] | null = null
   if (Detector && typeof Detector.getSupportedFormats === 'function') {
     try {
-      nativeSupportedFormats = await Detector.getSupportedFormats()
+      platformDetectorFormats = await Detector.getSupportedFormats()
     } catch {
-      nativeSupportedFormats = []
+      platformDetectorFormats = []
     }
   }
 
-  const native = await nativeDecoder(['qr', 'barcode'])
-  if (native) {
-    return { decoder: native.name, families: native.families, nativeSupportedFormats }
+  const zxing = await decoderModule()
+  const { version, wasmUrl } = zxing.decoderIdentity()
+
+  if (nativeQrAvailable()) {
+    return {
+      decoder: 'native-app',
+      families: ['qr', 'barcode'],
+      version,
+      wasmUrl,
+      loaded: null,
+      error: null,
+      platformDetectorFormats
+    }
   }
-  return { decoder: 'jsqr', families: ['qr'], nativeSupportedFormats }
+
+  try {
+    await zxing.loadDecoder()
+    return {
+      decoder: 'zxing',
+      families: ['qr', 'barcode'],
+      version,
+      wasmUrl,
+      loaded: true,
+      error: null,
+      platformDetectorFormats
+    }
+  } catch (err) {
+    return {
+      decoder: 'zxing',
+      families: [],
+      version,
+      wasmUrl,
+      loaded: false,
+      // The wrapper's own message is already on the dialog; what the device check needs is the
+      // cause underneath it — the HTTP status, or whatever the instantiation threw.
+      error: describe(err instanceof zxing.DecoderUnavailableError ? err.cause : err),
+      platformDetectorFormats
+    }
+  }
 }

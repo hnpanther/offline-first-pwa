@@ -714,6 +714,53 @@ field.
 Raised as: "a template should be able to allow NFC, or QR, or either of the two — with NFC the
 default."*
 
+> **Superseded on 2026-11-10: the platform decoder is gone, and ZXing is bundled.** Everything
+> below about choosing between `BarcodeDetector` and a fallback is **history**. It is kept because
+> it was reasoned carefully and was still wrong, and because the way it was wrong is the single
+> most useful thing in this file.
+>
+> The branch tried, in order: a `typeof` check; then an empty-format-list gate; then a trial
+> `detect()`; then a failover on the first frame error; then, after two seconds of silence, a
+> re-read off a canvas and through `jsqr`. **Every one of them failed on the same device**, because
+> each waited for a signal that never arrives. On an Android handheld with no network the Play
+> Services barcode module is never downloaded, and `BarcodeDetector` then constructs, lists real
+> formats, resolves every `detect()` call without throwing, and returns an empty array for ever:
+> 434 frames, no errors, no reads, while the phone's own camera app read the same label instantly.
+> There is no gate and no failover that catches that, because nothing ever reports a failure.
+>
+> **The lesson is not «check harder».** Four increasingly careful checks were all answered «yes»
+> by a decoder that could not decode. The lesson is that a capability fetched over a network is not
+> a capability on a device that has no network, and the only fix is to stop depending on it. The
+> decoder is now `zxing-wasm` (`zxing-cpp` compiled to WebAssembly), compiled into the app: one
+> code path in the browser and in the APK, 925 KB of `.wasm` precached once, and «offline» is no
+> longer a condition scanning can fail under.
+>
+> Two of this section's own conclusions were inverted by that:
+>
+> - **«Both decoders ship, and the reason is a measurement»** — no longer true, and the measurement
+>   it rested on (a current Chromium on Windows has no `BarcodeDetector`) argued for the wrong
+>   thing. It argued for a *fallback*; what it was evidence of is that the platform API is not a
+>   foundation at all. One bundled decoder makes the availability question disappear rather than
+>   routing around it.
+> - **«In the APK a `BARCODE`-only field may be unfillable by camera»** — fixed, and it was worse
+>   than this said. It was not «may be»: `jsqr` reads QR and **no** linear symbology, so on these
+>   devices a linear-barcode field could never be scanned by anyone. ZXing reads Code 128, Code 39,
+>   Code 93, Codabar, EAN-8/13, ITF and UPC-A/E in the same pass as QR. The native-plugin door
+>   (`startQrScan` still prefers a Capacitor `Qr` plugin) stays open and now has **no reason to be
+>   used**: its only argument was giving the APK linear barcodes, which is done.
+>
+> **And the last bullet of this section was right, and is now the thing the feature hangs on.** It
+> warned that `globPatterns` has no `wasm`, so a wasm decoder "would therefore work online and fail
+> offline, which for this app is the only mode that matters… it fails exactly once, in the field, in
+> a basement." It said: choose pure JS, **or** add `wasm` in the same commit and verify with the
+> network off. The second path was taken — `wasm` is in `globPatterns`,
+> `maximumFileSizeToCacheInBytes` is raised to 3 MiB because workbox drops an oversized file from
+> the precache *silently*, and the check is that `zxing_reader-<hash>.wasm` appears in `dist/sw.js`.
+> **Do not remove that glob.** It is the whole difference between this decoder and the one it
+> replaced.
+>
+> The behaviour is in [device-features.md](device-features.md); the traps are AGENTS.md #182–#184.
+
 > **Status. Built.** `scanMode` arrives on the sheet, the fill page offers the button(s) that
 > round allows, `QrScanDialog` drives the camera, and a QR reading is labelled `PWA_QR` all the
 > way to the server. Four things differ from the plan below, and each is worth reading before

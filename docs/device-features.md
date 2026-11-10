@@ -150,142 +150,208 @@ This is why `filledVia` keeps `'qr'` apart from `'nfc'` all the way to the serve
 different evidence, and a column that merged them would have every report overstate what half
 its rows prove.
 
-## Two decoders, and choosing between them is not `typeof`
+## One decoder, compiled into the app
 
-| | Used when | Cost |
+| | | |
 |---|---|---|
-| `BarcodeDetector` | it **proves** it works, per the two gates below | nothing — native code, the fastest option by a wide margin on a live camera stream, and the only one that reads a linear barcode |
-| `jsqr` | it does not | its own chunk, **130 KB raw / 47 KB gzipped**, downloaded only on those devices. QR only |
+| **Decoder** | `zxing-wasm` 3.1.6 — `zxing-cpp`'s reader compiled to WebAssembly | QR **and** every linear symbology below, in one pass |
+| **Cost** | `zxing_reader.wasm`, **925 KB**, precached once, plus a 36 KB / 13 KB gzipped glue chunk loaded on the first scan | nothing per frame beyond the decode itself |
+| **Needs** | nothing. No Play Services, no module download, no network, ever | — |
+
+Formats asked for on every frame (`FAST_FORMATS`): `QRCode`; and for a linear field `Code128`,
+`Code39`, `Code93`, `Codabar`, `EAN13`, `EAN8`, `ITF`, `UPCA`, `UPCE` — the same nine the platform
+decoder used to be asked for, name for name, so no label that used to scan has quietly stopped
+being looked for. Data Matrix, Aztec, PDF417 and MaxiCode are deliberately **not** requested: they
+are not on this plant's labels, and every enabled symbology is work on every frame.
 
 ### The bug that set the rule
 
 On Android the camera opened, the operator aimed at a sticker the phone's own camera app read
 instantly, and **nothing ever happened** — no error, no message, no result.
 
-The decoder was chosen by `typeof window.BarcodeDetector`. That is not a support check. The
-[spec](https://wicg.github.io/shape-detection-api/) is explicit that a platform which cannot
-detect barcodes still exposes the constructor and resolves `getSupportedFormats()` with an
-**empty list**. On Android the detector is backed by a Play Services module fetched on demand —
-Chrome has it, a plain WebView host does not — so the constructor succeeded and every single
-`detect()` call rejected.
+The decoder was `window.BarcodeDetector`, and on Android that API is backed by a Google Play
+Services module which is **downloaded on demand**. These handhelds have no network, ever, so the
+module was never there. The way that surfaces is the worst one available: the constructor exists,
+`getSupportedFormats()` answers with a real list, `detect()` resolves without throwing, and returns
+an empty array for every frame for ever. Measured on the device: **434 frames, no errors, no
+reads.**
 
-And the frame loop caught *every* error and always retried. Correct for one frame; for a
-permanently broken decoder it is an infinite silent loop. That is the whole of "nothing
-happens".
+Three rounds of defence were built against it and **none of them could ever have worked**, because
+each waited for a signal that does not come:
 
-### Two gates before the platform decoder is trusted
+| Defence | Why it could not fire |
+|---|---|
+| `getSupportedFormats()` must list a usable format | it listed them |
+| a trial `detect()` must complete | it completed |
+| fail over to `jsqr` on the first frame error | there were no errors |
+| after 2 s of silence, re-read off a canvas and through `jsqr` | the canvas read used the *same* dead module, and `jsqr` reads QR only |
 
-1. **`getSupportedFormats()` must list a format we actually want.** An empty list, a missing
-   method, or a list with nothing relevant all mean "use the fallback". `usableNativeFormats()`
-   is a pure function so this can be tested without a device; `[]` is the input that broke it.
-2. **A trial `detect()` against a 2×2 canvas must complete.** A detector can pass gate 1 and
-   still reject on first real use, because the module is fetched on demand. Answering that
-   during setup means falling back; answering it in the frame loop meant swallowing it forever.
+A decoder that answers «no code here» 434 times is indistinguishable from an operator with bad
+aim. So the decoder stopped being something the platform provides. It is compiled into the app, and
+«offline» is no longer a condition scanning can fail under.
 
-The detector is constructed only with formats the platform listed — asking for one it does not
-know is how a working decoder gets discarded for no reason.
+**`BarcodeDetector` is now consulted nowhere in the scan path.** The device-check page still reports
+what it claims, last and labelled «استفاده نمی‌شود», only so that a tablet whose history includes
+this failure can still be recognised.
 
-### A frame-decode error has three outcomes, not one
+### What replacing it bought
 
-`decideOnDecodeError()` returns `failover` / `retry` / `giveUp`:
+- **Linear barcodes work at all.** The old fallback was `jsqr`, which reads QR and no linear
+  symbology whatsoever — so on these devices a field set to `BARCODE` could *never* be scanned: the
+  platform decoder was blind and the fallback did not implement the format. That limitation is gone,
+  and `jsqr` is no longer a dependency.
+- **About 250 lines of gates, failover, rescue and probing deleted**, along with the pure function
+  (`usableNativeFormats`) and the `failover` branch that existed only to decide whether to trust
+  the platform.
+- **One behaviour to support**, reproducible at a desk, instead of a property of which Play Services
+  modules a given tablet happened to have pulled down.
 
-- **`failover`** — the first time the platform decoder throws on a real frame, switch to `jsqr`
-  mid-session and carry on. Once only, and only away from native: `jsqr` is the last resort.
+### The `.wasm` must be precached — the line this all depends on
+
+`vite.config.ts` carries `wasm` in the workbox `globPatterns`. **Remove it and scanning works at
+the desk and dies the moment a tablet leaves Wi-Fi** — every chunk, font and icon precached, and
+the one file the decoder cannot run without silently absent. That is the bug this decoder replaced,
+reintroduced one glob at a time. The build is the check: `zxing_reader-<hash>.wasm` must appear in
+`dist/sw.js`'s precache manifest, which went from 34 entries to 35.
+
+`maximumFileSizeToCacheInBytes` is raised to 3 MiB for the same reason. Workbox's default is 2 MiB
+and a file over it is dropped from the precache **silently**; 925 KB is comfortable today, but this
+is by far the largest asset here and a future ZXing release could cross that line with no warning
+and no symptom until a tablet is offline.
+
+### How the file is loaded, and why not by URL
+
+`zxing-wasm` resolves its WebAssembly through a jsDelivr URL baked in at **its** build time, so the
+default behaviour of a fresh install is a CDN fetch on the first scan — on this fleet a guaranteed
+failure whose only symptom is a scan dialog that never starts. `zxingModule.ts` instead imports the
+file as an asset (`?url`, which makes Vite emit it with a content hash), `fetch`es it, and hands the
+bytes over as Emscripten's `wasmBinary`. That buys two things a `locateFile` URL does not:
+
+- **no dependency on the `Content-Type`.** A URL leads to `WebAssembly.instantiateStreaming`, which
+  refuses anything not served as `application/wasm`. nginx has it (and now gzips it), and
+  Capacitor's asset loader maps the extension explicitly (`WebViewLocalServer.java`), so both
+  deliveries happen to be fine — but the APK does not go through nginx at all, and that header is
+  not ours to guarantee there.
+- **a failure that names itself.** A `fetch` we issue can be checked, so a missing or unprecached
+  file raises `DecoderUnavailableError` naming the URL, and the device-check page prints it.
+
+`locateFile` is **also** pointed at the local asset, purely so that if `wasmBinary` ever stopped
+being honoured the fallback would be the precached file rather than a CDN.
+
+The load is started **beside** `getUserMedia`, not after it: the camera takes a few hundred
+milliseconds to come up, which is long enough to hide the fetch and the instantiation entirely.
+
+### Two passes over a frame, and the cheap one runs first
+
+ZXing's defaults optimise for accuracy — `tryHarder`, `tryRotate` and `tryInvert` all on. That is
+right for a label somebody is struggling with and wrong for the first second, when it only costs
+frames. So:
+
+- **every frame**: the accepted formats only, with `tryHarder` / `tryRotate` / `tryInvert` **off**,
+  `maxNumberOfSymbols: 1`, and `tryDownscale` left on (ZXing's own image pyramid is how a label
+  photographed too close still resolves, and it is cheap next to the other three).
+- **after `THOROUGH_AFTER_MS` (1.5 s), every third frame**: all three on, plus the formats a small
+  nameplate carries — `MicroQRCode` and `RMQRCode`, which are separate bits from `QRCode` in
+  `zxing-cpp` and so are simply not looked for unless named, and `ITF14`, `DataBar`, `DataBarExp`.
+
+Every third frame and not every one: the cheap pass is what reads an ordinary label, and starving it
+would make a scan that was about to succeed slower rather than likelier. One `getImageData` per
+frame is shared by every pass — on a 1280×720 frame it is the single most expensive call in the
+loop.
+
+`textMode: 'Plain'` is load-bearing and invisible. ZXing's own default is `'HRI'`, which rewrites
+GS1 content with bracketed application identifiers; a payload that happens to look like that would
+come back reformatted and match nothing stored. There is a test for exactly that.
+
+### A frame-decode error has two outcomes, not three
+
+`decideOnDecodeError(consecutiveErrors)` returns `retry` / `giveUp`:
+
 - **`retry`** — a bounded number of times. A frame can fail while the camera reconfigures, and
   ending the session on that would make the scanner flaky, which is its own bug report.
-- **`giveUp`** — after `HARD_FAILURE_LIMIT` (12) consecutive failures, reject with the real
-  error. This branch did not exist, which is why the loop ran forever.
+- **`giveUp`** — after `HARD_FAILURE_LIMIT` (12) consecutive failures, reject with the real error.
+  This branch did not exist originally, which is why the loop ran for ever.
 
-A decode that merely finds no code **resets** the counter: the decoder worked.
-
-### A reader the device cannot be is refused in words
-
-`jsqr` reads QR and no linear symbology at all. So a field whose administrator allowed only
-`BARCODE`, on a device with no usable platform decoder, gets a refusal — «این دستگاه بارکد خطی
-را نمی‌خواند» — rather than a camera that physically cannot read the label in the operator's
-hand. `ScanFieldAdornment` passes the families the field allows, and the session asks the
-platform for exactly those.
-
-**In the packaged APK this is a real limitation, not a theoretical one:** if the WebView's
-`BarcodeDetector` is unavailable, QR still works through the fallback and a linear barcode
-cannot be read at all. The device-check page answers that for a given tablet in one tap.
+A decode that merely finds no code **resets** the counter: the decoder worked. `failover` is gone
+and should not come back — it existed to escape the platform decoder, and there is no platform
+decoder to escape. One decoder that is part of the app either works here or is broken for a reason
+worth reporting; a second code path would only hide that again.
 
 ### The camera is asked for a frame worth decoding
 
 `facingMode: 'environment'`, plus `width/height: { ideal: 1280 × 720 }` and a best-effort
 `focusMode: 'continuous'`. The Android default is often 640×480 fixed-focus, and a blurry or
 too-small frame of a dense label decodes as nothing at all — indistinguishable from the same
-silence. All of it `ideal` rather than `exact`, so a camera that cannot manage it still opens.
-
-`jsqr` is a **dynamic import**, so a tablet with a working platform API never downloads or
-parses it. It is still available offline: workbox precaches every emitted chunk, and this one is
-among them. It decodes with `inversionAttempts: 'dontInvert'` — a printed label is
-dark-on-light, and asking for the inverted reading too doubles the work of every frame for a
-case this plant does not have — onto one canvas reused for the whole session, because allocating
-a video-sized buffer sixty times a second is felt as the camera stuttering.
+silence. All of it `ideal` rather than `exact`, so a camera that cannot manage it still opens. One
+canvas is reused for the whole session, because allocating a video-sized buffer sixty times a second
+is felt as the camera stuttering.
 
 `qrScanSupport()` answers a deliberately narrow question: **is there a camera**. It returns
-`available` / `noCamera` / `noDecoder`, the last meaning no camera API at all. It does not probe
-the decoder, because that is async and this is called while rendering the fill page; which
-decoder serves is settled when the scan starts, and if none can, the dialog says so.
+`available` / `noCamera` / `noDecoder`, the last meaning no camera API at all. It no longer has to
+hedge about the decoder — the decoder ships with the app, so the camera is the only open question on
+any device, which is the whole point of the change.
 
 `startQrScan` still prefers a Capacitor plugin named `Qr` if a build registers one, exactly as
-`nativeNfc` does. None is written — a native decoder means an ML Kit or ZXing Gradle dependency
-— and it is the one route that would give the APK linear barcodes without relying on the
-WebView's own binding.
+`nativeNfc` does. **None is written, and there is no longer a reason to write one**: its only
+argument was giving the APK linear barcodes without the WebView's binding, and that is now true
+without it. A bundled ML Kit would be faster still, but it would be APK-only — the browser build
+would then need a second decoder — and one code path across both deliveries is worth more than the
+milliseconds.
 
 ### A code of the wrong kind is named, not ignored
 
 A field set to accept only a linear barcode used to get a detector blind to QR, so a QR sticker in
 front of it produced a live camera and nothing else — under an instruction that said «QR یا
-بارکد». Now a code of the other kind is named: «یک QR Code دیده شد، اما اینجا فقط بارکد خطی پذیرفته
-می‌شود…», pointing at the panel where the field's accepted kinds are set, and the instruction line
-names exactly what will be read (`scanDialogText.ts`).
+بارکد». A code of the other kind is named instead: «یک QR Code دیده شد، اما اینجا فقط بارکد خطی
+پذیرفته می‌شود…», pointing at the panel where the field's accepted kinds are set, and the
+instruction line names exactly what will be read (`scanDialogText.ts`).
 
-**How, and the version that broke scanning.** The first cut searched all ten symbologies on every
-frame and acted on whichever code came first; scanning then stopped working in the field — a second
-code on a label, or a spurious linear read off printed text, set the wanted code aside on every
-frame, and each frame was slower. A first repair still re-judged each read by its format name
-(`format === 'qr_code'`), which rejects a correct QR on a platform that names it differently. Now
-the per-frame path is **byte-for-byte the one that worked**: a detector built for the accepted
-kinds only, whose first payload is taken without re-checking its kind (`Detection.accepted` comes
-from *which detector* read it), and `jsqr` unchanged. The wrong-kind probe does not even exist for
-the first three seconds (`WRONG_KIND_PROBE_AFTER_MS`); after that a second detector is built
-lazily and runs on one frame in eight (`WRONG_KIND_PROBE_EVERY`), only to name a code, and is
-dropped for good on its first error. The dialog polls the session only after its diagnostic
-delay, as before. Never widen or re-judge the per-frame path again to get a message.
+**The version of this that broke scanning, and the rule it left.** The first cut searched all ten
+symbologies on every frame and acted on whichever code came first; scanning then stopped working in
+the field — a second code on a label, or a spurious linear read off printed text, set the wanted
+code aside on every frame, and each frame was slower. A first repair still re-judged each read by
+its format name (`format === 'qr_code'`), which rejects a correct QR on a platform that spells the
+format differently. So the per-frame read asks for the **accepted formats only** and takes its first
+payload without re-checking the kind (`Detection.accepted` comes from *which pass* read it), and the
+wrong-kind probe does not exist for the first three seconds (`WRONG_KIND_PROBE_AFTER_MS`); after
+that it runs on one frame in eight (`WRONG_KIND_PROBE_EVERY`), re-using the same `getImageData`,
+purely to name a code. **Never widen or re-judge the per-frame path again to get a message.**
 
-### A platform decoder that answers but never sees — the rescue
-
-Found on Android (2026-11-09): the platform `BarcodeDetector` passed its trial, ran 434 frames
-without a single error and returned nothing for a QR or a barcode, while the phone's own camera read
-the same labels at once. Failover only fires on **errors**, so a decoder that constructs, answers
-and stays silent was never replaced. After `RESCUE_AFTER_MS` (2 s) with nothing read, two frames in
-three now go to a rescue and the third to the original read:
-
-- **a still frame** — the same platform decoder handed the frame drawn onto a canvas instead of the
-  live `<video>`, for a WebView that cannot read pixels from video (QR **and** barcodes);
-- **the bundled `jsqr`** — for a platform decoding module that is unavailable (QR only, and only
-  for a caller that accepts QR).
-
-Each switches itself off for good on its first error. The diagnostics line says which routes are
-running, and — on the next scan — which one read the last code («خواندن موفق قبلی با: …»). That
-answer is the root cause: *still frame* means the WebView's video path; *bundled decoder* means the
-platform module, and then linear barcodes on that device need a bundled 1-D decoder (none exists
-today — `jsqr` reads QR only).
+Where a kind *is* judged by what was read, it is judged by the **symbology** and not the format:
+`familyOfFormat` compares against `QRCode`, the root every QR variant reports, so Model 1, Model 2,
+Micro QR and rMQR are covered by one comparison rather than a list a new variant falls out of.
 
 ### The session reports on itself
 
-`QrScanSession.stats()` carries the decoder in use, the number of frames handed to it, and the
-last error. After four seconds with no result `QrScanDialog` shows that line, because the one
-state an operator cannot diagnose is "the camera is on and nothing is happening":
+`QrScanSession.stats()` carries the decoder in use, the number of frames handed to it, the last
+error, and a detail line (ZXing's version, the frame size, and how many thorough and probe passes
+have run). After four seconds with no result `QrScanDialog` shows it, because the one state an
+operator cannot diagnose is "the camera is on and nothing is happening":
 
 - **frames 0** → the camera, not the decoder.
 - **frames rising, no error** → aim, light, distance or a dirty label.
 - **an error** → the decoder itself, named.
 
-That line is what turns the next report from a plant into something answerable instead of
-"QR does not work".
+### What the tests actually prove, and what they do not
+
+Every previous scanner bug passed a green suite: the platform decoder was mocked, or tested only
+through the pure functions that decided whether to use it, and «does a camera pointed at this label
+produce this string» was answered only by somebody standing in a plant.
+
+`zxingDecode.test.ts` closes that. ZXing's **writer** draws a QR code and five linear barcodes and
+the **reader the app ships** reads them back — using `readerOptions()` itself rather than a copy, so
+the suite cannot keep passing while the settings the operator's camera uses drift. It also pins that
+the accepted kinds are enforced (a QR is *not* read by a barcode-only field, and the reverse) and
+that `textMode` does not reformat a GS1-shaped payload. Eleven tests, about 100 ms.
+
+Its `locateFile` points at `http://127.0.0.1:1/`, so **every test in it is also a check that no
+fetch happens**: if the decoder reached for that URL, instantiation would fail and all eleven would
+go red. That has to be an unreachable address rather than a stub that throws — see AGENTS.md #182.
+
+It does **not** cover loading: a `?url` import and a `fetch` of it mean nothing under Node, so that
+half is verified by the build (the precache manifest) and on a device. And it does not cover blur,
+glare, angle or distance — a generated symbol is a perfect one. It says the decoder decodes; it does
+not say a label in a plant is legible.
 
 ## The camera is stopped by the dialog that started it
 
