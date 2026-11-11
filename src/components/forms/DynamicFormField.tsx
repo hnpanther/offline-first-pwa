@@ -14,16 +14,18 @@ import {
   InputAdornment,
   IconButton
 } from '@mui/material'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Controller, useWatch, type Control, type RegisterOptions, type ControllerRenderProps } from 'react-hook-form'
 import type { FormField } from '@/types'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
 import {
   evaluateFieldSeverity,
   evaluateOptionSeverity,
+  hasStateCondition,
   optionSeverityMessage,
   optionSeveritySummaryFa,
   severityMessage,
+  stateConditionSummaryFa,
   validationSummaryFa,
   filterNumericInput,
   formatNumericDisplay,
@@ -48,6 +50,27 @@ interface DynamicFormFieldProps {
   rules?: RegisterOptions
   /** Numeric warning/danger ranges from FieldDefinition.validation */
   rangeValidation?: FieldValidation
+  /**
+   * The siblings this field's state condition reads: the form names to watch, paired with the
+   * definition keys to report them under.
+   *
+   * A gated field's thresholds apply only while a sibling says so — «the current band applies
+   * only while the status reads running» — so colouring it needs more than its own value.
+   *
+   * **Exactly the named sources, never the whole entry.** `useWatch` with no `name` sets
+   * react-hook-form's `watchAll` on the control, which makes every change anywhere in the form
+   * a re-render; with a prefix it would also be wrong, since both of this app's forms name their
+   * fields at the root. Watching the one or two parameters a gate actually reads means only the
+   * gated field re-renders, and only when its gate's parameter changes. Empty or absent for
+   * every field with no condition, which is all of them until somebody configures one.
+   *
+   * `gateSources[i]` is the react-hook-form name; `gateKeys[i]` is the key the evaluation sees.
+   * The parent resolves the pairing because it is the one that holds the field list, and the
+   * match has to be case-insensitive — the server's key uniqueness is case-folded, so a gate
+   * written as `Status` must still find `status`.
+   */
+  gateSources?: string[]
+  gateKeys?: string[]
   /**
    * How this field may be read off a label instead of typed.
    *
@@ -201,6 +224,8 @@ export function DynamicFormField({
   error,
   rules,
   rangeValidation,
+  gateSources,
+  gateKeys,
   scan
 }: DynamicFormFieldProps) {
   const label = field.required ? `${field.label} *` : field.label
@@ -212,16 +237,51 @@ export function DynamicFormField({
   // `field.type !== 'number'` gate here kept the subscription disabled for a select and the
   // colour never changed, however the field was configured.
   const isChoice = field.type === 'select' || field.type === 'multiselect'
-  const watchedValue = useWatch({
+  // ONE subscription, this field's value first and its gate's parameters after it.
+  //
+  // Two separate `useWatch` calls would be two subscriptions per field, and in react-hook-form
+  // `disabled` does NOT prevent subscribing — it only suppresses the re-render (`refreshValue`
+  // returns early), so the callback still runs on every value change. A 22-parameter asset would
+  // have paid 44 no-op callbacks per keystroke for a feature almost no field uses. Merged, the
+  // count is exactly what it was before state conditions existed.
+  //
+  // `name` is an ARRAY and never undefined, which is the other half of the cost: a bare
+  // `useWatch()` sets `watchAll` on the control and turns every change anywhere in the form into
+  // a re-render of whatever watched it.
+  const watchNames = useMemo(
+    () => [field.name, ...(gateSources ?? [])],
+    [field.name, gateSources]
+  )
+  const watched = useWatch({
     control,
-    name: field.name,
+    name: watchNames,
     disabled: (field.type !== 'number' && !isChoice) || !effectiveRangeValidation
   })
+  const watchedValues = Array.isArray(watched) ? watched : []
+  const watchedValue = watchedValues[0]
+  // The gate's parameters, read out of the same watch — element 0 is this field's own value, so
+  // the siblings start at 1, in `gateKeys` order.
+  const gated = hasStateCondition(effectiveRangeValidation)
+    && !!gateSources && gateSources.length > 0
+  const siblings = useMemo(() => {
+    if (!gated || !gateKeys) return undefined
+    const out: Record<string, unknown> = {}
+    gateKeys.forEach((key, i) => { out[key] = watchedValues[i + 1] })
+    return out
+    // watchedValues is derived from `watched` each render; depending on it directly is what
+    // makes the colour follow the sibling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gated, gateKeys, watched])
   const rangeSummary = field.type === 'number'
     ? validationSummaryFa(effectiveRangeValidation)
-    : isChoice ? optionSeveritySummaryFa(effectiveRangeValidation) : null
+    : isChoice
+      ? [
+          optionSeveritySummaryFa(effectiveRangeValidation),
+          stateConditionSummaryFa(effectiveRangeValidation)
+        ].filter(Boolean).join(' · ') || null
+      : null
   const rangeSeverity = effectiveRangeValidation
-    ? evaluateFieldSeverity(field.type, watchedValue, effectiveRangeValidation)
+    ? evaluateFieldSeverity(field.type, watchedValue, effectiveRangeValidation, siblings)
     : 'ok'
   const rangeFeedback = isChoice
     ? optionSeverityMessage(rangeSeverity)

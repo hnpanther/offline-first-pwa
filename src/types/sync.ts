@@ -62,6 +62,45 @@ export interface FieldValidationRange {
   max?: number
 }
 
+/** The operators a state gate may compare with. Mirrors the server's `FieldGateOperators`. */
+export type FieldGateOperator =
+  | 'in'
+  | 'notIn'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'answered'
+  | 'notAnswered'
+
+/**
+ * Which state of the asset a condition is about — read from ANOTHER answer on the same entry.
+ *
+ * `field` is matched case-insensitively (the server's key uniqueness is already case-folded);
+ * the compared `values` are trimmed and case-SENSITIVE, like every other option comparison here.
+ */
+export interface FieldStateGate {
+  field?: string
+  op?: FieldGateOperator | string
+  values?: string[]
+  value?: number | string
+}
+
+/**
+ * One state of the asset, and the thresholds that apply in it.
+ *
+ * A condition with no thresholds of its own gates the field's OWN bands — which is what the
+ * panel's single-gate editor writes, and the common case by far. One that declares any of the
+ * four states them completely: a key it omits is absent in this state, not inherited.
+ */
+export interface FieldStateCondition {
+  when?: FieldStateGate
+  warning?: FieldValidationRange
+  danger?: FieldValidationRange
+  warningOptions?: string[]
+  dangerOptions?: string[]
+}
+
 export interface FieldValidation {
   /** @deprecated legacy — treated as warning range by backend */
   min?: number
@@ -90,6 +129,29 @@ export interface FieldValidation {
    */
   warningOptions?: string[]
   dangerOptions?: string[]
+  /**
+   * WHEN the thresholds above apply — a state condition.
+   *
+   * «The current must be above the no-load threshold» is true of a running pump and meaningless
+   * for a stopped one, and no band can say that: a danger minimum of zero does nothing at all
+   * (the interval is closed, so `0 < 0` is false) and a real threshold fires on every standby
+   * machine. The state lives in a DIFFERENT answer on the same entry, which is why this is a
+   * cross-field rule and not another bound. ISA-18.2 calls the result «suppressed by design».
+   *
+   * Evaluation order — see `utils/fieldValidation.ts`, which must stay identical to the
+   * server's `FieldValidationSupport`:
+   *   1. absent or unreadable → judged exactly as before this key existed;
+   *   2. the first condition whose `when` holds decides;
+   *   3. none holds → `ok`, suppressed. The value is still stored, still synced, still
+   *      reported — only the judgement is withheld, so the operator never has to leave a box
+   *      empty to avoid a false alert.
+   *
+   * Additive, like `warningOptions`: a build of this app that ignores it stores the same data,
+   * because the server recomputes `max_severity` from its own copy on every write. What it gets
+   * wrong is only the live colouring — it would paint a stopped pump red while the server
+   * records OK — which is why the device half ships with the panel half rather than after it.
+   */
+  conditions?: FieldStateCondition[]
   /**
    * How this `text` / `number` field may be filled from a label instead of typed.
    *
@@ -153,6 +215,15 @@ export interface AssetFieldOverrideSnapshot {
 export interface AssetFieldOverride {
   warning?: FieldValidationRange | null
   danger?: FieldValidationRange | null
+  /**
+   * This machine's own state condition — allowed in BOTH modes, like the option severities and
+   * for the same reason: it says *when* a threshold is judged, which is part of the threshold.
+   *
+   * `null` means «this machine has no condition», which drops the class's gate rather than
+   * inheriting it. Replaced whole, never merged: a condition list is an ordered first-match
+   * statement and merging two would produce an order nobody wrote.
+   */
+  conditions?: FieldStateCondition[] | null
   /** FULL only: this field does not apply to this asset. */
   removed?: boolean
   label?: string

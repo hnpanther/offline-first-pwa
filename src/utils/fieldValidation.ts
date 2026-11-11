@@ -1,4 +1,4 @@
-import type { FieldValidation } from '@/types/sync'
+import type { FieldStateCondition, FieldStateGate, FieldValidation } from '@/types/sync'
 
 export interface NumericRange {
   min?: number
@@ -94,12 +94,253 @@ function appendRangeSummary(parts: string[], label: string, range: NumericRange)
   }
 }
 
-/** Static hint shown under numeric fields — same format as backend summaryFa. */
+/**
+ * Static hint shown under numeric fields — same format as backend summaryFa.
+ *
+ * The gate is part of it, not beside it. A band shown on its own IS the rule as far as the
+ * person reading it is concerned, so an operator standing at a stopped pump would see
+ * «خطر: ≥ 4.5» against a true reading of 0 and either re-read the meter or type something the
+ * instrument never said.
+ */
 export function validationSummaryFa(validation?: FieldValidation | Record<string, unknown>): string | null {
+  const conditions = stateConditions(validation)
+  if (conditions.length === 0) return thresholdSummaryFa(validation)
+
+  const parts: string[] = []
+  for (const condition of conditions) {
+    const gate = gateSummaryFa(condition.when)
+    if (!gate) {
+      parts.push('شرط نامعتبر')
+      continue
+    }
+    const bands = thresholdSummaryFa(declaredThresholds(validation, condition) ?? validation)
+    parts.push(bands ? `فقط وقتی ${gate} → ${bands}` : `فقط وقتی ${gate}`)
+  }
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** The bands alone, with nothing said about when they apply. */
+export function thresholdSummaryFa(
+  validation?: FieldValidation | Record<string, unknown>
+): string | null {
   const parts: string[] = []
   appendRangeSummary(parts, 'هشدار', warningRange(validation))
   appendRangeSummary(parts, 'خطر', dangerRange(validation))
   return parts.length > 0 ? parts.join(' · ') : null
+}
+
+// ---------------------------------------------------------------------------------------------
+// State conditions — WHEN the thresholds apply.
+//
+// This block mirrors the server's `FieldValidationSupport` exactly, and the mirror is the point:
+// the device paints a reading the instant it is typed and the server stamps `max_severity` when
+// it arrives, so any disagreement shows up as the app calling a reading red that the exception
+// report calls clean. Nothing here throws, and nothing matches by accident: a malformed gate, an
+// operator this build does not know, a sibling with no answer — each is "does not hold", which
+// falls through to the next condition and, failing that, suppresses the field. The opposite
+// default would turn an unreadable blob into an alert.
+// ---------------------------------------------------------------------------------------------
+
+const GATE_OPTION_OPS = new Set(['in', 'notIn'])
+const GATE_NUMBER_OPS = new Set(['gt', 'gte', 'lt', 'lte'])
+const GATE_OPS = new Set([...GATE_OPTION_OPS, ...GATE_NUMBER_OPS, 'answered', 'notAnswered'])
+const THRESHOLD_KEYS = ['warning', 'danger', 'warningOptions', 'dangerOptions'] as const
+
+/** The conditions as stored, read defensively: anything else is "no conditions". */
+export function stateConditions(
+  validation?: FieldValidation | Record<string, unknown>
+): FieldStateCondition[] {
+  const raw = (validation as Record<string, unknown> | undefined)?.conditions
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (c): c is FieldStateCondition => c != null && typeof c === 'object' && !Array.isArray(c)
+  )
+}
+
+/** Whether this field's thresholds are gated at all. */
+export function hasStateCondition(
+  validation?: FieldValidation | Record<string, unknown>
+): boolean {
+  return stateConditions(validation).length > 0
+}
+
+/**
+ * The distinct sibling keys this field's conditions read, in order of first appearance.
+ *
+ * **This is what makes the live colouring cheap and correct.** A gate needs one other answer,
+ * not the whole entry: the form watches exactly these names, so only the gated field re-renders
+ * when its gate's parameter changes, and nothing sets react-hook-form's `watchAll`. Watching the
+ * whole entry instead would re-render all 22 of an asset's fields on every keystroke.
+ *
+ * Returned as the keys the gates *name*; the caller resolves each to the field it actually has,
+ * case-insensitively, because the server's key uniqueness is case-folded.
+ */
+export function stateConditionFieldKeys(
+  validation?: FieldValidation | Record<string, unknown>
+): string[] {
+  const out: string[] = []
+  for (const condition of stateConditions(validation)) {
+    const field = condition.when?.field
+    if (typeof field !== 'string') continue
+    const trimmed = field.trim()
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed)
+  }
+  return out
+}
+
+/** Whether an answer is present at all. A blank string is ABSENT, not an answer of "". */
+function isAnswered(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim() !== ''
+  if (Array.isArray(value)) return value.length > 0
+  return true
+}
+
+/** Whether one gate holds for this entry's answers. */
+export function gateHolds(
+  gate: FieldStateGate | undefined,
+  siblings: Record<string, unknown> | undefined | null
+): boolean {
+  if (!gate || !siblings) return false
+  const field = typeof gate.field === 'string' ? gate.field.trim() : ''
+  const op = typeof gate.op === 'string' ? gate.op.trim() : ''
+  if (!field || !GATE_OPS.has(op)) return false
+
+  // Case-insensitive, as the server's key uniqueness already is. A case-sensitive lookup would
+  // make a correctly configured danger gate silently never match, which turns a danger band
+  // into a parameter nothing judges.
+  const wanted = field.toLowerCase()
+  let answer: unknown
+  for (const key of Object.keys(siblings)) {
+    if (key.toLowerCase() === wanted) {
+      answer = siblings[key]
+      break
+    }
+  }
+  const answered = isAnswered(answer)
+
+  if (op === 'answered') return answered
+  if (op === 'notAnswered') return !answered
+  // «We do not know» is never «it was in this state».
+  if (!answered) return false
+
+  if (GATE_OPTION_OPS.has(op)) {
+    const values = Array.isArray(gate.values)
+      ? gate.values.filter(v => v != null).map(v => String(v).trim()).filter(Boolean)
+      : []
+    if (values.length === 0) return false
+    const chosen = (Array.isArray(answer) ? answer : [answer])
+      .filter(v => v != null)
+      .map(v => String(v).trim())
+    // Trimmed and case-SENSITIVE, exactly as evaluateOptionSeverity compares.
+    const any = chosen.some(c => values.includes(c))
+    return op === 'in' ? any : !any
+  }
+
+  const actual = toNumber(answer)
+  const bound = toNumber(gate.value)
+  if (actual == null || bound == null) return false
+  if (op === 'gt') return actual > bound
+  if (op === 'gte') return actual >= bound
+  if (op === 'lt') return actual < bound
+  return actual <= bound
+}
+
+/**
+ * The condition's own thresholds over the field's non-threshold keys, or null when it has none.
+ *
+ * A condition that declares any of the four states them COMPLETELY: one it omits is absent in
+ * this state rather than inherited, because a state the administrator described as «danger
+ * only» has no warning band, and inheriting one meant for the other state would alert on
+ * readings this state calls normal. (An asset override is the opposite — it is a layer, not a
+ * state — and `sheetFieldDefinitions.ts` keeps the class's band where the override is silent.)
+ */
+function declaredThresholds(
+  validation: FieldValidation | Record<string, unknown> | undefined,
+  condition: FieldStateCondition
+): Record<string, unknown> | null {
+  const declares = THRESHOLD_KEYS.some(k => k in condition)
+  if (!declares) return null
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries((validation ?? {}) as Record<string, unknown>)) {
+    if (k === 'conditions' || k === 'min' || k === 'max') continue
+    if ((THRESHOLD_KEYS as readonly string[]).includes(k)) continue
+    out[k] = v
+  }
+  for (const k of THRESHOLD_KEYS) {
+    const value = (condition as Record<string, unknown>)[k]
+    if (k in condition && value != null) out[k] = value
+  }
+  return out
+}
+
+/**
+ * The thresholds in force for this reading, or **null** when the field is suppressed.
+ *
+ * Returns the same object for the overwhelmingly common ungated field, so nothing is copied per
+ * keystroke.
+ */
+export function thresholdsFor(
+  validation: FieldValidation | Record<string, unknown> | undefined,
+  siblings: Record<string, unknown> | undefined | null
+): FieldValidation | Record<string, unknown> | undefined | null {
+  const conditions = stateConditions(validation)
+  if (conditions.length === 0) return validation
+  for (const condition of conditions) {
+    if (!gateHolds(condition.when, siblings)) continue
+    return declaredThresholds(validation, condition) ?? validation
+  }
+  return null
+}
+
+/** One gate in words — «status یکی از: روشن» — or null when it cannot be read. */
+export function gateSummaryFa(gate: FieldStateGate | undefined): string | null {
+  if (!gate) return null
+  const field = typeof gate.field === 'string' ? gate.field.trim() : ''
+  const op = typeof gate.op === 'string' ? gate.op.trim() : ''
+  if (!field || !GATE_OPS.has(op)) return null
+
+  const label = GATE_OPERATOR_LABELS[op]
+  if (GATE_OPTION_OPS.has(op)) {
+    const values = Array.isArray(gate.values)
+      ? gate.values.filter(v => v != null).map(v => String(v).trim()).filter(Boolean)
+      : []
+    if (values.length === 0) return null
+    return `${field} ${label}: ${values.join('، ')}`
+  }
+  if (GATE_NUMBER_OPS.has(op)) {
+    const bound = toNumber(gate.value)
+    if (bound == null) return null
+    return `${field} ${label} ${bound}`
+  }
+  return `${field} ${label}`
+}
+
+/**
+ * «فقط وقتی status یکی از: روشن» — the condition alone, for a surface that renders the
+ * thresholds separately (a choice field, whose severities are a list rather than a range).
+ */
+export function stateConditionSummaryFa(
+  validation?: FieldValidation | Record<string, unknown>
+): string | null {
+  const parts: string[] = []
+  for (const condition of stateConditions(validation)) {
+    const gate = gateSummaryFa(condition.when)
+    if (gate) parts.push(`فقط وقتی ${gate}`)
+  }
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** The same Persian labels the panel's dropdown shows — `FieldGateOperators`. */
+const GATE_OPERATOR_LABELS: Record<string, string> = {
+  in: 'یکی از',
+  notIn: 'هیچ‌کدام از',
+  gt: 'بیشتر از',
+  gte: 'بیشتر یا مساوی',
+  lt: 'کمتر از',
+  lte: 'کمتر یا مساوی',
+  answered: 'پاسخ داده شده باشد',
+  notAnswered: 'پاسخ داده نشده باشد'
 }
 
 export function evaluateNumericSeverity(
@@ -179,10 +420,18 @@ export function optionList(
 export function evaluateFieldSeverity(
   dataType: string | undefined,
   value: unknown,
-  validation?: FieldValidation | Record<string, unknown>
+  validation?: FieldValidation | Record<string, unknown>,
+  siblings?: Record<string, unknown> | null
 ): FieldValidationSeverity {
-  if (isChoiceType(dataType)) return evaluateOptionSeverity(value, validation)
-  if (dataType === 'number') return evaluateNumericSeverity(value, validation)
+  // `siblings` is every answer on this entry, so a state condition can be judged. Omitting it
+  // cannot match a gate, so a gated field read without them resolves to `ok` — the safe
+  // direction for an alert (a missed colour beats a plant full of false red), and what every
+  // caller that genuinely has no entry in hand should get.
+  const thresholds = thresholdsFor(validation, siblings)
+  if (thresholds == null && hasStateCondition(validation)) return 'ok'
+  const effective = thresholds ?? undefined
+  if (isChoiceType(dataType)) return evaluateOptionSeverity(value, effective)
+  if (dataType === 'number') return evaluateNumericSeverity(value, effective)
   return 'ok'
 }
 

@@ -129,6 +129,18 @@ function overrideValidation(
     if (value == null) delete validation[key]
     else validation[key] = value.map(v => String(v))
   }
+  // WHEN those thresholds apply travels with them, in both modes and under the same rule: one
+  // machine of a fleet may be the one whose current is only meaningful while it runs. Replaced
+  // whole rather than merged — a condition list is an ordered first-match statement, and merging
+  // two of them would produce an order nobody wrote. `null` means "this machine has no
+  // condition", which drops the class's gate instead of inheriting it.
+  //
+  // Left out, the tablet would judge a gated parameter unconditionally while the server records
+  // it as suppressed: red on the device and OK in the report, on the same reading.
+  if ('conditions' in override) {
+    if (override.conditions == null) delete validation.conditions
+    else validation.conditions = override.conditions
+  }
   return validation
 }
 

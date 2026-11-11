@@ -19,6 +19,7 @@
  */
 
 import { Box, Typography, Alert } from '@mui/material'
+import { useMemo } from 'react'
 import { Controller } from 'react-hook-form'
 import type { Control, FieldErrors, RegisterOptions } from 'react-hook-form'
 import { DynamicFormField } from './DynamicFormField'
@@ -37,6 +38,9 @@ import {
   severityMessage,
   type FieldValidationSeverity
 } from '@/utils/fieldValidation'
+// Its own module because it IS the «does this field subscribe, and to what» decision, and that
+// decision was wrong once in a way no test here could see. See gateSources.ts.
+import { resolveGateSources, type GateWatchPlan } from './gateSources'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,6 +149,7 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
   }
 }
 
+
 /**
  * Read the validation error message for a (possibly nested) field name.
  * Handles flat names ("temperature") and dot-namespaced names ("assetId.temperature").
@@ -205,7 +210,18 @@ export function DynamicClassForm({
   readOnlyValues,
   attachmentContext,
 }: DynamicClassFormProps) {
-  const sorted = [...fields].sort((a, b) => a.order - b.order)
+  // Memoised, and that is load-bearing rather than tidy: `DynamicFormField` watches an ARRAY of
+  // names built from the gate plan, and react-hook-form keys its subscription effect on that
+  // array by reference. A plan rebuilt on every render would tear down and re-create one
+  // subscription per gated field on every keystroke in the form.
+  const sorted = useMemo(() => [...fields].sort((a, b) => a.order - b.order), [fields])
+  const gatePlans = useMemo(() => {
+    const out = new Map<string, GateWatchPlan | undefined>()
+    for (const def of sorted) {
+      if (def.key) out.set(def.key, resolveGateSources(def, sorted, fieldPrefix))
+    }
+    return out
+  }, [sorted, fieldPrefix])
 
   if (sorted.length === 0) {
     return (
@@ -257,8 +273,12 @@ export function DynamicClassForm({
           const { value, unit } = formatReadOnlyValue(def, rawValue)
           // Type-aware: a chosen option can be the alert, so gating this on 'number' left a
           // read-only review showing a dangerous state in the same colour as a normal one.
+          // `readOnlyValues` is the whole entry, so a state condition resolves here exactly as
+          // the server resolved it at write time. Without it this review would redden a reading
+          // the exception report calls clean — and a disagreement between the two reads as a bug
+          // in the report, which is the surface people trust.
           const rangeSeverity = def.validation
-            ? evaluateFieldSeverity(def.dataType, rawValue, def.validation)
+            ? evaluateFieldSeverity(def.dataType, rawValue, def.validation, readOnlyValues)
             : 'ok'
           const isChoice = def.dataType === 'select' || def.dataType === 'multiselect'
           const rangeFeedback = isChoice
@@ -330,6 +350,7 @@ export function DynamicClassForm({
         const formField = toFormField(def, fieldName)
         const rules = buildValidationRules(def)
         const error = getError(errors, fieldName)
+        const gate = gatePlans.get(def.key)
 
         // Neither media nor location goes through DynamicFormField: both hold an object
         // rather than a scalar, and both are captured from the device rather than typed.
@@ -388,6 +409,11 @@ export function DynamicClassForm({
             // meant a select was handed no validation at all, so nothing coloured until
             // the entry was saved and reopened through the read-only path.
             rangeValidation={supportsSeverity(def.dataType) ? def.validation : undefined}
+            // The siblings this field's condition reads, resolved HERE because this is the
+            // component that holds the field list — and resolved case-insensitively, since the
+            // server's key uniqueness is case-folded. Undefined for every ungated field.
+            gateSources={gate?.names}
+            gateKeys={gate?.keys}
             // Passed in rather than wrapped around: the scan icons belong inside the input so
             // the field keeps its label and its validation. An earlier version wrapped the
             // whole thing in a second Controller for the same name, which registered the field

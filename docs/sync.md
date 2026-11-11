@@ -110,6 +110,59 @@ The fill form colours a `select` by outlining the control and a `multiselect` by
 **each checkbox according to its own option**, which is the more useful answer when several
 choices are visible at once.
 
+### A threshold may apply only in one state of the asset
+
+A `number`, `select` or `multiselect` definition may carry a `conditions` list: thresholds judged
+only while **another answer on the same entry** says so.
+
+```json
+{
+  "danger": { "min": 4.5, "max": 34.8 },
+  "conditions": [ { "when": { "field": "status", "op": "in", "values": ["روشن"] } } ]
+}
+```
+
+«جریان کمتر از ۴٫۵ خطر است» is true of a running pump and meaningless for a stopped one, and no
+band can say it: a minimum of zero never fires (the interval is closed, `0 < 0` is false) and a
+real threshold alerts on every standby machine. ISA-18.2 calls the result *suppressed by design*.
+
+The evaluation order, which `utils/fieldValidation.ts` mirrors from the server's
+`FieldValidationSupport` **exactly**:
+
+| Stored shape | Verdict |
+|---|---|
+| no `conditions` key, or one that is not a list of objects | judged exactly as before this key existed |
+| the first condition whose `when` holds | judged by **that** condition's thresholds; one declaring none of the four threshold keys gates the field's own bands, which is what the panel writes |
+| no condition holds | `ok`, suppressed — the value is still **stored and synced**, so nothing has to be left blank |
+
+`when` is a closed operator set: `in` / `notIn` take `values`, `gt` / `gte` / `lt` / `lte` take
+`value`, `answered` / `notAnswered` take neither. An operator this build does not know, a
+malformed gate, or a sibling with no answer each mean «does not hold» — which falls through to
+the next condition and, failing that, suppresses the field. **Never an alert.**
+
+Two rules that must match the backend, for the same reason as the option severities above:
+
+| Rule | Why |
+|---|---|
+| The gate's **field key** is matched case-insensitively | the server's key uniqueness is already case-folded, and a case-sensitive lookup would make a correct gate never match — a danger band that judges nothing |
+| The gate's compared **values** are trimmed and case-**sensitive** | the submit-time allow-list is, so a looser match would gate on a spelling the server refuses to store |
+
+`conditions` also arrives in a **per-asset** override, under `RANGES_ONLY` as well as `FULL`, and
+is **replaced whole** rather than merged — it is an ordered first-match statement. An explicit
+`null` means «this machine has no condition», which drops the class's gate instead of inheriting
+it.
+
+Unlike the bands, this one is **not** display-only in effect: a build that ignored it would paint
+a stopped pump red while the server records `ok`, on the same reading. The device half therefore
+ships with the panel half.
+
+It costs no extra subscription. `DynamicFormField` already watched its own value to colour it, and
+the gate's parameters ride in that same watch — `name: [field.name, ...gateSources]`, with the
+field's own value first. Only the one or two parameters a gate names are watched, never the whole
+entry, and `forms/gateSources.ts` resolves which those are (case-insensitively, since the server's
+keys are case-folded). The hint line under the field states the condition («فقط وقتی …»), because
+a band shown without it reads as the whole rule.
+
 ### What `FULL` changes beyond colour
 
 `RANGES_ONLY` really is display only. `FULL` is not: it adds and removes fields, so it changes

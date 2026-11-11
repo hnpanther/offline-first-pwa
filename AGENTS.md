@@ -645,6 +645,43 @@ Three things about it are worth not rediscovering:
   back from the server as a danger: a **multiselect takes the worst** chosen option, matching is
   **trimmed but case-sensitive** (the server's submit-time allow-list is), and a field naming no
   severities is never an alert. `utils/fieldOptionSeverity.test.ts` pins all three.
+- **A threshold may be gated on ANOTHER answer, and this is the one override key whose absence
+  produces a WRONG colour rather than no colour.** `validation.conditions` says *when* the bands
+  apply — «جریان کمتر از ۴٫۵ خطر است» only while the status reads running. A build that ignored it
+  would paint a stopped pump red while the server, judging the same reading with the gate, records
+  `ok`. `evaluateFieldSeverity(dataType, value, validation, siblings)` takes the entry's other
+  answers for that reason, and **omitting them cannot match a gate**, so a gated field read
+  without them resolves to `ok` — the safe direction, and still wrong, so pass them.<br><br>Four
+  rules must match the backend exactly (`utils/fieldStateCondition.test.ts` pins them against the
+  Java twin): the gate's **field key** is matched case-**insensitively** while its compared
+  **values** stay case-**sensitive** (the same two-rules-one-file-apart trap as the option
+  severities); an unanswered sibling never satisfies a gate, because «we do not know» is not «it
+  was in this state»; a malformed gate or an unknown operator means «does not hold», never an
+  alert; and a condition that declares any of the four threshold keys states them **completely**,
+  so one it omits is absent in that state rather than inherited — the opposite of an asset
+  override, which keeps the class's band where it is silent.
+- **`useWatch`'s `disabled` does NOT prevent subscribing — it only suppresses the re-render.** In
+  react-hook-form 7.80 the layout effect calls `control._subscribe({name, formState: {values:
+  true}, …})` unconditionally; `disabled` is checked inside `refreshValue`, which returns before
+  `updateValue`. So a second `useWatch` «that is disabled anyway» is a second live subscriber per
+  field whose callback runs on every value change. `DynamicFormField` therefore reads the gate's
+  parameters out of the watch it **already** had for its own value — `name: [field.name,
+  ...gateSources]`, element 0 is its own — so the subscription count is what it was before state
+  conditions existed. Two more rules go with it: the `name` is always an **array of concrete
+  names**, never a bare `useWatch()` (which sets `watchAll` and makes every change anywhere a
+  re-render), and both the name array and the gate plan are **memoised**, because react-hook-form
+  keys the subscription effect on that array by reference — rebuilt each render, it tears down and
+  re-creates the subscription on every keystroke.
+- **The «does this field subscribe, and to what» decision lives in `forms/gateSources.ts`, as a
+  pure function, because it was wrong once and nothing here could see it.** The first version keyed
+  the subscription off the form's `fieldPrefix` — which **neither** caller passes
+  (`LogSheetFillPage` and `SheetQuestionsCard` both name their fields at the root) — so every
+  gated field resolved to «no siblings» and was silently suppressed: no colour ever, while the
+  server judged the same reading correctly. The feature read as built and did nothing. This
+  project has **no React render tests** (vitest runs on `node`, there is no jsdom), so the only
+  way to pin that is to keep the decision out of the component; `gateSources.test.ts` opens with
+  that regression. When a component's behaviour matters and cannot be rendered in a test, extract
+  the decision rather than trusting the wiring.
 - **Pass a field's `validation` down for every type that HAS a threshold, via
   `supportsSeverity(dataType)`.** `DynamicClassForm` gated this on `dataType === 'number'`, so a
   select received no validation at all and nothing coloured while the operator was choosing —
