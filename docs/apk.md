@@ -548,15 +548,22 @@ unzip -l app-debug.apk | awk -v n="$(stat -c%s certs/rootCA.crt)" '$1==n'
 over HTTPS, and nginx reverse-proxies to Spring Boot. One address, one certificate, one set of
 access rules.
 
-The address comes from `.env.mobile`, the same file `npm run preview:mobile` uses:
+The address a **fresh install** starts with comes from `.env.mobile`:
 
 ```
 VITE_SERVER_URL=https://192.168.0.101:4173
 ```
 
 There is no separate environment file for the APK. There was, briefly, and it was one more place
-for the address to go stale — the app and the browser reach the same server, so they read the same
-setting.
+for the address to go stale. After the first launch the address lives on the device, and an
+administrator changes it in **Settings** (see "The server address changed", §10).
+
+The browser build does **not** read this value: a production bundle in a browser always talks to
+the origin it was opened from (`services/settings/deliveryServerUrl.ts`). The app cannot do the
+same, because its own origin is `https://localhost` — Capacitor's local asset server, which has no
+`/api`. So the app is told apart from a browser before anything else (`isNativeApp() ||
+hasCapacitorGlobal()`): any Capacitor global at all means "use the stored address", since the other
+mistake would point the login at the asset server.
 
 The web assets themselves are **bundled into the APK**, not fetched. The app opens instantly with
 no network, which is the whole point of an offline-first system; only API calls go over the wire.
@@ -565,8 +572,9 @@ no network, which is the whole point of an offline-first system; only API calls 
 
 The file holds one site's address, so it is **not committed** — only `.env.mobile.example` is. A
 fresh clone therefore does not have it, and that used to be a silent, expensive failure:
-`VITE_SERVER_URL` came back undefined, `services/storage/db.ts` fell back to
-`http://localhost:8081`, and the build **succeeded**. `dist/` looked right, the APK installed and
+`VITE_SERVER_URL` came back undefined, the app fell back to `http://localhost:8081`
+(today in `services/settings/deliveryServerUrl.ts`, for the packaged app only — a browser follows
+its own origin), and the build **succeeded**. `dist/` looked right, the APK installed and
 opened, and the first sign of trouble was an operator in the plant reading «ارتباط با سرور برقرار
 نشد» — the same words a dead network produces.
 
@@ -575,7 +583,7 @@ is not `https://`:
 
 ```
 [mobile] VITE_SERVER_URL is not set, so this build would ship pointing at
-         http://localhost:8081 — the fallback in services/storage/db.ts.
+         http://localhost:8081 — the APK's fallback in services/settings/deliveryServerUrl.ts.
 ```
 
 **Cleartext is refused rather than warned about**, because it cannot work in either delivery: the
@@ -955,7 +963,16 @@ The photo the camera app writes goes to `getExternalFilesDir(Pictures)` through 
 
 ## 9. Telling the app apart from a browser
 
-`src/services/device/nativeApp.ts` — `isNativeApp()`, `currentPlatform()`, `nativePlugin<T>()`.
+`src/services/device/nativeApp.ts` — `isNativeApp()`, `hasCapacitorGlobal()`, `currentPlatform()`,
+`nativePlugin<T>()`.
+
+The answer that matters most is **which server to talk to**: a browser follows its own origin, the
+app must not (its origin is Capacitor's asset server — §4). For that one decision the test is
+`isNativeApp() || hasCapacitorGlobal()` — the mere presence of the global counts as the app,
+because guessing "browser" there would send the login to a server with no `/api`, and the device
+could not recover on its own. Capacitor injects the global at document start
+(`WebViewCompat.addDocumentStartJavaScript`, or into the HTML on an older WebView), before any app
+script runs, so both read correctly from the first line of the bundle.
 
 It reads the `window.Capacitor` global rather than importing `@capacitor/core`, which keeps that
 package out of the web bundle entirely — the only trace of Capacitor in `dist/` is the one
@@ -1049,19 +1066,46 @@ updated one in Settings → Apps.
 
 ### The server address changed
 
-Edit **`.env.mobile`** — one file, both targets:
+**Tablets that already have the app: no rebuild — an administrator moves each one in Settings.**
+
+1. **Keep the old address answering until the last tablet has moved.** Settings is reachable only
+   after an administrator logs in, and the login goes to the address the tablet already has. Turn
+   the old address off first and that tablet can no longer be moved — only cleared, which
+   destroys its unsynced readings (§10).
+2. **Certificate:** the new one must come from the **same CA** the APK bundles (`certs/rootCA.crt`)
+   and list the new name in its subjectAltName (an IP as an `IP:` entry). Then no rebuild is
+   needed for trust: `network_security_config.xml` names no host. A *different* CA does need a
+   rebuild — see "I regenerated the CA itself" below.
+3. On each tablet: log in as an administrator → **Settings** → **Server URL** → the new address →
+   Save → confirm. Before anything changes, the app sends `GET /api/health` to the new address —
+   the login page's own probe, over the same TLS trust and network. If no healthy answer arrives
+   within 5 s, the save is **refused and nothing changes**: same address, same session, sync still
+   running, and the reason is shown under the field. If it answers, the app stops sync, clears the
+   session, saves the address and reloads onto the login screen for the new server.
+4. Operators log in again. Readings the tablet has not synced are untouched by the move and go to
+   the new server on the next sync — it is the same backend under a new name.
+
+That probe is what makes step 3 safe to hand to someone: a typo, an `http://` address (refused by
+`cleartextTrafficPermitted="false"`) or an untrusted certificate used to save, log the
+administrator out, and leave a tablet nobody could log in to. Now it is refused while it can still
+be refused (`services/settings/applyServerUrlChange.ts`).
+
+**Fresh installs:** edit **`.env.mobile`** and rebuild — one file; `build:apk` rebuilds `dist/` for
+nginx in the same run, so the two deliveries stay one version:
 
 ```
 VITE_SERVER_URL=https://<new-address>:<port>
 ```
 
-Then rebuild both as above. Also re-issue the certificate for the new address
-(`npm run setup:mkcert -- -Ip <new-ip>`) and reconfigure nginx.
+Also re-issue the certificate for the new address (`npm run setup:mkcert -- -Ip <new-ip>`) and
+reconfigure nginx. Browser tablets need nothing from the app at all — a browser follows its own
+origin — but each origin keeps its own local data; see the README, "Moving the server to a new
+address".
 
 > **Rebuilding does not move a tablet that already has the app.** `VITE_SERVER_URL` is a *seed*,
-> not the address the app uses. The address lives in IndexedDB, and `getSettings()` reads
-> `{ ...DEFAULT_SETTINGS, ...stored }` — the stored value is spread second and wins. The build
-> value therefore applies only where there is no settings row yet: a genuinely fresh install.
+> not the address the app uses. The address lives in IndexedDB, and in the app `getSettings()`
+> returns the stored address whenever there is one (`services/settings/deliveryServerUrl.ts`). The
+> build value therefore applies only where there is no settings row yet: a genuinely fresh install.
 >
 > Installing a new APK over an existing one **does not clear app data**, so the old address
 > survives the update and the new build looks like it ignored `.env.mobile`. It did not; it was

@@ -49,6 +49,26 @@ export function isNativeApp(): boolean {
 }
 
 /**
+ * True whenever a Capacitor runtime has put its global on the page, whether or not it describes
+ * itself as native.
+ *
+ * <p>For the one decision where mistaking the app for a browser cannot be recovered from on the
+ * device: which server to talk to (`services/settings/deliveryServerUrl.ts`). A browser follows
+ * its own origin; inside the app that origin is Capacitor's local asset server, so a wrong
+ * "browser" answer would send every request — the login included — to a server with no `/api`.
+ *
+ * <p>Capacitor injects the global at document start, before any app script runs, so
+ * `isNativeApp()` already answers correctly. This is the belt to that brace. The browser bundle
+ * never defines the global (see the note at the top of this file), so the only cost of being this
+ * eager is in a build that one day imports `@capacitor/core` into the web bundle: the browser
+ * would then fall back to the stored address, which is how it behaved before it followed its
+ * origin. That direction fails safe; the other does not.
+ */
+export function hasCapacitorGlobal(): boolean {
+  return capacitor() !== undefined
+}
+
+/**
  * `'android'`, `'ios'`, or `'web'` — the last for anything that is not the packaged app.
  *
  * Defaults to `'web'` rather than throwing: a browser has no Capacitor global at all, and that

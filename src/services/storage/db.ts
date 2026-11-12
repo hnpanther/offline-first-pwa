@@ -4,6 +4,7 @@ import type { FieldDefinition, SyncMeta } from '@/types/sync'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import type { LogSheetEntryData } from '@/types'
 import { hasEntryFormData } from '@/utils/entryTimestamps'
+import { deviceServerUrl } from '@/services/settings/deliveryServerUrl'
 
 const DB_NAME = 'offline-pwa-db'
 
@@ -378,7 +379,11 @@ export async function openDatabase(): Promise<void> {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  serverUrl: import.meta.env.VITE_SERVER_URL ?? 'http://localhost:8081',
+  // What the store shows before the settings row has been read. The address actually used is
+  // decided on every read by `getSettings()`, through the same function: a browser's production
+  // bundle follows its own origin, the packaged app uses the stored address seeded from
+  // `VITE_SERVER_URL`. See services/settings/deliveryServerUrl.ts.
+  serverUrl: deviceServerUrl(),
   syncIntervalMs: 30_000,
   // Both of the next two are server-owned: bootstrap overwrites them on every reconnect and
   // nothing on the device may edit them. These values are what the app runs on until the first

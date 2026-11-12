@@ -82,6 +82,13 @@ content.
 how *that* tablet is mounted), and a shared account must not drag one device's choice onto
 another.
 
+The row's `serverUrl` is **not always what the device uses.** `getSettings()` decides the address
+on every read (`services/settings/deliveryServerUrl.ts`): in a browser's production bundle it is
+the page's own origin whatever the row says — and the next settings save writes that origin back
+— while the APK and `npm run dev` use the row, seeded from `VITE_SERVER_URL`. Read the address
+through `getSettings()`, never from `db.settings` directly. No schema change: it is a rule about
+reading the existing field.
+
 ---
 
 ## Attachments: why the id is minted on the device

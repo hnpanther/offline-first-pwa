@@ -3,12 +3,17 @@ import { applyServerUrlChange, type ServerUrlChangeSteps } from './applyServerUr
 
 /**
  * The order of these steps is the security property, so the tests assert the order — not just
- * that every step ran. A version that calls all four in the wrong sequence passes any
+ * that every step ran. A version that calls all of them in the wrong sequence passes any
  * "was it called" check while re-opening exactly the hole this function closes.
+ *
+ * <p>The first step, `verify`, is the data-safety half: a new address that does not answer must
+ * leave the device exactly as it was, because once it is saved and the session is gone nobody
+ * can log in on that device to change it back.
  */
-function recordingSteps() {
+function recordingSteps(answers = true) {
   const calls: string[] = []
   const steps: ServerUrlChangeSteps = {
+    verify: vi.fn(async () => { calls.push('verify'); return answers }),
     stopSync: vi.fn(() => { calls.push('stopSync') }),
     clearSession: vi.fn(async () => { calls.push('clearSession') }),
     save: vi.fn(async () => { calls.push('save') }),
@@ -22,10 +27,10 @@ describe('applyServerUrlChange', () => {
     it('saves and nothing else', async () => {
       const { calls, steps } = recordingSteps()
 
-      const reloading = await applyServerUrlChange(false, steps)
+      const outcome = await applyServerUrlChange(false, steps)
 
       expect(calls).toEqual(['save'])
-      expect(reloading).toBe(false)
+      expect(outcome).toBe('saved')
     })
 
     it('does not stop sync — an ordinary settings save must not interrupt a round', async () => {
@@ -37,21 +42,31 @@ describe('applyServerUrlChange', () => {
       expect(steps.clearSession).not.toHaveBeenCalled()
       expect(steps.reload).not.toHaveBeenCalled()
     })
+
+    it('does not ask the server anything — the address it uses is the one it already had', async () => {
+      // Otherwise saving the sync interval offline would be refused for no reason at all.
+      const { steps } = recordingSteps(false)
+
+      await expect(applyServerUrlChange(false, steps)).resolves.toBe('saved')
+
+      expect(steps.verify).not.toHaveBeenCalled()
+      expect(steps.save).toHaveBeenCalled()
+    })
   })
 
   describe('when the origin changed', () => {
-    it('tears the session down BEFORE writing the new address', async () => {
+    it('asks the new address first, then tears the session down BEFORE writing it', async () => {
       const { calls, steps } = recordingSteps()
 
       await applyServerUrlChange(true, steps)
 
-      expect(calls).toEqual(['stopSync', 'clearSession', 'save', 'reload'])
+      expect(calls).toEqual(['verify', 'stopSync', 'clearSession', 'save', 'reload'])
     })
 
     it('reports that the page is reloading, so no "saved" tick is shown', async () => {
       const { steps } = recordingSteps()
 
-      await expect(applyServerUrlChange(true, steps)).resolves.toBe(true)
+      await expect(applyServerUrlChange(true, steps)).resolves.toBe('reloading')
     })
 
     it('waits for the session to be cleared — not merely to have been started', async () => {
@@ -67,7 +82,7 @@ describe('applyServerUrlChange', () => {
 
       await applyServerUrlChange(true, steps)
 
-      expect(calls).toEqual(['stopSync', 'clearSession', 'save', 'reload'])
+      expect(calls).toEqual(['verify', 'stopSync', 'clearSession', 'save', 'reload'])
     })
 
     it('does not reload if the save fails, leaving the operator on a page that can report it', async () => {
@@ -78,7 +93,7 @@ describe('applyServerUrlChange', () => {
 
       // The session is gone and the address was not written: the safe half of the failure. The
       // operator logs in again to the server they were already using.
-      expect(calls).toEqual(['stopSync', 'clearSession'])
+      expect(calls).toEqual(['verify', 'stopSync', 'clearSession'])
       expect(steps.reload).not.toHaveBeenCalled()
     })
 
@@ -88,8 +103,65 @@ describe('applyServerUrlChange', () => {
 
       await expect(applyServerUrlChange(true, steps)).rejects.toThrow('idb closed')
 
-      expect(calls).toEqual(['stopSync'])
+      expect(calls).toEqual(['verify', 'stopSync'])
       expect(steps.save).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('when the new address does not answer', () => {
+    it('changes nothing at all — not the session, not sync, not the stored address', async () => {
+      const { calls, steps } = recordingSteps(false)
+
+      const outcome = await applyServerUrlChange(true, steps)
+
+      expect(outcome).toBe('unreachable')
+      expect(calls).toEqual(['verify'])
+      expect(steps.stopSync).not.toHaveBeenCalled()
+      expect(steps.clearSession).not.toHaveBeenCalled()
+      expect(steps.save).not.toHaveBeenCalled()
+      expect(steps.reload).not.toHaveBeenCalled()
+    })
+
+    it('treats a probe that rejects as no answer', async () => {
+      const { steps } = recordingSteps()
+      steps.verify = vi.fn(async () => { throw new Error('network down') })
+
+      await expect(applyServerUrlChange(true, steps)).resolves.toBe('unreachable')
+      expect(steps.clearSession).not.toHaveBeenCalled()
+      expect(steps.save).not.toHaveBeenCalled()
+    })
+
+    it('treats a probe that throws before returning a promise as no answer', async () => {
+      const { steps } = recordingSteps()
+      steps.verify = vi.fn(() => { throw new Error('synchronous') }) as unknown as () => Promise<boolean>
+
+      await expect(applyServerUrlChange(true, steps)).resolves.toBe('unreachable')
+      expect(steps.save).not.toHaveBeenCalled()
+    })
+
+    it('accepts only a definite yes', async () => {
+      // Anything but `true` is not the server saying it is up.
+      const { steps } = recordingSteps()
+      steps.verify = vi.fn(async () => 'yes' as unknown as boolean)
+
+      await expect(applyServerUrlChange(true, steps)).resolves.toBe('unreachable')
+      expect(steps.save).not.toHaveBeenCalled()
+    })
+
+    it('waits for the answer before touching anything', async () => {
+      // A slow probe must not let the teardown start in the meantime.
+      const { calls, steps } = recordingSteps()
+      let release: (value: boolean) => void = () => {}
+      steps.verify = vi.fn(() => new Promise<boolean>(resolve => { release = resolve }))
+
+      const pending = applyServerUrlChange(true, steps)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(calls).toEqual([])
+
+      release(true)
+      await expect(pending).resolves.toBe('reloading')
+      expect(calls).toEqual(['stopSync', 'clearSession', 'save', 'reload'])
     })
   })
 })

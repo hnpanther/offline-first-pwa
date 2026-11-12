@@ -296,6 +296,26 @@ twice, and idempotency should be the safety net, not the mechanism.
 > [`docs/roadmap.md`](../../../JavaProject/backend-offline-first/docs/roadmap.md) § 3. Check it
 > before making the app "feel more responsive" this way.
 
+### Where a pass sends its requests
+
+Every request of a pass — the batch, progress, fault reports, attachment uploads and downloads,
+the inbox and the bootstrap — takes its base address from `getSettings().serverUrl`, read again
+for each request (`getBaseUrl()` in `services/api/client.ts`). Which address that is depends on
+the delivery (`services/settings/deliveryServerUrl.ts`):
+
+- **A production bundle in a browser:** always the page's own origin, sent as relative `/api/...`.
+  The stored value and `VITE_SERVER_URL` are ignored, so the same `dist/` keeps syncing when the
+  site is reached under a new name or IP.
+- **The APK and `npm run dev`:** the stored address, seeded from `VITE_SERVER_URL`. Changed only
+  through Settings, which refuses an address that does not answer and ends the session before the
+  new one is written — so a pass never carries an old token to a new host.
+
+> **Unsynced work belongs to an origin, not to a tablet.** IndexedDB is per origin, so work queued
+> under `https://abc.com` is only pushed by the app opened at `https://abc.com`. Moving a browser
+> fleet to a new name therefore means letting every tablet sync on the old name first — README,
+> "Moving the server to a new address". `serverAddressFollowsPage.test.ts` runs a real pass in
+> both deliveries and checks every URL it puts on the wire.
+
 ---
 
 ## The push sequence

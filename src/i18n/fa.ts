@@ -216,6 +216,18 @@ const fa = {
     connection: 'اتصال به سرور',
     nfcSection: 'تنظیمات NFC',
     serverUrl: 'آدرس سرور',
+    // The address of the nginx tablets open — never Spring's host and port, which is what the old
+    // example (http://…:8081) taught, and which the packaged app cannot reach at all.
+    serverUrlHint:
+      'آدرسی که تبلت‌ها با آن به سرور وصل می‌شوند، مثلاً https://abc.com — نه آدرس و پورت Spring. تغییر آدرس سرور باعث خروج از حساب می‌شود.',
+    serverUrlFollowsPage:
+      'نسخهٔ مرورگر همیشه به همان آدرسی وصل می‌شود که برنامه با آن باز شده است، پس این آدرس اینجا تغییر نمی‌کند. برای اتصال به آدرس دیگر، برنامه را با همان آدرس باز کنید.',
+    serverUrlChecking: 'در حال بررسی سرور…',
+    // Refused, not warned: once saved, nobody could log in on this device to change it back.
+    serverUrlUnreachable:
+      'سرور در این آدرس پاسخ نداد و آدرس ذخیره نشد؛ اگر ذخیره می‌شد، دیگر نمی‌شد روی این دستگاه وارد شد. آدرس، شبکه و گواهی سرور را بررسی کنید و دوباره تلاش کنید.',
+    serverUrlChangeConfirm: (current: string, next: string) =>
+      `با تغییر آدرس سرور، از حساب خود خارج می‌شوید و باید دوباره وارد شوید.\n\nآدرس فعلی: ${current}\nآدرس جدید: ${next}\n\nادامه می‌دهید؟`,
     syncInterval: 'فاصله همگام‌سازی (ثانیه)',
     serverPolicyTitle: 'قواعد تعیین‌شده توسط سرور',
     serverPolicyHint:

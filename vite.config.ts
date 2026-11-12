@@ -21,8 +21,10 @@ function loadMkcertHttps(certDir: string) {
  * <h2>Why this has to fail the build</h2>
  *
  * `.env.mobile` is gitignored — it holds one site's address — so a fresh clone does not have it.
- * Without it `VITE_SERVER_URL` is simply undefined, and the app falls back to
- * `http://localhost:8081` (`services/storage/db.ts`). Nothing about that is loud: the build
+ * Without it `VITE_SERVER_URL` is simply undefined, and the packaged app falls back to
+ * `http://localhost:8081` (`services/settings/deliveryServerUrl.ts`). The browser delivery no
+ * longer reads this value — it talks to its own origin — but the same `dist/` is what goes into
+ * the APK, so the gate stays. Nothing about that is loud: the build
  * succeeds, `dist/` looks right, the APK installs and opens, and the failure surfaces to an
  * operator holding a tablet against a pipe as «ارتباط با سرور برقرار نشد» — indistinguishable from
  * the network being down, and a long way to trace back to a missing file on the build machine.
@@ -52,7 +54,7 @@ function assertMobileServerUrl(serverUrl: string | undefined): void {
   if (!serverUrl) {
     console.error(
       '\n[mobile] VITE_SERVER_URL is not set, so this build would ship pointing at\n' +
-      '         http://localhost:8081 — the fallback in services/storage/db.ts.\n\n' +
+      "         http://localhost:8081 — the APK's fallback in services/settings/deliveryServerUrl.ts.\n\n" +
       '         It would build, install and open, and then fail every request with\n' +
       '         «ارتباط با سرور برقرار نشد», which looks exactly like a dead network.\n\n' +
       fix + '\n'
@@ -218,20 +220,20 @@ export default defineConfig(({ mode, command }) => {
           }
         : {})
     },
+    // `vite preview` serves a production bundle, and in a browser a production bundle talks to its
+    // own origin's `/api` (services/settings/deliveryServerUrl.ts) — exactly as it does behind
+    // nginx. So the preview proxies `/api` in every mode, not only `--mode mobile`; without it a
+    // plain `npm run preview` would send every request to a server with no API.
     preview: {
       host: '0.0.0.0',
       port: 4173,
-      ...(mobileDev
-        ? {
-            https: mkcertHttps ?? true,
-            proxy: {
-              '/api': {
-                target: 'http://127.0.0.1:8081',
-                changeOrigin: true
-              }
-            }
-          }
-        : {})
+      proxy: {
+        '/api': {
+          target: 'http://127.0.0.1:8081',
+          changeOrigin: true
+        }
+      },
+      ...(mobileDev ? { https: mkcertHttps ?? true } : {})
     }
   }
 })

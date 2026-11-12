@@ -301,11 +301,19 @@ cd offline-first-pwa
 npm run dev              # http://localhost:5173
 ```
 
-API calls use `serverUrl` from IndexedDB settings (initialized from `VITE_SERVER_URL` on first run). **Settings** is admin-only; for production tablets, set the correct URL at **build time** in `.env.mobile` (or have an admin save Settings once on each device). For local desktop dev, an admin can set `http://localhost:8081` in Settings after login, or use `dev:mobile` / `preview:mobile` so the app origin matches the configured URL and `/api` is proxied.
+Where API calls go depends on how the app is running (full rules in [Server URL rules](#server-url-rules-srcservicesapiclientts)):
+
+- **A production bundle in a browser** (nginx, `npm run preview`, `preview:mobile`) always calls
+  **its own origin** — every one of those proxies `/api` there. Nothing to configure, and the same
+  `dist/` works under any name or IP with no rebuild.
+- **The APK** calls the address stored on the device, seeded on a fresh install from
+  `VITE_SERVER_URL` in `.env.mobile`; an administrator changes it in **Settings**.
+- **`npm run dev`** has no `/api` proxy, so it uses the stored address, then `VITE_SERVER_URL`,
+  then `http://localhost:8081` — an admin can set `http://localhost:8081` in Settings after login.
 
 ```bash
 npm run build
-npm run preview          # http://localhost:4173 — no HTTPS, limited mobile testing
+npm run preview          # http://localhost:4173 — proxies /api to :8081; no HTTPS, limited mobile testing
 ```
 
 For NFC, trusted HTTPS, and real offline PWA behavior, follow [Mobile & PWA Testing](#mobile--pwa-testing-full-guide).
@@ -352,7 +360,9 @@ VITE_SERVER_URL=https://192.168.1.101:4173
 
 - Use your real PC IP.
 - Port **4173** is for the installed offline PWA (`preview:mobile`).
-- This becomes the default `serverUrl` in IndexedDB. When the app origin matches this URL, the API client uses relative paths `/api/...` (proxied by Vite in dev/preview mobile mode).
+- This is the address the **APK** starts with on a fresh install. The browser build does not use
+  it: a production bundle in a browser talks to the origin it was opened from, which
+  `preview:mobile` proxies to the backend.
 
 > **`.env.mobile` is gitignored, so a fresh clone does not have one — and the build will stop
 > until you create it.** `npm run build:mobile` and `npm run build:apk` both refuse to build when
@@ -530,7 +540,7 @@ stick and it carries everything with it.
 | **App name / package** | MFDCS · `com.hnp.mfdcs` |
 | **Build** | `npm run build:apk` — no Android Studio needed, just the SDK command-line tools |
 | **Output** | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| **Talks to** | the **same nginx** the browsers use (`VITE_SERVER_URL` in `.env.mobile`) — never the backend directly |
+| **Talks to** | the **same nginx** the browsers use — `VITE_SERVER_URL` in `.env.mobile` on a fresh install, then whatever an administrator sets in **Settings** — never the backend directly |
 | **Web assets** | bundled into the APK, so it opens with no network at all |
 | **Permissions** | camera, microphone, location, NFC — every `<uses-feature>` optional, so a tablet without one still works |
 | **Signing** | the local **debug key**, deliberately — see the update procedure below |
@@ -624,24 +634,24 @@ Settings are stored in IndexedDB (`settings` table, single row). They apply to *
 
 | Field | Purpose |
 |-------|---------|
-| **Server URL** (`serverUrl`) | Base URL for API resolution. Must match how tablets reach the app (see below). **Validated on save, stored normalised, and changing its origin logs you out** — see [Server URL rules](#server-url-rules-srcservicesapiclientts). |
+| **Server URL** (`serverUrl`) | Where API calls go. **In a browser it is the page's own origin and is shown read-only.** In the APK an administrator edits it: **validated, stored normalised, refused unless the server answers at the new address, and changing its origin logs you out** — see [Server URL rules](#server-url-rules-srcservicesapiclientts). |
 | **Sync interval** | Outbound sync timer in seconds (stored as ms; default 30 s from `DEFAULT_SETTINGS`). |
 
 #### What these two actually control
 
-**Server URL** is read by exactly one place — `getBaseUrl()` in `src/services/api/client.ts` — and
-it is the prefix of every HTTP call: login, inbox, bootstrap, log-sheet submission, attachment
-upload. It is also printed on the login screen so an operator can see which server they are about
-to hand a password to.
+**Server URL** is decided in exactly one place — `getSettings()` (via
+`src/services/settings/deliveryServerUrl.ts`), which `getBaseUrl()` in
+`src/services/api/client.ts` calls before every request — and it is the prefix of every HTTP call:
+login, inbox, bootstrap, log-sheet submission, attachment upload and download. It is also printed
+on the login screen so an operator can see which server they are about to hand a password to.
 
-It is **inert in the normal deployment.** When the configured origin equals the page's origin the
-client returns `''` and every request goes out relative, so on a tablet loading the PWA from the
-same host that serves the API, editing this field changes nothing. It matters only when the page
-and the API live on different origins: Vite on `:5173` against the backend on `:8081`, or a PWA
-hosted separately from the API. Two sharp edges: the value is **not validated**, so a typo breaks
-every request and the only way back is this screen (which needs a login), and changing it **does
-not clear the stored session** — sign out and back in, or a token minted by the old server gets
-sent to the new one.
+It is **fixed in a browser.** A production bundle there ignores the stored value and uses the
+page's own origin, because nginx serves the app and `/api` from one origin and its CSP
+(`connect-src 'self'`) refuses any other; the field is read-only. It matters in the **APK**, whose
+page origin is Capacitor's local asset server (so the stored address *is* the server), and under
+`npm run dev`, where Vite on `:5173` has no proxy and the backend is on `:8081`. Wherever it is
+editable, a save is validated, refused unless the server answers at the new address, and an origin
+change ends the session — see [Server URL rules](#server-url-rules-srcservicesapiclientts).
 
 **Sync interval** is the period of the `setInterval` in `SyncManager.scheduleInterval()`. Each tick
 is **outbound only**:
@@ -714,32 +724,92 @@ ever points at a remote URL, or if the service worker stops precaching `woff2`.
 
 ### Server URL rules (`src/services/api/client.ts`)
 
-1. On first launch, settings are seeded from **`VITE_SERVER_URL`** in the build (`.env.mobile` for `build:mobile`).
-2. At request time, if `new URL(serverUrl).origin === window.location.origin`, the client uses **relative** paths (`/api/...`).
-3. Otherwise the client calls the configured absolute URL (e.g. direct `http://192.168.1.2:8081` — rare; bypasses nginx same-origin).
+Which address a device uses is decided on every read of the settings, by
+`src/services/settings/deliveryServerUrl.ts`:
 
-**Saving this setting is not a plain field edit.** The API client attaches the current JWT to
-whatever URL the setting holds, so pointing it at another host would hand this plant's bearer
-token to that host on the very next request. Three rules apply on save:
+1. **A production bundle in a browser** (served by nginx, `npm run preview` or `preview:mobile`)
+   uses **the page's own origin — always.** The stored value and `VITE_SERVER_URL` are ignored.
+   All three serve the app and proxy `/api` on one origin, and nginx's CSP (`connect-src 'self'`)
+   refuses every other origin anyway, so any other address could only break the device. This is
+   what lets one `dist/` work under a new domain, or under a domain and an IP at the same time,
+   **with no rebuild**: each origin talks to itself. A row an older build seeded with some other
+   address is overridden on the next request and rewritten on the next settings save.
+2. **The APK** uses the address stored on the device; on a fresh install, `VITE_SERVER_URL` from
+   the build; failing both, `http://localhost:8081`. **Never the page origin** — inside the app
+   that is `https://localhost`, Capacitor's local asset server, which has no `/api`. Any
+   `window.Capacitor` global counts as the app (`hasCapacitorGlobal()`), because mistaking the app
+   for a browser would point its login at that asset server.
+3. **`npm run dev`** keeps the same rule as the APK (stored, then `VITE_SERVER_URL`, then
+   `http://localhost:8081`): Vite's dev server on `:5173` has no `/api` proxy.
+
+At request time an address whose origin equals the page's goes out **relative** (`/api/...`);
+any other goes out absolute.
+
+**Saving this setting is not a plain field edit.** In a browser the field is read-only. Where it is
+editable (the APK, `npm run dev`), the API client attaches the current JWT to whatever URL the
+setting holds, so pointing it at another host would hand this plant's bearer token to that host on
+the very next request — and an address that does not work strands the device, because getting back
+to this screen needs a login, and the login goes to the stored address. Four rules apply on save:
 
 1. **Validated.** `http`/`https` only, a real host, and **no path, query or fragment** — every
    request appends its own path, so `https://host/api` would produce `/api/api/…`.
 2. **Stored normalised** to scheme + host + port (`URL.origin`), so a trailing slash, a stray
    space or an odd case never reaches a request URL.
-3. **Changing the origin ends the session.** The page asks for confirmation, then stops the sync
-   manager, clears the stored session, writes the new address, and reloads.
+3. **The new server must answer first.** On an origin change the page asks for confirmation, then
+   sends `GET /api/health` to the new address — the login page's own probe, resolved the same way.
+   No healthy answer within 5 s (a typo, an `http://` address the APK refuses to send, a
+   certificate from a CA the app does not trust, a server that is down) and the save is **refused
+   with nothing changed**: same address, same session, sync still running.
+4. **Changing the origin ends the session.** Once the new server has answered, the page stops the
+   sync manager, clears the stored session, writes the new address, and reloads onto the login
+   screen. Unsynced work is not touched: it goes to the new server at the next login.
 
 That order is load-bearing, not cosmetic: writing the address first leaves a window in which a
-background sync reads the **new** server and the **old** token together. A trailing slash or a
+background sync reads the **new** server and the **old** token together; tearing the session down
+before the probe would strand the device on an address nobody can log in to. A trailing slash or a
 change of letter case normalises to the same origin and logs nobody out.
+`applyServerUrlChange.test.ts` asserts the sequence.
 
-| Deployment | Set `VITE_SERVER_URL` / Settings to |
-|------------|--------------------------------------|
-| nginx PWA + proxy | `https://192.168.1.4` (PWA origin only) |
-| Local `preview:mobile` | `https://<PC-LAN-IP>:4173` |
-| Local desktop dev (no proxy) | `http://localhost:8081` (only if API is on another origin than the Vite page) |
+| Deployment | Browser | APK (`VITE_SERVER_URL` / Settings) |
+|------------|---------|-------------------------------------|
+| nginx PWA + proxy | nothing to set — its own origin | `https://192.168.1.4` (the nginx address, never Spring's) |
+| Local `preview:mobile` | nothing to set — its own origin | `https://<PC-LAN-IP>:4173` |
+| Local desktop dev (`npm run dev`, no proxy) | `http://localhost:8081` in Settings | — |
 
-**Production checklist:** build with `.env.mobile`, copy `dist/` to nginx, install CA on tablets, open PWA URL once as admin and confirm Settings → server URL matches that origin (or rely on build default if unchanged).
+**Production checklist:** build with `.env.mobile` (the address a fresh APK starts with), copy
+`dist/` to nginx, install the CA on browser tablets. A browser tablet needs no address configured;
+Settings shows the origin it is using, read-only.
+
+#### Moving the server to a new address
+
+**Browser tablets — no rebuild.** The same `dist/` answers under the new name as soon as nginx
+does. But **each origin has its own local data**: IndexedDB, the installed PWA and the login are
+per origin, so a tablet that worked on `https://abc.com` finds an empty app on `https://cbd.com`,
+and anything it has not synced is still sitting under `abc.com`. Nothing is deleted; it is just
+only reachable from the old name. So:
+
+1. Make nginx answer on **both** names for a while: a certificate whose subjectAltName lists both
+   (an IP as an `IP:` entry, never `DNS:`), and DNS for the new name on the plant network.
+   `PWA_SERVER_NAME` restricts nothing here — with one `server` block per port nginx answers every
+   name — so it needs no change.
+2. Let every browser tablet sync on the **old** name (pending count zero).
+3. Only then retire the old name. **Do not redirect** it to the new one in the meantime: a
+   redirected `/api/` request lands on another origin, and the CSP refuses it — the old tablets
+   could then never sync.
+
+**APK tablets — no rebuild either**, but an administrator visits each one:
+
+1. Keep the old address working until every tablet has moved — an administrator can only reach
+   Settings by logging in, and the login goes to the address the device already has.
+2. The new certificate must come from **the same CA** the APK bundles (`certs/rootCA.crt`), with
+   the new name in its subjectAltName. A different CA needs a rebuilt APK ([docs/apk.md §5](docs/apk.md)).
+3. Log in as an administrator → **Settings** → the new address → Save. The app checks that the
+   server answers there first; if it does not, nothing changes. If it does, the app logs out and
+   reloads onto the login screen for the new address. Unsynced readings stay on the device and go
+   to the new server at the next login.
+4. Rebuild the APK with the new `.env.mobile` only for **fresh installs**: an update never changes
+   the address of a tablet that already has one ([docs/apk.md](docs/apk.md), "The server address
+   changed").
 
 ---
 
@@ -1769,7 +1839,10 @@ Client merge: `mergeLogSheetBundle.ts` applies **server-wins** `bulkPut` for con
 
 ### API base URL
 
-Stored in Settings (`serverUrl` in IndexedDB). If configured origin equals `window.location.origin`, requests use relative `/api/...` (same-origin nginx or Vite proxy).
+In a browser, a production bundle always calls **its own origin** with relative `/api/...` paths,
+whatever is stored or built in. The APK calls the address stored in Settings (`serverUrl` in
+IndexedDB), seeded from `VITE_SERVER_URL` on a fresh install. See
+[Server URL rules](#server-url-rules-srcservicesapiclientts).
 
 **You do not put the data-server IP in the app when using nginx proxy.** The PWA always calls its own origin; nginx forwards `/api` to Spring.
 
@@ -1809,10 +1882,12 @@ nginx (192.168.1.4:443)
 |------|-------------------|---------|
 | PWA URL (open / install) | nginx `listen` + SSL | `https://192.168.1.4` |
 | Data server (Spring) | **nginx `proxy_pass` only** | `http://192.168.1.2:8081` |
-| Build-time default `serverUrl` | `.env.mobile` → `VITE_SERVER_URL` | `https://192.168.1.4` |
-| Settings → server URL in app | Same as PWA origin | `https://192.168.1.4` |
+| Address a fresh **APK** starts with | `.env.mobile` → `VITE_SERVER_URL` | `https://192.168.1.4` |
+| Address a **browser** uses | nothing — always the origin it was opened from | `https://192.168.1.4` |
 
-When `serverUrl` matches `window.location.origin`, the API client uses relative paths (`/api/...`).
+A browser calls its own origin with relative paths (`/api/...`), so the same `dist/` keeps working
+if the PWA is later reached under another name or IP — see
+[Moving the server to a new address](#moving-the-server-to-a-new-address).
 
 > **Dev / preview:** Vite on `:4173` plays the same role as nginx — serves the PWA and proxies `/api` to `127.0.0.1:8081`.
 
@@ -1825,7 +1900,8 @@ cd offline-first-pwa
 copy .env.mobile.example .env.mobile
 ```
 
-Edit `.env.mobile` — use the **PWA public URL**, not the Spring host:
+Edit `.env.mobile` — use the **PWA public URL**, not the Spring host. It is the address a fresh
+APK install starts with; the browser ignores it:
 
 ```env
 VITE_SERVER_URL=https://192.168.1.4
@@ -1844,7 +1920,9 @@ Output: `dist/`. Copy the entire folder to the nginx server:
 scp -r dist/* root@192.168.1.4:/var/www/html/offline-first-pwa/dist/
 ```
 
-**Use `build:mobile`**, not plain `npm run build` — it reads `.env.mobile` and embeds the correct default `serverUrl`.
+**Use `build:mobile`** (or `build:apk`), not plain `npm run build` — the same `dist/` goes into the
+APK, and `.env.mobile` is what gives a fresh APK install its server address. The browser does not
+need it: it talks to its own origin.
 
 Node.js is **not** required on the production PWA server after build.
 
@@ -2108,7 +2186,7 @@ curl -k https://192.168.1.4/api/health
 
 1. Open `https://192.168.1.4` in Chrome (trusted lock after CA install).
 2. Log in as **admin** once per device (recommended):
-   - **Settings** → confirm **Server URL** matches the PWA origin (`https://192.168.1.4`).
+   - **Settings** → **Server URL** shows the PWA origin (`https://192.168.1.4`), read-only: a browser always uses the address it was opened from.
    - Check **Settings → سیاست‌های سرور** to see what the server currently allows: chip-serial scan check, manual NFC tag entry, image annotation. These are read-only here; they are changed in the **web** admin panel and reach every tablet on its next reconnect.
 3. Log in as field users; wait for inbox sync (assigned work appears).
 4. Chrome menu → **Install app** (or use the in-app install prompt).
@@ -2144,7 +2222,8 @@ Service Worker uses `autoUpdate` — tablets pick up the new build on next app o
 - Inbox sync not run yet — open app online, wait for assigned bundles (or tap **Refresh inbox**)
 - Work not in **assigned** (still in pickup pool) — claim first while online
 - Offline before first bundle sync for that sheet — open once online
-- Wrong `serverUrl` in Settings / build — must match PWA origin when using nginx or Vite proxy (see [Production Deployment](#production-deployment))
+- Opened under a different name or IP than before — each origin has its own local data, so bundles fetched under the old address are not visible here (see [Moving the server to a new address](#moving-the-server-to-a-new-address))
+- APK: wrong server address in Settings (see [Production Deployment](#production-deployment))
 
 ### Red SSL lock on phone (production)
 
@@ -2192,7 +2271,7 @@ PWA was installed from **5173** (dev server). Uninstall → `build:mobile` + `pr
 ### API errors
 
 - Backend running on 8081?
-- `serverUrl` in Settings matches app origin
+- APK only: the server address in Settings is the nginx address (a browser always uses its own origin)
 - Phone and server reachable on same network (dev) or DNS (production)
 
 ### Terminal: `WARNING: No certs/cert.pem`

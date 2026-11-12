@@ -45,17 +45,21 @@ npm run build:mobile
 ```
 
 **`build:mobile`, not `build`.** It reads `.env.mobile`, which is where `VITE_SERVER_URL` — the
-default server address baked into a fresh install — comes from:
+server address a fresh **APK** install starts with — comes from (the same `dist/` goes into the
+APK):
 
 ```ini
 # .env.mobile
 VITE_SERVER_URL=https://192.168.1.4
 ```
 
-Set it to the **PWA's own origin**, with no path and no trailing slash. When the stored server URL
-matches `window.location.origin` the client uses relative paths (`/api/...`) and nginx proxies
-them, which is the whole point of the same-origin setup. See
-[README § Server URL rules](../README.md#server-url-rules-srcservicesapiclientts).
+Set it to the **PWA's own origin**, with no path and no trailing slash. The browser does not use
+it: a production bundle in a browser always calls the origin it was loaded from with relative paths
+(`/api/...`), and nginx proxies them — the whole point of the same-origin setup. So this site can
+be reached under a new name, or under a name and an IP at once, with no rebuild; only the
+certificate's subjectAltName and DNS have to cover every name. See
+[README § Server URL rules](../README.md#server-url-rules-srcservicesapiclientts) and
+[§ Moving the server to a new address](../README.md#moving-the-server-to-a-new-address).
 
 The output is self-contained: no CDN, no font host, no analytics. The only external strings in the
 bundle are error-message URLs inside libraries, and nothing fetches them.
@@ -799,7 +803,8 @@ From a tablet, not from the server — the server can reach things the tablet ca
    installed, and the service worker will not register behind it.
 2. Log in. A failure here with the page loading is usually the `/api/` proxy: check
    `proxy_pass` and that the backend answers on 8081.
-3. **Settings → server URL** shows the same origin the browser is on.
+3. **Settings → server URL** shows the same origin the browser is on, read-only — a browser always
+   uses the address it was opened from.
 4. Install the app (Chrome menu → *Add to Home screen*), then put the tablet in flight mode and
    open it. It must start, show cached work, and let an operator fill a sheet.
 5. Scan a tag. Web NFC only exists in a secure context, so this failing while everything else
@@ -825,7 +830,8 @@ curl -s http://127.0.0.1:8081/actuator/health/readiness
 |---|---|
 | Certificate warning on the tablet | CA not installed, or the certificate has no SAN for the address being typed |
 | App loads, login fails | `/api/` proxy wrong, or the backend is down. `curl` the readiness probe |
-| CORS errors in the console | The stored server URL is not the app's own origin, so requests are cross-origin. Same-origin needs no CORS at all |
+| CORS errors in the console | Something is calling another origin. A browser's production bundle only ever calls its own; in the APK the stored address must be this nginx, not Spring. Same-origin needs no CORS at all |
+| Works on one name, empty on another | Each origin has its own local data and login. Work fetched or entered under one name is only visible there until it syncs — README § Moving the server to a new address |
 | NFC scanning absent | Not a secure context. Check TLS, not the NFC code |
 | Nothing works offline | The service worker never registered — again, usually the certificate |
 | Tablets stuck on an old build | `sw.js` is being cached. Confirm the `Cache-Control: no-cache` location block |

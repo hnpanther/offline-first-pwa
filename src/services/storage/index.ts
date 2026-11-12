@@ -1,4 +1,5 @@
 import { db, DEFAULT_SETTINGS } from './db'
+import { deviceServerUrl } from '@/services/settings/deliveryServerUrl'
 import type {
   AssetClass,
   AssetEntry,
@@ -32,11 +33,22 @@ export async function getAllAssetEntries(): Promise<AssetEntry[]> {
 // Settings
 // ---------------------------------------------------------------------------
 
+/**
+ * The device's settings: the stored row over the defaults — except the server address, which is
+ * decided here on every read.
+ *
+ * A browser's production bundle always talks to the origin it was loaded from, whatever the row
+ * or the build says; the packaged app uses the stored address, seeded from `VITE_SERVER_URL`.
+ * Deciding it at read time, not once at module scope, is what makes that hold for every request:
+ * the API client calls this before each one, so sync, uploads and downloads all follow it. The
+ * reasoning is in services/settings/deliveryServerUrl.ts.
+ */
 export async function getSettings(): Promise<AppSettings> {
   const row = await db.settings.get('app')
-  if (!row) return { ...DEFAULT_SETTINGS }
+  if (!row) return { ...DEFAULT_SETTINGS, serverUrl: deviceServerUrl() }
   const { key: _key, ...settings } = row
-  return { ...DEFAULT_SETTINGS, ...settings } as AppSettings
+  const merged = { ...DEFAULT_SETTINGS, ...settings } as AppSettings
+  return { ...merged, serverUrl: deviceServerUrl(settings.serverUrl) }
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {

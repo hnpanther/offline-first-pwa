@@ -21,7 +21,10 @@ import { DEFAULT_SETTINGS } from '@/services/storage/db'
 import { isOrientationLockSupported } from '@/services/device/screenOrientation'
 import { clampSyncInterval, fromSeconds, toSeconds } from '@/services/settings/syncInterval'
 import { checkServerUrl, requiresReauthentication } from '@/services/settings/serverUrl'
-import { applyServerUrlChange } from '@/services/settings/applyServerUrlChange'
+import { applyServerUrlChange, type ServerUrlChangeOutcome } from '@/services/settings/applyServerUrlChange'
+import { deviceServerFollowsPage } from '@/services/settings/deliveryServerUrl'
+import { probeServer } from '@/services/api/serverProbe'
+import { resolveBaseUrl } from '@/services/api/client'
 import { clearAuthSession } from '@/services/auth'
 import { syncManager } from '@/services/sync'
 import { useScreenOrientation } from '@/hooks/useScreenOrientation'
@@ -40,6 +43,12 @@ export function SettingsPage() {
   )
   const [saved, setSaved] = useState(false)
   const [serverUrlError, setServerUrlError] = useState<string | null>(null)
+  // True while the new address is being asked whether the server answers there — up to the
+  // probe's own time limit. The save button is held for that long so it cannot be pressed twice.
+  const [checkingServer, setCheckingServer] = useState(false)
+  // In a browser's production bundle the server is the page's own origin, whatever is typed here
+  // (services/settings/deliveryServerUrl.ts), so the field is shown but cannot be edited.
+  const serverFixedByPage = deviceServerFollowsPage()
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
   const orientationLockSupported = isOrientationLockSupported()
   // Calling the hook here re-applies the lock and reports back, so the alert below reflects
@@ -62,50 +71,73 @@ export function SettingsPage() {
     // does not belong: the API client attaches the current JWT to whatever URL is stored here,
     // so a typo, a stale address or a plain-HTTP host would hand this plant's bearer token to
     // it on the very next request.
-    const urlCheck = checkServerUrl(data.serverUrl)
-    if (urlCheck.error || !urlCheck.normalized) {
-      setServerUrlError(urlCheck.error)
-      return
+    let serverUrl: string
+    if (serverFixedByPage) {
+      // Not editable here, and not read from the form even so: what is stored is the page's own
+      // origin, which is also what every request uses. Writing it back heals a row an older
+      // build seeded with some other address.
+      serverUrl = stored.serverUrl
+    } else {
+      const urlCheck = checkServerUrl(data.serverUrl)
+      if (urlCheck.error || !urlCheck.normalized) {
+        setServerUrlError(urlCheck.error)
+        return
+      }
+      // The normalised value, not the raw field. Storing what was typed let a stray space
+      // through validation and into every subsequent request URL.
+      serverUrl = urlCheck.normalized
     }
     setServerUrlError(null)
-    // The normalised value, not the raw field. Storing what was typed let a stray space through
-    // validation and into every subsequent request URL.
-    const serverUrl = urlCheck.normalized
 
     // Changing origin ends the session. A token issued by one server is never sent to another,
     // because by the time the other one is configured there is no token left to send. Confirmed
     // first, since it logs the operator out and they may be mid-round.
     const reauth = requiresReauthentication(stored.serverUrl, serverUrl)
-    if (reauth && !window.confirm(
-      'با تغییر آدرس سرور، از حساب خود خارج می‌شوید و باید دوباره وارد شوید.\n\n' +
-      `آدرس فعلی: ${stored.serverUrl}\nآدرس جدید: ${serverUrl}\n\n` +
-      'ادامه می‌دهید؟'
-    )) {
+    if (reauth && !window.confirm(t.settings.serverUrlChangeConfirm(stored.serverUrl, serverUrl))) {
       return
     }
 
     // ORDER IS THE WHOLE POINT, and it used to be the other way round — see
     // `applyServerUrlChange`, which owns the sequence so that it can be tested without
-    // rendering this page.
-    const reloading = await applyServerUrlChange(reauth, {
-      stopSync: () => syncManager.stop(),
-      clearSession: clearAuthSession,
-      save: () => updateSettings({
-        ...data,
-        serverUrl,
-        // Already milliseconds: the field converts on the way in and out (see below). Converting
-        // again here multiplied the interval by 1000 on every save — including a save where
-        // nobody touched the field — so 30 seconds silently became 30,000 and grew from there.
-        syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
-        // None of these are written from this screen; the device is not their owner.
-        attachmentLimits: stored.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits,
-        nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
-        imageAnnotationEnabled: stored.imageAnnotationEnabled
-      }),
-      reload: () => window.location.reload()
-    })
+    // rendering this page. On an origin change it first asks the new address whether the
+    // server answers, and changes nothing if it does not.
+    if (reauth) setCheckingServer(true)
+    let outcome: ServerUrlChangeOutcome
+    try {
+      outcome = await applyServerUrlChange(reauth, {
+        // Exactly the request the login page makes, resolved exactly as it resolves it — so a
+        // yes here means the login screen this reloads onto can reach its server: same name,
+        // same certificate trust, same network.
+        verify: () => probeServer(resolveBaseUrl(serverUrl)),
+        stopSync: () => syncManager.stop(),
+        clearSession: clearAuthSession,
+        save: () => updateSettings({
+          ...data,
+          serverUrl,
+          // Already milliseconds: the field converts on the way in and out (see below).
+          // Converting again here multiplied the interval by 1000 on every save — including a
+          // save where nobody touched the field — so 30 seconds silently became 30,000 and grew
+          // from there.
+          syncIntervalMs: clampSyncInterval(data.syncIntervalMs),
+          // None of these are written from this screen; the device is not their owner.
+          attachmentLimits: stored.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits,
+          nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
+          imageAnnotationEnabled: stored.imageAnnotationEnabled
+        }),
+        reload: () => window.location.reload()
+      })
+    } finally {
+      setCheckingServer(false)
+    }
+
+    // Nothing was changed: the session, the sync loop and the stored address are all as they
+    // were. Said on the field, where the address that did not answer is.
+    if (outcome === 'unreachable') {
+      setServerUrlError(t.settings.serverUrlUnreachable)
+      return
+    }
     // The page is going away; a "saved" tick on it would only be seen as a flicker.
-    if (reloading) return
+    if (outcome === 'reloading') return
 
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
@@ -143,13 +175,25 @@ export function SettingsPage() {
                 error={serverUrlError != null}
                 // The rejection reason where the mistake is, and — when the address is fine —
                 // a standing note that changing it logs you out. Said before the operator
-                // commits, not only in the confirmation that follows.
-                helperText={serverUrlError ?? 'مثال: http://192.168.1.100:8081 — تغییر آدرس سرور باعث خروج از حساب می‌شود.'}
+                // commits, not only in the confirmation that follows. In a browser, where the
+                // page's own origin is the server, the note says that instead.
+                helperText={
+                  serverUrlError ??
+                  (serverFixedByPage ? t.settings.serverUrlFollowsPage : t.settings.serverUrlHint)
+                }
                 onChange={event => {
                   setServerUrlError(null)
                   field.onChange(event)
                 }}
+                // Read-only rather than disabled: the address stays selectable and copyable — an
+                // administrator on the phone with support will be asked to read it out — and it
+                // reads as information rather than a control that is broken.
+                InputProps={{ readOnly: serverFixedByPage }}
                 inputProps={{ style: { textAlign: 'left', direction: 'ltr' } }}
+                // The address is left-to-right; the sentence under it is Persian. Without this
+                // the helper inherits the field's `dir="ltr"` and a Persian sentence that holds a
+                // URL is laid out backwards.
+                FormHelperTextProps={{ dir: 'rtl', sx: { textAlign: 'right' } }}
               />
             )}
           />
@@ -352,9 +396,10 @@ export function SettingsPage() {
         variant="contained"
         size="large"
         startIcon={<SaveIcon />}
+        disabled={checkingServer}
         sx={{ alignSelf: 'flex-end', minWidth: 140 }}
       >
-        {t.settings.save}
+        {checkingServer ? t.settings.serverUrlChecking : t.settings.save}
       </Button>
     </Box>
   )

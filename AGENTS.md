@@ -371,13 +371,15 @@ src/
     Dashboard.tsx           open sheets / submitted today / pending sync;
                             links to logsheets
     LoginPage.tsx           username + password → JWT session
-    SettingsPage.tsx        admin only — serverUrl, sync interval, allowManualEntry,
+    SettingsPage.tsx        admin only — serverUrl (read-only in a browser), sync interval, allowManualEntry,
                             nfcStrictSerialMatch (admin-only switch)
     NfcInspectPage.tsx      admin + online only — raw tag JSON, asset lookup,
                             bind scanned chip UID to the asset's nfcSerial
   services/
     api/index.ts            all REST types + endpoints
     api/client.ts           serverUrl vs window.origin → relative /api
+    settings/deliveryServerUrl.ts  which server a device uses: browser → its own origin;
+                            APK / npm run dev → stored, then VITE_SERVER_URL
     storage/db.ts           Dexie v2 schema + openDatabase()
     storage/index.ts        log sheets, settings, reference-data slices, …
     storage/inboxCache.ts   syncMeta inboxSnapshot
@@ -468,7 +470,7 @@ Types and functions: **`src/services/api/index.ts`**.
 
 **`LogSheetBundleDto`:** `{ sheet, entries, context }` — context holds scoped locations…fieldDefinitions.
 
-**Production URL model:** `VITE_SERVER_URL` / Settings should match **PWA origin** (e.g. `https://192.168.1.4`); nginx proxies `/api` to Spring. See README Production Deployment.
+**Production URL model:** a production bundle in a **browser** always talks to its own origin (`services/settings/deliveryServerUrl.ts`) — nginx proxies `/api` to Spring, so the same `dist/` works under any name or IP with no rebuild. The **APK** uses the address stored on the device, seeded from `VITE_SERVER_URL` (the nginx origin, e.g. `https://192.168.1.4`) and changed by an administrator in Settings. See README **Server URL rules**.
 
 ---
 
@@ -524,7 +526,7 @@ By role, the resulting UI is unchanged:
 |---------|----------------|
 | Full master-data sync on login | Breaks selective bundle architecture, storage, performance |
 | Cross-user batch sync on shared tablet | Ownership errors, false synced state, audit failure |
-| Using Spring URL in `VITE_SERVER_URL` on nginx deploy | CORS/origin mismatch; tablets should hit PWA origin + proxy |
+| Using Spring URL in `VITE_SERVER_URL` on nginx deploy | The APK then bypasses nginx — and an `http://` address is refused outright (`cleartextTrafficPermitted="false"`). It must be the nginx origin. The browser ignores this value entirely |
 | Installing PWA from :5173 | Offline white screen (no full precache) |
 | NFC lookup via global API on fill page | Design is local entry match; offline requirement |
 | Assuming `useMasterDataSync` pulls assets | It only triggers bootstrap staleness pull |
@@ -537,8 +539,10 @@ By role, the resulting UI is unchanged:
 | Writing `fontFamily: 'monospace'` (or any bare generic) | That keyword resolves to whatever the **browser** names as its fixed-width font — a per-device setting, not a constant. Use `FONT_MONO` from `@/theme`; a generic is legal only as the last entry behind a font we ship |
 | Adding `"Tahoma"` / `"Arial"` / `"Segoe UI"` to a stack | Not a courtesy fallback. Stacks resolve **per glyph**, so anything Vazirmatn does not cover is drawn by the device — and on Android neither Tahoma nor Arial exists, so it falls through again to the vendor's font. `noSystemFonts.test.ts` fails the suite |
 | Assuming a saved **sync interval** is live | `useSyncManager` reads it once when `AppLayout` mounts and builds the `setInterval` from it. Saving Settings writes IndexedDB and does not rebuild the running timer, and the screen does not say so — the new period starts on the next app launch. Documented, not fixed |
-| Expecting **Server URL** to change anything on a same-origin deployment | `getBaseUrl()` returns `''` when the configured origin equals `window.location.origin`, so requests go out relative and the field is inert. It matters only when page and API are on different origins |
-| Changing **Server URL** without signing out | The stored session is untouched, so a token minted by the old server is sent to the new one |
+| Expecting **Server URL** to change anything in a browser | A production bundle in a browser always uses its own origin — the stored value is ignored and the field is read-only. It matters in the APK and under `npm run dev` |
+| Making the browser "follow its origin" without excluding the APK | Inside the app the page origin is `https://localhost`, Capacitor's asset server: the login would go there. Native detection is `isNativeApp() \|\| hasCapacitorGlobal()` on purpose |
+| Saving a server address the device cannot reach | Settings sits behind a login that goes to the stored address, so a dead address strands the tablet — only clearing app data gets out, and that destroys unsynced work. `applyServerUrlChange` probes the new address first and changes nothing if it does not answer |
+| Redirecting the old domain to the new one during a move | Each origin has its own IndexedDB: a tablet's unsynced work under the old name can only sync from the old name, and a redirected `/api/` call is cross-origin, which the CSP refuses. Serve both names until every tablet has synced |
 
 ---
 
@@ -558,7 +562,7 @@ By role, the resulting UI is unchanged:
 | Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
 | Production deploy | `.env.mobile.example`, README nginx section, and `docker/` (`DEPLOY.md`, the nginx template and snippets). The Docker nginx config and `docs/deployment.md`'s configs describe the same site and must not drift |
 | A device capability (NFC, camera, mic, GPS) | `docs/device-features.md`, **and** whether the packaged app can do it at all — a browser API is not automatically in a WebView, and a permission not in `AndroidManifest.xml` fails with no prompt. See `docs/apk.md` |
-| The server address | `.env.mobile` only — the APK and nginx read the same file. Then rebuild **both** (`npm run build:mobile`, `npm run build:apk`) or they go out of step |
+| The server address | **Browser:** nothing in the app — it follows its own origin; nginx, the certificate's subjectAltName and DNS are what change. **APK:** an administrator changes it on each tablet in Settings while the old address still answers; `.env.mobile` (then `npm run build:apk`, which rebuilds `dist/` too) only decides what a **fresh** install starts with. README **Moving the server to a new address** |
 | Anything under `android/` | `docs/apk.md`, and rebuild — Gradle picks it up, no `cap add` needed |
 | The signing key, `versionCode`, or how a tablet is updated | `docs/apk.md` §3 and §10 **and** the README's APK section. These three are one decision: the fleet is updated by **uninstall and reinstall**, which is what makes the debug key sound, and which is why `versionCode` never has to move. Change any one of them and the other two stop being true |
 | The bundled CA, or `network_security_config.xml` | `docs/apk.md` §5 **and** `docs/deployment.md`. The APK's CA and the CA installed on a tablet for Chrome are separate stores — a change to one is not a change to the other |
@@ -975,11 +979,53 @@ that nothing tests is only a comment.** `applyServerUrlChange.test.ts` asserts t
 merely that each step ran, plus the two failure paths (a save that throws must not reload; a
 clear that throws must not write the address).
 
+**And before all of that, the new address must answer.** Step 0 is `verify()` — `GET /api/health`
+at the new address through `resolveBaseUrl`, the login page's own probe. Without it a typo, an
+`http://` address (the APK refuses cleartext), or a certificate from a CA the app does not trust
+was saved, the session torn down, and the tablet stranded: Settings needs a login, the login goes
+to the stored address, and the only way out was clearing app data — destroying every unsynced
+reading on it. So a probe that says no, rejects, throws synchronously, or answers anything but
+`true` returns `'unreachable'` with **nothing** touched, and the page shows the reason on the
+field. It is a refusal, not a warning: the one cost is that an address cannot be configured
+before its server answers, and the move procedure keeps the old address up until the new one does
+anyway. The tests pin that a failed probe calls no other step and that a slow one holds them all.
+
 `checkServerUrl()` also returns the address **normalised** to `URL.origin`, and it is the
 normalised value that gets stored — a trailing slash, surrounding whitespace or odd casing is
 resolved once at the boundary rather than being carried into every request URL. Keep the
 normalised value: storing the raw input re-opens the string-comparison bugs `origin` exists to
 end.
+
+### A browser follows its own origin — and the packaged app must never
+A production bundle in a browser is always served by the nginx that proxies its `/api`, so its
+server is, by construction, the origin it was loaded from. It used to take `VITE_SERVER_URL` from
+the build instead, which tied `dist/` to one domain: served under any other name, every request
+went to the build's address, nginx's `connect-src 'self'` refused it, and the operator saw
+«ارتباط با سرور برقرار نشد». `services/settings/deliveryServerUrl.ts` now decides the address on
+**every** `getSettings()` — not once at module scope — and in a browser's production bundle returns
+`window.location.origin`, ignoring both the build seed and the stored row. Ignoring the row is
+deliberate: in that delivery any other address can only be a broken device (a row an older build
+seeded), and following the page heals it. `getSettings()` is what `getBaseUrl()` reads before each
+request, so sync, uploads and downloads all follow; `serverAddressFollowsPage.test.ts` runs the
+real sync pass and checks every URL put on the wire.
+
+**The trap is the APK.** Its WebView's origin is `https://localhost`, Capacitor's local asset
+server, which answers `/api/health` with `index.html`. Treating the app as a browser would send
+the login there on a fresh install and override an administrator's address on an updated one.
+Native detection is `isNativeApp() || hasCapacitorGlobal()`: Capacitor injects its global at
+document start, so `isNativeApp()` is already right, and the bare-global check is a belt that
+fails in the safe direction (a browser that somehow had the global would fall back to the stored
+address — the old behaviour). The packaged app, and `npm run dev` (no `/api` proxy on `:5173`), keep
+the old rule: stored, then `VITE_SERVER_URL`, then `http://localhost:8081`. `vite preview` now
+proxies `/api` in every mode, because it serves a production bundle and that bundle calls its own
+origin.
+
+**Each origin keeps its own data.** IndexedDB, the installed PWA and the session belong to an
+origin, so the same tablet on `abc.com` and on `cbd.com` is two devices. Work not yet synced under
+one name is only reachable from that name — never deleted, but stranded if that name stops being
+served. Moving a browser fleet means serving both names until every tablet has synced on the old
+one, and **not** redirecting the old name: a redirected `/api/` request is cross-origin and the CSP
+refuses it.
 
 ### Push matches by `Map`, not by `.find()` in a loop
 `services/sync/index.ts` resolves pending sheets and reports against the server's response. Both
@@ -1145,7 +1191,8 @@ callback new on reconnect) and one reserved empty interface in the store.
 
 - **`.env.mobile` is gitignored, and a missing one used to build a working-looking, unreachable
   app.** Only `.env.mobile.example` is committed, so a fresh clone has no `VITE_SERVER_URL`;
-  `services/storage/db.ts` falls back to `http://localhost:8081`, and **the build succeeds**. The
+  the packaged app falls back to `http://localhost:8081` (`services/settings/deliveryServerUrl.ts`;
+  the browser follows its own origin and never reads it), and **the build succeeds**. The
   APK installs, opens, and fails every request with «ارتباط با سرور برقرار نشد» — the same words a
   dead network produces, traced back eventually to a file that was never on the build machine.
   `vite.config.ts` (`assertMobileServerUrl`) now exits non-zero on `vite build --mode mobile` when

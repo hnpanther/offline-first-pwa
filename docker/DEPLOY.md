@@ -47,8 +47,10 @@ npm run build:apk          # or npm run build:mobile if only the browser build c
 Check three things — each one has already shipped wrong once in this project:
 
 1. **`.env.mobile` holds the production address**, `https://`, the address tablets type (the
-   build refuses a missing or `http://` value). It must equal `PWA_SERVER_NAME` below and appear
-   in the certificate's subjectAltName.
+   build refuses a missing or `http://` value). It is the address a fresh **APK** install starts
+   with, so it must appear in the certificate's subjectAltName. The browser delivery does not read
+   it — a browser always talks to the origin it was opened from — so the same image serves any
+   name or IP the certificate and DNS cover.
 2. **`certs/rootCA.crt` is the plant's CA**, not this machine's own mkcert CA. Its subject must
    match the issuer of the certificate you will put in `ssl/` (§4). See
    [docs/apk.md §5](../docs/apk.md), *"Which CA ends up in the APK"*. Never run
@@ -137,7 +139,7 @@ mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy th
 | `PWA_IMAGE_TAG` | `latest` | Image version to run. Set it to the release |
 | `PWA_HTTP_PORT` | `80` | Host port for HTTP. Only redirects to HTTPS and answers `/healthz` |
 | `PWA_HTTPS_PORT` | `443` | Host port for HTTPS. **Keep 443**: the HTTP→HTTPS redirect assumes it |
-| `PWA_SERVER_NAME` | `_` | The name or IP tablets type; `_` accepts any |
+| `PWA_SERVER_NAME` | `_` | The name(s) or IP tablets type, space-separated; `_` accepts any. Informational with the shipped template: it has one `server` block per port, and nginx hands a request whose name matches none to that block anyway, so this restricts nothing |
 | `PWA_BACKEND_UPSTREAM` | `http://host.docker.internal:8081` | Spring Boot, as seen **from inside the container**. Scheme, host, port; no `/api`, no trailing slash |
 | `PWA_MAX_BODY_SIZE` | `32m` | Largest request forwarded. Must stay above the backend's 25 MB attachment limit |
 
@@ -201,9 +203,12 @@ And on **one real tablet**, before walking away:
 
 `connect-src 'self'` means the **browser** delivery can only talk to its own origin. That is the
 point — an injected script cannot send readings elsewhere — and it has one visible consequence:
-pointing Settings → Server URL at a **different** origin stops working in a browser tablet.
-Production already uses the same origin (`VITE_SERVER_URL` = the nginx address), so nothing
-changes there. The APK is not affected by anything in this file: it never loads a page from nginx.
+a browser tablet can never use a server on a **different** origin. The app is built around that:
+a production bundle in a browser always calls its own origin, whatever `VITE_SERVER_URL` says, and
+shows Settings → Server URL read-only. The same rule is why a **moved** site must keep serving its
+old name until every browser tablet has synced there, rather than redirecting it: a redirected
+`/api/` request is cross-origin, and this header refuses it. The APK is not affected by anything
+in this file: it never loads a page from nginx.
 
 **HSTS is deliberately not sent** — with a private CA and IP addresses it can strand a site that
 has to fall back ([docs/roadmap.md](../docs/roadmap.md) §1).
