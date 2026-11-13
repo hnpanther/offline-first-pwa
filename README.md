@@ -790,8 +790,10 @@ only reachable from the old name. So:
 
 1. Make nginx answer on **both** names for a while: a certificate whose subjectAltName lists both
    (an IP as an `IP:` entry, never `DNS:`), and DNS for the new name on the plant network.
-   `PWA_SERVER_NAME` restricts nothing here — with one `server` block per port nginx answers every
-   name — so it needs no change.
+   In the Docker image `PWA_SERVER_NAME` restricts nothing — it removes nginx's stock site, so its
+   one `server` block per port answers every name — and needs no change. On a **hand-configured**
+   nginx ([docs/deployment.md](docs/deployment.md)), add the new name to `server_name` in both
+   blocks: another site on the same nginx could otherwise be the one that answers it.
 2. Let every browser tablet sync on the **old** name (pending count zero).
 3. Only then retire the old name. **Do not redirect** it to the new one in the meantime: a
    redirected `/api/` request lands on another origin, and the CSP refuses it — the old tablets

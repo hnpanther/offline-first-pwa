@@ -192,8 +192,9 @@ export function SettingsPage() {
                 inputProps={{ style: { textAlign: 'left', direction: 'ltr' } }}
                 // The address is left-to-right; the sentence under it is Persian. Without this
                 // the helper inherits the field's `dir="ltr"` and a Persian sentence that holds a
-                // URL is laid out backwards.
-                FormHelperTextProps={{ dir: 'rtl', sx: { textAlign: 'right' } }}
+                // URL is laid out backwards. `start`, not `right`: stylis-plugin-rtl flips every
+                // physical left/right in an emotion style, so `right` here renders as `left`.
+                FormHelperTextProps={{ dir: 'rtl', sx: { textAlign: 'start' } }}
               />
             )}
           />
