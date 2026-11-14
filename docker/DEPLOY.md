@@ -196,6 +196,7 @@ And on **one real tablet**, before walking away:
 | Security headers | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`. On **every** response — including locations that set their own caching, which nginx would otherwise strip |
 | Client address | `X-Forwarded-For` is **overwritten** with the real peer, never appended. The backend records the first entry; appending would let any client choose the address the audit trail shows |
 | Hardening | Read-only root filesystem, scratch paths on tmpfs, all capabilities dropped except `CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`, `no-new-privileges`, no server version in headers |
+| Resources | Sized for a 2 vCPU / 16 GB host: a 1 GB memory ceiling and 1.75 CPUs. nginx itself uses tens of megabytes, so the ceiling stops a leak rather than budgeting anything; the reasoning is beside the limits in `docker-compose.yml` |
 | Logs | Container stdout/stderr, rotated at 5 × 20 MB. `docker compose logs -f` |
 | Health | `/healthz` on port 80, checked every 30 s; `restart: unless-stopped` |
 

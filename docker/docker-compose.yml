@@ -56,6 +56,24 @@ services:
       - SETGID
       - NET_BIND_SERVICE
 
+    # Resources. SIZED FOR a 2 vCPU / 16 GB host that runs nothing but this container.
+    #
+    # nginx itself needs tens of megabytes: one worker per vCPU (worker_processes auto), and
+    # uploads and downloads stream through instead of being held whole (proxy_request_buffering
+    # off and proxy_max_temp_file_size 0 in the site template). The tmpfs mounts above add at most
+    # 26 MB, and tmpfs counts against this limit. So 1 GB is a ceiling against a leak, not a
+    # budget: the rest of the host's RAM is simply not needed.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          # 2 vCPU host: 1.75 leaves a quarter of a core so SSH still gets in while TLS
+          # handshakes keep both workers busy. worker_processes stays 2 — nginx counts CPUs, not
+          # the quota.
+          cpus: "1.75"
+        reservations:
+          memory: 128m
+
     logging:
       driver: json-file
       options:
