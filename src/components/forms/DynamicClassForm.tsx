@@ -20,17 +20,26 @@
 
 import { Box, Typography, Alert } from '@mui/material'
 import { useMemo } from 'react'
-import { Controller } from 'react-hook-form'
+import { Controller, useWatch } from 'react-hook-form'
 import type { Control, FieldErrors, RegisterOptions } from 'react-hook-form'
 import { DynamicFormField } from './DynamicFormField'
 import { AttachmentFieldInput } from './AttachmentFieldInput'
+import { SignatureFieldInput } from './SignatureFieldInput'
+import {
+  coveredFingerprint,
+  scopeOfField,
+  scopeOfValue,
+  signatureKey,
+  signatureVerdict
+} from '@/utils/signatureVerdict'
 import { LocationFieldInput } from './LocationFieldInput'
 import { scanFieldConfig } from '@/services/scan/scanFieldFill'
 import { formatCoordinate, parseCoordinate } from '@/services/device/geolocation'
 import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
 import type { FieldDefinition } from '@/types/sync'
-import type { FormField } from '@/types'
+import type { FormField, LogSheetEntryData } from '@/types'
 import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
+import { isListedOption } from './choiceControl'
 import {
   evaluateFieldSeverity,
   optionSeverityMessage,
@@ -45,6 +54,11 @@ import { resolveGateSources, type GateWatchPlan } from './gateSources'
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** A `signature` field (backend roadmap §32) — matched case-insensitively, like the server. */
+function isSignatureDataType(dataType: string | undefined): boolean {
+  return (dataType ?? '').trim().toLowerCase() === 'signature'
+}
 
 /** A `location` class field — matched the same way the server does, case-insensitively. */
 function isLocationDataType(dataType: string | undefined): boolean {
@@ -64,7 +78,8 @@ function toFormField(def: FieldDefinition, nameOverride?: string): FormField {
     required: def.required,
     unit: def.unit,
     options: normalizeFieldOptions(def.validation?.options),
-    helperText: helperParts.length > 0 ? helperParts.join(' · ') : undefined
+    helperText: helperParts.length > 0 ? helperParts.join(' · ') : undefined,
+    allowCustom: def.validation?.allowCustom === true
   }
 }
 
@@ -91,6 +106,17 @@ function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: strin
   }
 
   if (def.dataType === 'select' || def.dataType === 'multiselect') {
+    // A typed answer (roadmap §31) is marked «دستی», as the panel marks it, so a reader can tell
+    // what was chosen from the list from what an operator wrote in. Only with a vocabulary to
+    // be outside of — a choice field with no options accepts anything.
+    if (options.length > 0) {
+      const items = Array.isArray(val) ? val : [val]
+      const text = items
+        .filter(v => v !== undefined && v !== null && String(v).trim() !== '')
+        .map(v => (isListedOption(options, v) ? resolveOptionLabel(options, v) : `${String(v).trim()} · دستی`))
+        .join('، ')
+      return { value: text || '—' }
+    }
     return { value: resolveOptionLabel(options, val) }
   }
 
@@ -199,6 +225,90 @@ interface DynamicClassFormProps {
      */
     assetId?: string
   }
+  /**
+   * Where this form's signatures stand (backend roadmap §32): the server's verdicts and this
+   * device's baselines, keyed by `owner` — `"sheet"` for the round's own questions, the asset id
+   * for an asset's form — plus every asset's stored answers, which a ROUND-scope signature on the
+   * round's questions also covers. Absent where nothing is known; the field then shows no verdict.
+   */
+  signatureContext?: SignatureContext
+}
+
+export interface SignatureContext {
+  owner: string
+  states?: Record<string, string>
+  baselines?: Record<string, string>
+  roundEntries?: LogSheetEntryData[]
+}
+
+/**
+ * One signature field, with its verdict worked out from the answers **as they are in this form
+ * right now** — so an answer changed in the same dialog after signing shows the warning before
+ * anything is saved.
+ *
+ * Its own component because it watches the whole form (`useWatch` with no name), which
+ * re-renders whatever does the watching on every keystroke. Kept here, that is this one small
+ * component — never the form, and never a field that is not a signature.
+ */
+function SignatureFieldWithVerdict({
+  def,
+  fields,
+  control,
+  value,
+  readOnly,
+  readOnlyValues,
+  attachmentContext,
+  signatureContext,
+  label,
+  onChange
+}: {
+  def: FieldDefinition
+  fields: FieldDefinition[]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  control: Control<any>
+  value: unknown
+  readOnly: boolean
+  readOnlyValues?: Record<string, unknown>
+  attachmentContext: NonNullable<DynamicClassFormProps['attachmentContext']>
+  signatureContext?: SignatureContext
+  label: string
+  onChange: (value: unknown) => void
+}) {
+  const live = useWatch({ control, disabled: readOnly }) as Record<string, unknown> | undefined
+  const answers = readOnly ? readOnlyValues : live
+  const ownKeys = useMemo(
+    () => fields.filter(f => f.dataType !== 'signature').map(f => f.key),
+    [fields]
+  )
+  const scope = scopeOfValue(value, scopeOfField(def))
+  const roundEntries = signatureContext?.roundEntries
+  const fingerprint = () => coveredFingerprint(scope, answers, ownKeys, roundEntries)
+  const key = signatureContext ? signatureKey(signatureContext.owner, def.key) : null
+  const verdict = key
+    ? signatureVerdict({
+        scope,
+        serverState: signatureContext?.states?.[key],
+        localFingerprint: (value as { localFingerprint?: string } | null)?.localFingerprint,
+        baseline: signatureContext?.baselines?.[key],
+        current: fingerprint()
+      })
+    : undefined
+  return (
+    <SignatureFieldInput
+      label={label}
+      value={value}
+      readOnly={readOnly}
+      logSheetLocalId={attachmentContext.logSheetLocalId}
+      logSheetServerId={attachmentContext.logSheetServerId}
+      assetId={attachmentContext.assetId}
+      fieldKey={def.key}
+      onChange={onChange}
+      scope={scopeOfField(def)}
+      verdict={verdict}
+      // The scope the field declares now — a fresh drawing is judged under today's definition.
+      coveredFingerprint={() => coveredFingerprint(scopeOfField(def), answers, ownKeys, roundEntries)}
+    />
+  )
 }
 
 export function DynamicClassForm({
@@ -209,6 +319,7 @@ export function DynamicClassForm({
   readOnly = false,
   readOnlyValues,
   attachmentContext,
+  signatureContext,
 }: DynamicClassFormProps) {
   // Memoised, and that is load-bearing rather than tidy: `DynamicFormField` watches an ARRAY of
   // names built from the gate plan, and react-hook-form keys its subscription effect on that
@@ -237,6 +348,25 @@ export function DynamicClassForm({
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         {sorted.map(def => {
           const rawValue = readOnlyValues[def.key]
+
+          if (isSignatureDataType(def.dataType) && attachmentContext) {
+            return (
+              <Box key={def.key} sx={{ py: 1.25, px: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+                <SignatureFieldWithVerdict
+                  def={def}
+                  fields={sorted}
+                  control={control}
+                  value={rawValue}
+                  readOnly
+                  readOnlyValues={readOnlyValues}
+                  attachmentContext={attachmentContext}
+                  signatureContext={signatureContext}
+                  label={def.label}
+                  onChange={() => {}}
+                />
+              </Box>
+            )
+          }
 
           const readOnlyKind = attachmentKindForDataType(def.dataType)
           if (readOnlyKind && attachmentContext) {
@@ -368,6 +498,32 @@ export function DynamicClassForm({
                   value={f.value}
                   onChange={f.onChange}
                   error={error}
+                />
+              )}
+            />
+          )
+        }
+
+        // Before the attachment branch: a signature IS an image for storage, and that branch
+        // would hand the operator a camera for a field that wants a pen.
+        if (isSignatureDataType(def.dataType) && attachmentContext) {
+          return (
+            <Controller
+              key={fieldName}
+              name={fieldName}
+              control={control}
+              rules={rules}
+              render={({ field }) => (
+                <SignatureFieldWithVerdict
+                  def={def}
+                  fields={sorted}
+                  control={control}
+                  value={field.value}
+                  readOnly={false}
+                  attachmentContext={attachmentContext}
+                  signatureContext={signatureContext}
+                  label={def.label + (def.required ? ' *' : '')}
+                  onChange={field.onChange}
                 />
               )}
             />

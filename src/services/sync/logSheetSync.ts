@@ -1,7 +1,9 @@
 import { v4 as uuidv4 } from 'uuid'
+import { signatureBaselines } from '@/utils/signatureVerdict'
 import {
   saveLogSheet,
   updateLogSheet,
+  updateLogSheetFrom,
   getLogSheetByServerId,
   getAllLogSheets,
   resetLogSheetToOpenDraft
@@ -70,25 +72,6 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
 
   const sessionUserId = await getSessionUserId()
   const workflow = existing ? alignLocalWorkflowWithServer(existing, serverSheet) : null
-  const preserveLocal =
-    workflow !== 'reset-draft' &&
-    shouldPreserveLocalFormData(existing, serverSheet, sessionUserId)
-  // Whether this device's own edits still stand for something.
-  //
-  // Once the row is `submitted` + `synced` the work has been delivered and reconciled: what the
-  // device holds came from the server, so a `locallyEditedAt` marker still sitting on an entry
-  // describes an opinion that no longer exists. Honouring it would hand the device that entry on
-  // every future merge — and this is exactly the state a sheet is in when a supervisor reopens
-  // it, edits it and hands it back, so the cost would be the supervisor's readings going
-  // invisible all over again.
-  //
-  // Markers are also cleared outright when a submission is accepted; this gate is the second
-  // lock on the same door, because the failure it prevents is silent.
-  const localEditsPending = !(existing?.status === 'submitted' && existing?.syncStatus === 'synced')
-  const entries = mergeEntriesPreservingFormData(bundle.entries ?? [], existing?.entries, {
-    preserveLocal,
-    localEditsPending
-  })
   const scopeDisplayLabel = bundleScopeDisplayLabel(bundle)
   // Freeze this bundle's schema onto the sheet. The shared per-class table cannot express
   // "sheet A's Pump schema differs from sheet B's", which it must, because the server sends
@@ -129,22 +112,14 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const sheetFieldsPatch = bundleSheetFields.length > 0
     ? { sheetFieldDefinitions: bundleSheetFields }
     : {}
-  // The ANSWERS to them need the opposite treatment: they are values, not schema, so the device
-  // may legitimately hold a newer one than the server. Same single condition the entries use —
-  // `locallyEditedAt` recorded by the save itself — for the same reason: no question asked of
-  // the data can tell a value this device entered from one it was sent, because after any sync
-  // they are identical. See `mapServerEntryToLocal` for the two predicates that failed here.
-  const sheetFormLocalWins =
-    preserveLocal && localEditsPending && existing?.sheetFormLocallyEditedAt != null
-  const sheetFormPatch = sheetFormLocalWins
-    ? {}
-    : {
-        sheetFormData: serverSheet.sheetFormData ?? undefined,
-        // Dropped with the values it belonged to. A marker left standing after the server
-        // won would hand this device every future merge of these answers — which is the
-        // failure `localEditsPending` exists to stop at entry level.
-        sheetFormLocallyEditedAt: undefined
-      }
+
+  // What this merge does to the values the operator may be editing — entries, round answers,
+  // signature baselines — decided from a stored row. The branches that hand the sheet to the
+  // server's version decide it from the row read above; the ordinary branch decides it again
+  // from the row as it stands inside the write's transaction (see below).
+  const valuesFrom = (row: LogSheet | undefined) =>
+    mergeValuesFromRow(row, bundle, serverSheet, bundleSheetFields, sessionUserId, workflow)
+  const { entries, sheetFormPatch, signaturePatch } = valuesFrom(existing)
 
   if (existing) {
     if (workflow === 'reset-draft') {
@@ -159,6 +134,9 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
           ...fieldOverridesPatch,
           ...sheetFieldsPatch,
           ...sheetFormPatch,
+          ...signaturePatch,
+          // Somebody else's round now; what this device once delivered says nothing about it.
+          sheetFormDeliveredAt: undefined,
           localOwnerUserId: undefined,
           ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
         })
@@ -172,6 +150,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
       // reset-draft branch does. Without this an operator who filled a few assets but
       // never hit final submit loses everything the moment they reopen the sheet, and
       // the live row (now `synced`) is purged by cleanupLocalLogSheets a day later.
+      const preserveLocal = shouldPreserveLocalFormData(existing, serverSheet, sessionUserId)
       const discardsLocalWork = shouldArchiveBeforeServerOverwrite(existing, preserveLocal)
       if (discardsLocalWork) {
         await archiveLocalWorkBeforeClear(existing)
@@ -182,6 +161,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         ...fieldOverridesPatch,
         ...sheetFieldsPatch,
         ...sheetFormPatch,
+        ...signaturePatch,
         status: 'submitted',
         syncStatus: 'synced',
         // The server's own value, not a hard-coded 'SUBMITTED'. This branch fires for any
@@ -211,14 +191,25 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
       return existing
     }
 
-    await updateLogSheet(existing.localId, {
-      ...serverSheetMetadataPatch(serverSheet, existing),
-      entries,
-      ...fieldDefinitionsPatch,
-      ...fieldOverridesPatch,
-      ...sheetFieldsPatch,
-      ...sheetFormPatch,
-      ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
+    // The ordinary refresh of a round being walked — the merge that runs while the operator is
+    // on the fill page. Everything above was read before several awaits, and an operator can
+    // save an asset or the round's questions in between: a write built from that read would
+    // put back the values the save just replaced and clear its marker, so the save would
+    // vanish without ever being pushed. So the values are decided again from the row as it is
+    // inside the write's own transaction — the save is either before it, and seen, or after
+    // it, and untouched.
+    await updateLogSheetFrom(existing.localId, current => {
+      const values = valuesFrom(current)
+      return {
+        ...serverSheetMetadataPatch(serverSheet, current),
+        entries: values.entries,
+        ...fieldDefinitionsPatch,
+        ...fieldOverridesPatch,
+        ...sheetFieldsPatch,
+        ...values.sheetFormPatch,
+        ...values.signaturePatch,
+        ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
+      }
     })
     const updated = await getLogSheetByServerId(serverId)
     if (updated) return updated
@@ -252,9 +243,98 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     ...fieldOverridesPatch,
     ...sheetFieldsPatch,
     ...sheetFormPatch,
+    ...signaturePatch,
     createdAt: serverSheet.createdAt ?? now,
     updatedAt: serverSheet.updatedAt ?? now
   })
+}
+
+/**
+ * The half of a bundle merge that depends on what the device holds: the merged entries, the
+ * round's answers, and the signature baselines taken from them.
+ *
+ * Pure, so the ordinary refresh can run it inside its write transaction against the row as it
+ * stands at that moment (`updateLogSheetFrom`), rather than against a copy read before the
+ * network and the context merge — which is the window an operator's save used to fall into.
+ */
+export function mergeValuesFromRow(
+  row: LogSheet | undefined,
+  bundle: LogSheetBundleDto,
+  serverSheet: ServerLogSheet,
+  bundleSheetFields: LogSheet['sheetFieldDefinitions'],
+  sessionUserId: string | null,
+  workflow: ReturnType<typeof alignLocalWorkflowWithServer> | null
+): {
+  entries: LogSheet['entries']
+  sheetFormPatch: Partial<LogSheet>
+  signaturePatch: Pick<LogSheet, 'signatureStates' | 'signatureBaselines'>
+} {
+  const preserveLocal =
+    workflow !== 'reset-draft' && shouldPreserveLocalFormData(row, serverSheet, sessionUserId)
+  // Whether this device's own edits still stand for something.
+  //
+  // Once the row is `submitted` + `synced` the work has been delivered and reconciled: what the
+  // device holds came from the server, so a `locallyEditedAt` marker still sitting on an entry
+  // describes an opinion that no longer exists. Honouring it would hand the device that entry on
+  // every future merge — and this is exactly the state a sheet is in when a supervisor reopens
+  // it, edits it and hands it back, so the cost would be the supervisor's readings going
+  // invisible all over again.
+  //
+  // Markers are also cleared outright when a submission is accepted; this gate is the second
+  // lock on the same door, because the failure it prevents is silent.
+  const localEditsPending = !(row?.status === 'submitted' && row?.syncStatus === 'synced')
+  const entries = mergeEntriesPreservingFormData(bundle.entries ?? [], row?.entries, {
+    preserveLocal,
+    localEditsPending
+  })
+
+  // The ANSWERS to the round's questions are values, not schema, so the device may legitimately
+  // hold a newer one than the server. Same single condition the entries use — the marker the
+  // save itself recorded — for the same reason: no question asked of the data can tell a value
+  // this device entered from one it was sent. See `mapServerEntryToLocal`.
+  const sheetFormLocalWins =
+    preserveLocal && localEditsPending && row?.sheetFormLocallyEditedAt != null
+  // …and one more case where the device's answers stand: the bundle is OLDER than the answers
+  // this device has already delivered. A bundle fetched a moment before a progress push landed
+  // and merged a moment after it carries the server's previous answers, and the accepted push
+  // has already cleared the marker — so without this the device would quietly go back to them,
+  // and the operator's next save would send them back to the server. Both times are the
+  // server's own clock (`savedAt` of the accepted push; `sheet_form_updated_at`), so no device
+  // clock is trusted. A supervisor's later correction in the panel is newer, and wins.
+  const serverAnswersStale =
+    preserveLocal &&
+    localEditsPending &&
+    row?.sheetFormDeliveredAt != null &&
+    (serverSheet.sheetFormUpdatedAt ?? 0) < row.sheetFormDeliveredAt
+  const keepLocalAnswers = sheetFormLocalWins || serverAnswersStale
+  const sheetFormPatch: Partial<LogSheet> = keepLocalAnswers
+    ? {}
+    : {
+        sheetFormData: serverSheet.sheetFormData ?? undefined,
+        // Dropped with the values it belonged to. A marker left standing after the server
+        // won would hand this device every future merge of these answers — which is the
+        // failure `localEditsPending` exists to stop at entry level.
+        sheetFormLocallyEditedAt: undefined
+      }
+
+  // The server's verdict on every signature, and the device's baseline for the VALID ones —
+  // taken from the answers this merge actually delivered (see `signatureBaselines`).
+  const mergedSheetFormData = keepLocalAnswers
+    ? row?.sheetFormData
+    : (serverSheet.sheetFormData ?? undefined)
+  const signaturePatch = {
+    signatureStates: bundle.signatureStates ?? {},
+    signatureBaselines: signatureBaselines({
+      states: bundle.signatureStates,
+      sheetFormData: mergedSheetFormData,
+      sheetFields: bundleSheetFields && bundleSheetFields.length > 0
+        ? bundleSheetFields
+        : row?.sheetFieldDefinitions,
+      sheetFormFromServer: !keepLocalAnswers,
+      entries
+    })
+  }
+  return { entries, sheetFormPatch, signaturePatch }
 }
 
 async function fetchAndApplyBundle(serverId: number | string): Promise<LogSheet> {

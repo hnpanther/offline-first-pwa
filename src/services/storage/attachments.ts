@@ -356,7 +356,11 @@ export function attachmentIdsOf(value: unknown): string[] {
 /** The attachment kind a field's data type accepts, or null when it takes no media. */
 export function attachmentKindForDataType(dataType: string | undefined): AttachmentKind | null {
   switch ((dataType ?? '').trim().toLowerCase()) {
+    // A signature's drawing is a PNG: an image for storage, upload, blankness and the archive
+    // path's «is there work here». The form renders it with its own pad — DynamicClassForm asks
+    // for the signature type before it asks this.
     case 'image':
+    case 'signature':
       return 'IMAGE'
     case 'audio':
       return 'AUDIO'

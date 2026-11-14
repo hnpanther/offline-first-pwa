@@ -52,6 +52,7 @@ import {
 } from '@/services/storage/nfcFaultReports'
 import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { SheetQuestionsCard } from '@/components/logsheet/SheetQuestionsCard'
+import { sheetFormDelivery } from '@/utils/sheetFormDelivery'
 import { QrScanDialog } from '@/components/logsheet/QrScanDialog'
 import { qrScanSupport } from '@/services/scan/qrScanner'
 import { offerTagToField, releaseFieldTagClaim } from '@/services/scan/nfcFieldCapture'
@@ -340,6 +341,17 @@ function AssetFillDialog({
                         // those rows until the sheet itself has synced and been given an id.
                         logSheetServerId: logSheet.serverId,
                         assetId: toIdString(entry.assetId)
+                      }
+                    : undefined
+                }
+                // Where this asset's signatures stand: the server's verdict from the last bundle,
+                // and this device's baseline (backend roadmap §32).
+                signatureContext={
+                  logSheet
+                    ? {
+                        owner: toIdString(entry.assetId),
+                        states: logSheet.signatureStates,
+                        baselines: logSheet.signatureBaselines
                       }
                     : undefined
                 }
@@ -944,9 +956,40 @@ export function LogSheetFillPage() {
         setLogSheet({ ...refreshed, entries: enriched })
       }
       setSavedMessage('پاسخ پرسش‌ها ذخیره شد')
+      // Delivered now, not at the next tick. These answers are saved with a button, once or a
+      // few times a round, and the supervisor reads them live; waiting for the timer (30 s by
+      // default, up to an hour when a tablet's interval has been raised) is what made a second
+      // save look as if it never left the device. Not awaited: the save is complete on the
+      // device whatever the network does, and the next tick retries a push that fails here.
+      if (canUseServer) {
+        void syncManager.pushProgressNow().then(() => refreshSheetFormDelivery(localId))
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'خطا در ذخیره')
     }
+  }
+
+  /**
+   * Re-reads only where the round's answers stand with the server, after a push.
+   *
+   * Only these fields: the rest of the page's copy carries NFC-enriched entries and whatever an
+   * open dialog is showing, and a whole-row refresh here could pull the ground from under it.
+   */
+  const refreshSheetFormDelivery = async (sheetLocalId: string) => {
+    const stored = await getLogSheet(sheetLocalId)
+    if (!stored) return
+    setLogSheet(prev =>
+      prev && prev.localId === stored.localId
+        ? {
+            ...prev,
+            sheetFormLocallyEditedAt: stored.sheetFormLocallyEditedAt,
+            sheetFormDeliveredAt: stored.sheetFormDeliveredAt,
+            progressSyncStatus: stored.progressSyncStatus,
+            progressSyncedAt: stored.progressSyncedAt,
+            progressError: stored.progressError
+          }
+        : prev
+    )
   }
 
   // -------------------------------------------------------------------------
@@ -1618,6 +1661,16 @@ export function LogSheetFillPage() {
           values={sheetAnswers}
           readOnly={!canEdit}
           savedAt={logSheet.sheetFormLocallyEditedAt}
+          delivery={sheetFormDelivery(logSheet)}
+          deliveryError={logSheet.progressError}
+          // A round-level signature may cover every asset's readings (ROUND scope), so the card
+          // gets the stored entries beside the server's verdicts and this device's baselines.
+          signatureContext={{
+            owner: 'sheet',
+            states: logSheet.signatureStates,
+            baselines: logSheet.signatureBaselines,
+            roundEntries: logSheet.entries
+          }}
           attachmentContext={{
             logSheetLocalId: logSheet.localId,
             // May be absent for a sheet raised offline; the upload queue skips those rows until

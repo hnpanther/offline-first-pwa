@@ -403,6 +403,35 @@ Outcomes: `SAVED` / `NO_CHANGE` are accepted; `SUPERSEDED`, `CANCELLED`, `EXPIRE
 
 Regression: [`progressSync.test.ts`](../src/services/sync/progressSync.test.ts).
 
+#### The round's own answers are pushed when they are saved
+
+Reported from the field: online, the first «ذخیره پرسش‌ها» reached the panel and the second and
+third did not, until the final submit. Three causes, each enough on its own, all fixed:
+
+1. **They waited for the timer.** An asset save is reported on the next tick on purpose — one
+   request per asset save would multiply the fleet's cost by the size of a round (backend roadmap
+   §3). The round-level answers are saved with a button, once or a few times a round, and the
+   supervisor reads them live; waiting up to the sync interval (30 s by default, up to an hour on
+   a tablet whose interval was raised) looked exactly like «not sent». **«ذخیره پرسش‌ها» now calls
+   `syncManager.pushProgressNow()`**: the progress pass only — no inbox pull, no submit — gated on
+   the same permission and session as the timer's, never throwing, and the next tick retries it if
+   it fails. Both passes run in one serial lane (`progressLane`), so they never build payloads from
+   the same markers at once.
+2. **A bundle merge could overwrite a save that landed during it** — see «Decided inside the write»
+   under the bundle merge.
+3. **A bundle older than what the device had delivered put the previous answers back.** A bundle
+   fetched a moment before a push landed and merged a moment after it — the push having already
+   cleared the marker — carried the server's previous answers, and the merge let the server win.
+   Now an accepted push that carried the answers records the server's `savedAt` as
+   `sheetFormDeliveredAt`, and the merge keeps the device's answers while the bundle's
+   `sheetFormUpdatedAt` is **older** than that. Server clock on both sides; a supervisor's later
+   correction in the panel is newer and still wins.
+
+The card says where the saved answers are — «روی دستگاه ذخیره شد؛ در صف ارسال», «به سرور رسیده‌اند»
+or the server's refusal — from `sheetFormDelivery` (`utils/sheetFormDelivery.ts`), so «ذخیره شد»
+is never read as «the supervisor can see it». Regression:
+[`sheetFormDelivery.test.ts`](../src/services/sync/sheetFormDelivery.test.ts).
+
 ### 4. Collect what is pending
 
 Log sheets and fault reports in parallel. Fault reports are collected **only if the session
@@ -823,6 +852,30 @@ single condition rather than a disjunction.
 from the server, so a marker still standing describes an opinion that no longer exists. Markers
 are also cleared outright when the server accepts the work. Both, not one — the reopen-and-continue
 path turns a delivered row back into a draft, which re-arms the gate for anything left behind.
+
+#### Decided inside the write
+
+The ordinary refresh of a round being walked reads the stored row, then awaits — the context
+merge, the session user — and only then writes. An operator can save an asset or the round's
+questions in that gap, and a write built from the earlier read put back the values the save had
+just replaced **and cleared its marker**, so the save vanished without ever being pushed. The
+ordinary branch now writes through `updateLogSheetFrom(localId, current => …)`: the row is re-read
+**inside one `rw` transaction**, and `mergeValuesFromRow` — the pure half of the merge that decides
+entries, round answers and signature baselines — runs against it there. A save is either before
+the transaction, and seen by the decision, or after it, and untouched. The builder must be
+synchronous: an IndexedDB transaction commits as soon as nothing is pending on it. The
+reset-draft and mark-synced branches hand the row to the server's version on purpose (with an
+archive first when work would be lost) and keep their single read.
+
+#### Signature verdicts (backend roadmap §32)
+
+The bundle carries `signatureStates` — the server's verdict (`VALID`, `STALE`, `NOT_BOUND`) for
+every signature on the round, keyed by owner and field — and the merge stores it with
+`signatureBaselines`: for each `VALID` signature, this device's fingerprint of the answers it
+covers **as this merge delivered them**. The field then shows «امضا پیش از تغییر …» when the
+answers on screen no longer match that baseline, before anything is saved; a drawing not yet
+delivered is judged against the `localFingerprint` taken when it was drawn. A device fingerprint
+is only ever compared with another device fingerprint, never with the server's hash.
 
 #### Why nothing about `formData` can answer this
 

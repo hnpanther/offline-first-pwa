@@ -60,6 +60,13 @@ class SyncManager {
   private intervalId: ReturnType<typeof setInterval> | null = null
   private intervalMs = 30_000
   private abortController: AbortController | null = null
+  /**
+   * Progress pushes, one after another. The timer's pass and an immediate request
+   * (`pushProgressNow`) both join this lane, so two passes never build payloads from the same
+   * markers at once — which would be harmless on the server (it is idempotent by value) but
+   * would send the same answers twice.
+   */
+  private progressLane: Promise<void> = Promise.resolve()
 
   start(intervalMs?: number): void {
     if (intervalMs) this.intervalMs = intervalMs
@@ -331,10 +338,38 @@ class SyncManager {
    * undelivered work.
    */
   private async pushProgress(): Promise<void> {
+    const pass = this.progressLane.then(async () => {
+      try {
+        await pushPendingLogSheetProgress(this.abortController?.signal)
+      } catch (err) {
+        console.warn('Log sheet progress pass failed', err)
+      }
+    })
+    this.progressLane = pass
+    return pass
+  }
+
+  /**
+   * Delivers pending progress now rather than at the next tick — for a save the operator makes
+   * deliberately, with a button, and expects the supervisor to see.
+   *
+   * Only the progress lane: no inbox pull and no submit batch, so it costs one small request.
+   * Used for the round's own questions, which are saved once or a few times per round; an asset
+   * save stays on the timer, because a round of forty assets would otherwise be forty requests
+   * (backend roadmap §3 — the inbox tick is already the fleet's cost driver).
+   *
+   * Never throws. Offline, signed out, or without the progress permission it does nothing, and
+   * the next tick delivers the same answers.
+   */
+  async pushProgressNow(): Promise<void> {
+    if (!navigator.onLine) return
     try {
-      await pushPendingLogSheetProgress(this.abortController?.signal)
+      const session = await getAuthSession()
+      if (!session || !hasPermission(session, PERM_LOG_SHEET_PROGRESS)) return
+      if (!(await ensureSessionUserId())) return
+      await this.pushProgress()
     } catch (err) {
-      console.warn('Log sheet progress pass failed', err)
+      console.warn('Immediate progress push failed', err)
     }
   }
 

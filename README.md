@@ -91,6 +91,14 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **History & archives** — completed work plus per-user snapshots on shared tablets, with a per-asset restore back into a sheet that was reassigned and came back; the round's own answers («پرسش‌های این کار») are archived and restorable the same way
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
+- **Searchable choice lists** — a `select` / `multiselect` with more than eight options becomes a
+  search box (Persian-aware: «ي/ی», «ك/ک», ZWNJ, Persian/Arabic digits — the same table of cases the
+  panel runs); where the field allows it, an answer that is not listed can be typed and is marked
+  «دستی». The server decides whether a typed answer is acceptable
+- **Signature field** — drawn on a 640×320 pad and stored as an image; the server stamps who signed,
+  when, and a hash of what the signature covers (the same form, the whole round, or nothing). When
+  a covered answer changes after signing, the field says «امضا پیش از تغییر … گرفته شده» so the
+  operator can sign again
 - **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
 - **Device enrolment** — when the server turns it on (backend Settings, off by default), a
   tablet that is not enrolled sees «ثبت این دستگاه» under the login form: it shows a request
@@ -134,6 +142,9 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
   راند در حال انجام همیشه چنین چیزی دارد. به‌جایش «آخرین ارسال پیشرفت به سرور» در صفحه‌ی تکمیل
   نمایش داده می‌شود.
 - **آفلاین هیچ فرقی نمی‌کند.** گزارش در صف می‌ماند و با برگشت شبکه ارسال می‌شود.
+- **پاسخ «پرسش‌های این کار» بلافاصله ارسال می‌شود.** ذخیره‌ی دارایی‌ها با tick بعدی گزارش می‌شود،
+  ولی «ذخیره پرسش‌ها» اگر دستگاه آنلاین باشد همان لحظه به سرور می‌رود و زیر دکمه نوشته می‌شود که
+  پاسخ‌ها در صف‌اند، به سرور رسیده‌اند یا سرور آن‌ها را نپذیرفته است.
 
 جزئیات: [docs/sync.md](docs/sync.md) و در بک‌اند `docs/log-sheets.md` §3.5.
 

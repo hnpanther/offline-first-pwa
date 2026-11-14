@@ -145,6 +145,12 @@ export interface ServerLogSheet {
   sheetFieldDefinitionsSnapshot?: FieldDefinition[] | null
   /** The answers to those questions, keyed by field key. Null when nobody has answered. */
   sheetFormData?: Record<string, unknown> | null
+  /**
+   * Server time the answers last changed (`log_sheets.sheet_form_updated_at`) — on the wire since
+   * V9, declared so a merge can tell answers older than this device's last delivery from newer
+   * ones (`LogSheet.sheetFormDeliveredAt`).
+   */
+  sheetFormUpdatedAt?: number | null
 }
 
 /** Server-generated rows for a log sheet (authoritative asset list). */
@@ -192,6 +198,11 @@ export interface LogSheetBundleDto {
   sheet: ServerLogSheet
   entries: ServerLogSheetEntry[]
   context: LogSheetContextDto | null
+  /**
+   * The server's verdict on each signature on this round (backend roadmap §32) — see
+   * `LogSheet.signatureStates`. Absent from an older server.
+   */
+  signatureStates?: Record<string, string>
 }
 
 export interface LogSheetInboxResponse {

@@ -71,6 +71,7 @@ export type FormFieldType =
   | 'audio'
   | 'video'
   | 'location'
+  | 'signature'
 
 export interface FormFieldOption {
   value: string
@@ -89,6 +90,8 @@ export interface FormField {
   unit?: string
   defaultValue?: unknown
   helperText?: string
+  /** A choice field that accepts a typed answer outside `options` — `validation.allowCustom`. */
+  allowCustom?: boolean
 }
 
 export interface SyncState {
@@ -534,6 +537,34 @@ export interface LogSheet {
    * the save itself, and cleared when the server accepts it.
    */
   sheetFormLocallyEditedAt?: number
+  /**
+   * Server time (`savedAt`) of the accepted progress push that last carried this device's
+   * answers to the round's questions.
+   *
+   * What lets a bundle merge recognise answers OLDER than the ones this device already
+   * delivered: a bundle fetched just before that push landed and merged just after it — once the
+   * marker above is cleared — would otherwise put the server's previous answers back on the
+   * device. Server clock on both sides of the comparison (`ServerLogSheet.sheetFormUpdatedAt`).
+   * Plain, non-indexed property — no Dexie version bump.
+   */
+  sheetFormDeliveredAt?: number
+
+  /**
+   * The server's verdict on every signature this round holds (backend roadmap §32), keyed
+   * `"sheet:<fieldKey>"` / `"<assetId>:<fieldKey>"`, valued `VALID` / `STALE` / `NOT_BOUND` /
+   * `UNVERIFIED` — replaced whole on every bundle merge. Only the server can judge a signature;
+   * see `utils/signatureVerdict.ts`.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  signatureStates?: Record<string, string>
+
+  /**
+   * Device-only fingerprints of what each VALID signature covered when it arrived, so an answer
+   * changed on this tablet afterwards shows the signature as out of date before the next sync.
+   * Never sent anywhere. Plain, non-indexed property — no Dexie version bump.
+   */
+  signatureBaselines?: Record<string, string>
 
   /**
    * How the operator must identify each asset on **this** round — frozen by the server when the

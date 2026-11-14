@@ -233,6 +233,11 @@ async function applyProgressOutcome(
   await updateLogSheet(sheet.localId, {
     entries,
     ...(sheetFormUnchanged ? { sheetFormLocallyEditedAt: undefined } : {}),
+    // The server now holds these answers as of `savedAt`; a bundle older than that is older
+    // than what this device delivered (see `LogSheet.sheetFormDeliveredAt`).
+    ...(pushedSheetFormMarker != null && result.savedAt != null
+      ? { sheetFormDeliveredAt: result.savedAt }
+      : {}),
     progressSyncStatus: 'synced',
     progressSyncedAt: result.savedAt ?? Date.now(),
     progressError: undefined

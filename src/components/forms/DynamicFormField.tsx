@@ -36,6 +36,8 @@ import {
 import type { FieldValidation } from '@/types/sync'
 import type { ScanFieldConfig } from '@/services/scan/scanFieldFill'
 import { ScanFieldAdornment } from './ScanFieldAdornment'
+import { ChoiceAutocomplete } from './ChoiceAutocomplete'
+import { planChoiceControl } from './choiceControl'
 
 interface DynamicFormFieldProps {
   field: FormField
@@ -232,6 +234,7 @@ export function DynamicFormField({
   // A failed read belongs beside the field it failed for, not in a toast that outlives it.
   const [scanError, setScanError] = useState<string | null>(null)
   const options = normalizeFieldOptions(field.options)
+  const choicePlan = planChoiceControl(options.length, field.allowCustom)
   const effectiveRangeValidation = resolveRangeValidation(field, rangeValidation)
   // A choice carries severity too, so the watch has to cover it. Leaving the old
   // `field.type !== 'number'` gate here kept the subscription disabled for a select and the
@@ -388,6 +391,31 @@ export function DynamicFormField({
       )
 
     case 'select':
+      // Roadmap §31: a long list is searched, and a free-entry field is written into. The plan
+      // is a pure function (choiceControl.ts) because this project has no render tests.
+      if (choicePlan.searchable) {
+        return (
+          <Controller
+            name={field.name}
+            control={control}
+            defaultValue={field.defaultValue ?? ''}
+            rules={effectiveRules}
+            render={({ field: f }) => (
+              <ChoiceAutocomplete
+                multiple={false}
+                label={label}
+                options={options}
+                freeEntry={choicePlan.freeEntry}
+                f={f}
+                error={error}
+                helper={helper}
+                rangeSeverity={rangeSeverity}
+                validation={effectiveRangeValidation}
+              />
+            )}
+          />
+        )
+      }
       return (
         <Controller
           name={field.name}
@@ -455,6 +483,31 @@ export function DynamicFormField({
       )
 
     case 'multiselect':
+      // A column of thirty checkboxes is where readings get mis-tapped (roadmap §31): above the
+      // threshold it becomes chips over a search box, with free entry where the field allows it.
+      if (choicePlan.searchable) {
+        return (
+          <Controller
+            name={field.name}
+            control={control}
+            defaultValue={field.defaultValue ?? []}
+            rules={effectiveRules}
+            render={({ field: f }) => (
+              <ChoiceAutocomplete
+                multiple
+                label={label}
+                options={options}
+                freeEntry={choicePlan.freeEntry}
+                f={f}
+                error={error}
+                helper={helper}
+                rangeSeverity={rangeSeverity}
+                validation={effectiveRangeValidation}
+              />
+            )}
+          />
+        )
+      }
       return (
         <Controller
           name={field.name}

@@ -56,6 +56,9 @@ export type FieldDataType =
   | 'audio'
   | 'video'
   | 'location'
+  // Backend roadmap §32: a drawing that vouches for the other answers of its form. Stored as an
+  // IMAGE attachment; the signer and the hash are stamped by the server (utils/signatureValue.ts).
+  | 'signature'
 
 export interface FieldValidationRange {
   min?: number
@@ -173,6 +176,23 @@ export interface FieldValidation {
     sources?: Array<'NFC' | 'QR' | 'BARCODE'>
     manual?: boolean
   }
+  /**
+   * A `select` / `multiselect` that accepts an answer which is NOT one of its `options`
+   * (backend roadmap §31, phase 1). Stored only when true; only a literal `true` opens it, so a
+   * blob this build cannot read stays the narrower list.
+   *
+   * The typed answer is stored exactly where a chosen option would be — a string, or an element
+   * of the array — so nothing in sync, merge or revisions changes shape. «Was it typed?» is
+   * answered at read time by «is it in the options». It is never a warning or a danger, and the
+   * server is the boundary: it accepts one only for a field whose frozen definition says so.
+   *
+   * Searching a long list is NOT this flag: it is automatic above a threshold
+   * (`components/forms/choiceControl.ts`) because it changes nothing the server accepts.
+   *
+   * Threaded through `FieldValidationSupport.build(...)` on the server, so it survives an edit of
+   * the field.
+   */
+  allowCustom?: boolean
   /*
    * `allowNegative` used to live here. It is gone, and not just unused: the backend never had the
    * concept, the web panel could not set it, and `FieldValidationSupport.build(...)` rebuilds this

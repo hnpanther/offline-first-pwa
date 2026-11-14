@@ -1038,6 +1038,34 @@ added — because a `Map` key is compared by `SameValueZero`, so keying on anyth
 speed-up into a silently wrong match. `app.sync.batch-max-items` is 500, so the worst case was
 250,000 comparisons on the main thread of a tablet that is also rendering.
 
+### A bundle merge decides inside its write — never from a row read before its awaits
+
+`applyLogSheetBundle` read the stored row, awaited the context merge and the session, and then wrote
+a patch decided from that earlier read. A save made in the gap — an asset or the round's questions
+— was overwritten and its marker cleared, so it vanished without ever being pushed. The ordinary
+branch now writes through `updateLogSheetFrom(localId, current => …)` with `mergeValuesFromRow`,
+inside one `rw` transaction. **Any writer that decides what to write from what the row holds must
+do the same**; the builder must be synchronous, or the IndexedDB transaction commits early.
+
+### Delivered round answers are not taken back by an older bundle
+
+A progress push that carried the round's answers records the server's `savedAt` as
+`sheetFormDeliveredAt`; a bundle whose `sheetFormUpdatedAt` is older keeps the device's answers.
+Without it, a bundle fetched before the push landed and merged after it put the previous answers
+back — and the next save sent them to the server again. Compare server time with server time only.
+
+### Round-level answers are pushed at once; asset saves are not
+
+`syncManager.pushProgressNow()` after «ذخیره پرسش‌ها» — a deliberate, rare save the supervisor reads
+live. Do not add it to the per-asset save: one request per asset multiplies the fleet's cost by the
+size of a round (backend roadmap §3). Both paths share `progressLane`, so they never push the same
+markers twice at once.
+
+### No comment between two `case` labels
+
+`no-fallthrough` reads a comment between `case 'image':` and `case 'signature':` as an intended
+fall-through without the marker, and fails the lint. Put the comment above the first label.
+
 ### Lint
 `eslint.config.js` is flat config (ESLint 9); the `lint` script no longer passes `--ext`, which
 flat config rejects. The gate was previously failing to start at all, so it contributed nothing.

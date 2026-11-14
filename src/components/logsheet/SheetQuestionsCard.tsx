@@ -15,9 +15,10 @@ import SaveIcon from '@mui/icons-material/Save'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
-import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
+import { DynamicClassForm, type SignatureContext } from '@/components/forms/DynamicClassForm'
 import { formatJalaliDateTime } from '@/utils/formatDate'
 import type { FieldDefinition } from '@/types/sync'
+import type { SheetFormDelivery } from '@/utils/sheetFormDelivery'
 
 interface SheetQuestionsCardProps {
   /** The round's own questions, frozen onto the sheet when it was raised. */
@@ -40,6 +41,12 @@ interface SheetQuestionsCardProps {
     logSheetServerId?: string
   }
   onSave: (values: Record<string, unknown>) => Promise<void>
+  /** Where the saved answers stand with the server — see `sheetFormDelivery`. */
+  delivery?: SheetFormDelivery
+  /** The server's reason, when `delivery` is `refused`. */
+  deliveryError?: string
+  /** Where the round's signatures stand — see `DynamicClassForm`'s prop of the same name. */
+  signatureContext?: SignatureContext
 }
 
 /**
@@ -78,7 +85,10 @@ export function SheetQuestionsCard({
   readOnly,
   savedAt,
   attachmentContext,
-  onSave
+  onSave,
+  delivery,
+  deliveryError,
+  signatureContext
 }: SheetQuestionsCardProps) {
   const {
     control,
@@ -159,6 +169,7 @@ export function SheetQuestionsCard({
             readOnly={readOnly}
             readOnlyValues={readOnly ? values : undefined}
             attachmentContext={attachmentContext}
+            signatureContext={signatureContext}
           />
 
           {!readOnly && (
@@ -170,6 +181,24 @@ export function SheetQuestionsCard({
               >
                 تا وقتی ذخیره نکنید، این پاسخ‌ها به سرور ارسال نمی‌شوند.
               </Typography>
+              {/* Where the last SAVED answers are — the device, the queue, or the server — so
+                  «ذخیره شد» is never read as «the supervisor can see it». */}
+              {!isDirty && delivery === 'queued' && (
+                <Typography variant="caption" color="text.secondary" display="block" data-testid="sheet-form-delivery">
+                  روی دستگاه ذخیره شد؛ در صف ارسال به سرور.
+                </Typography>
+              )}
+              {!isDirty && delivery === 'delivered' && (
+                <Typography variant="caption" color="success.main" display="block" data-testid="sheet-form-delivery">
+                  پاسخ‌های ذخیره‌شده به سرور رسیده‌اند.
+                </Typography>
+              )}
+              {delivery === 'refused' && (
+                <Typography variant="caption" color="error.main" display="block" data-testid="sheet-form-delivery">
+                  سرور این پاسخ‌ها را نپذیرفت{deliveryError ? `: ${deliveryError}` : '.'} پاسخ‌ها روی دستگاه
+                  مانده‌اند و با «ثبت نهایی» دوباره ارسال می‌شوند.
+                </Typography>
+              )}
               <Button
                 type="submit"
                 variant={isDirty ? 'contained' : 'outlined'}
