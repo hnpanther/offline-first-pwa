@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react'
+import { requiredFromBundles, syncRequiredLookups } from '@/services/lookups/lookupSync'
 import { pullInbox } from '@/services/sync/pullInbox'
 import { ensureSessionUserId } from '@/services/auth/sessionContext'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
@@ -37,6 +38,9 @@ export async function pullAndMergeInbox(setInbox: SetInbox): Promise<void> {
   const sessionUserId = await ensureSessionUserId()
   if (sessionUserId) {
     await mergeInboxIntoLocalSheets(assigned)
+    // The reference lists the assigned rounds need, and only those (backend roadmap §31). Never
+    // throws: a lookup field without its list falls back to entering a code.
+    await syncRequiredLookups(requiredFromBundles(assigned))
   }
   const syncAt = Date.now()
   await saveInboxSnapshot({

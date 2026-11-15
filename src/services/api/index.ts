@@ -191,6 +191,40 @@ export interface LogSheetContextDto {
    * `sheetFieldDefinitionsSnapshot`, which is null on a custom sheet until its first answer.
    */
   sheetFieldDefinitions?: FieldDefinition[]
+  /**
+   * The reference lists this round's lookup fields draw from, with the revision each stands at
+   * (backend roadmap §31 Phase 2). The items never travel in a bundle — they arrive once per
+   * device through `GET /api/lookups/{code}/items` (services/lookups/lookupSync.ts).
+   */
+  requiredLookups?: RequiredLookup[]
+}
+
+/** One list a round needs on the device. `code` is the list's identity; `revision` its version. */
+export interface RequiredLookup {
+  code: string
+  name: string
+  revision: number
+}
+
+/** One page of a reference list for a device — `GET /api/lookups/{code}/items`. */
+export interface LookupDevicePage {
+  code: string
+  name: string
+  revision: number
+  serverTime: number
+  leaseUntil: number
+  columns: Array<{ key: string; label: string; searchable: boolean; display: boolean }>
+  items: Array<{
+    id: number
+    code: string
+    label: string
+    active: boolean
+    attributes: Record<string, string>
+    updatedAt: number
+  }>
+  hasMore: boolean
+  nextSince: number
+  nextAfterId: number
 }
 
 /** Self-contained server payload for one log sheet (metadata + entries + scoped context). */
@@ -223,6 +257,21 @@ export async function fetchLogSheetBundle(
   signal?: AbortSignal
 ): Promise<LogSheetBundleDto> {
   return apiClient.get<LogSheetBundleDto>(`/api/log-sheets/${serverId}/bundle`, signal)
+}
+
+/**
+ * One page of a reference list (backend roadmap §31 Phase 2). Refused with 403 when no open round
+ * assigned to this user draws from the list — the caller then drops its copy.
+ */
+export async function fetchLookupPage(
+  code: string,
+  since: number,
+  afterId: number,
+  limit: number,
+  signal?: AbortSignal
+): Promise<LookupDevicePage> {
+  const query = `since=${encodeURIComponent(String(since))}&afterId=${encodeURIComponent(String(afterId))}&limit=${limit}`
+  return apiClient.get<LookupDevicePage>(`/api/lookups/${encodeURIComponent(code)}/items?${query}`, signal)
 }
 
 export async function claimLogSheet(

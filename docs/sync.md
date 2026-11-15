@@ -621,6 +621,25 @@ the operator records it rather than after.
 
 The operator's sheets: assigned plus claimable pool.
 
+### Reference lists (backend roadmap §31 Phase 2)
+
+Right after the inbox merge, `syncRequiredLookups(requiredFromBundles(assigned))` brings the
+device's lists in line with what the **assigned** rounds declared in `context.requiredLookups` —
+which is exactly the server's grant. It never throws: a list problem must not stop the inbox, and a
+lookup field always has code-only entry to fall back on.
+
+| Situation | What it does |
+|---|---|
+| A list no assigned round needs | dropped (set difference) |
+| Never fetched, a pass unfinished, a revision behind the round's, or past half its lease | fetched page by page (500) from the stored `(updatedAt, id)` cursor — so an interrupted pass resumes and a held list fetches only what changed. The revision recorded is the **first** page's (backend AGENTS.md #217) |
+| Current and within half its lease | nothing — each page is a row in the server's download log |
+| 403 / 404 | the grant is gone: dropped |
+| Network failure | kept as it is; tried again at the next pull |
+
+A copy is searched only while **usable** — a full pass reached the end, the lease runs, and the
+device clock is not behind the last server time seen (`lookupStore.isUsable`). Otherwise the field
+says why («not on this device», «still syncing», «lease ended») and takes a code.
+
 ### The local-work archive, and the round trip that broke it
 
 There is **one local row per server sheet**, and a tablet is shared. So when a sheet's ownership

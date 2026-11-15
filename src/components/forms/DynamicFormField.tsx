@@ -19,6 +19,9 @@ import { Controller, useWatch, type Control, type RegisterOptions, type Controll
 import type { FormField } from '@/types'
 import { normalizeFieldOptions } from '@/utils/fieldOptions'
 import {
+  entryLimitError,
+  entryLimitSummaryFa,
+  isIntegerOnly,
   evaluateFieldSeverity,
   evaluateOptionSeverity,
   hasStateCondition,
@@ -131,6 +134,13 @@ interface NumericFieldInputProps {
   f: ControllerRenderProps<any, string>
   error?: string
   rangeSeverity: FieldValidationSeverity
+  /**
+   * The value is outside the field's entry limit and will not be saved (backend roadmap §40).
+   * Shown as an error rather than a severity colour: it is a refusal, not a judgement.
+   */
+  refused: boolean
+  /** Only whole numbers — the keypad then has no separator. */
+  integerOnly: boolean
   helper: { text: string; color?: 'warning.main' | 'error.main' } | null
   scan?: ScanFieldConfig
   onScanError: (message: string | null) => void
@@ -142,6 +152,8 @@ function NumericFieldInput({
   f,
   error,
   rangeSeverity,
+  refused,
+  integerOnly,
   helper,
   scan,
   onScanError
@@ -164,7 +176,7 @@ function NumericFieldInput({
       label={label}
       type="text"
       placeholder={field.placeholder}
-      error={!!error || rangeSeverity === 'danger'}
+      error={!!error || refused || rangeSeverity === 'danger'}
       helperText={helper?.text}
       FormHelperTextProps={
         helper?.color ? { sx: { color: helper.color, fontWeight: 600 } } : undefined
@@ -176,7 +188,11 @@ function NumericFieldInput({
         // Android keyboards offer no minus key in that layout, which is precisely what the ±
         // button beside the field is for. Do not "fix" this by widening it to text — that hands
         // an operator a full QWERTY for a pressure reading.
-        inputMode: 'decimal',
+        //
+        // `numeric` for a whole-number field (roadmap §40): digits with no separator, so the
+        // slip a limit would refuse is not on the keypad in the first place. The ± button
+        // covers the minus exactly as it does for `decimal`.
+        inputMode: integerOnly ? 'numeric' : 'decimal',
         dir: 'ltr',
         autoComplete: 'off'
       }}
@@ -289,11 +305,23 @@ export function DynamicFormField({
   const rangeFeedback = isChoice
     ? optionSeverityMessage(rangeSeverity)
     : severityMessage(rangeSeverity)
+  // The entry limit (backend roadmap §40), said as it is typed rather than only when the form
+  // refuses to save. The same function is the form's `validate` rule (`buildValidationRules`),
+  // so what is shown here and what is refused there cannot disagree.
+  const entryRefusal = field.type === 'number'
+    ? entryLimitError(watchedValue, effectiveRangeValidation)
+    : null
+  const entrySummary = field.type === 'number'
+    ? entryLimitSummaryFa(effectiveRangeValidation)
+    : null
 
   const buildHelperParts = (): { text: string; color?: 'warning.main' | 'error.main' } | null => {
     if (error) return { text: error }
+    // Before the band's colour: a refused value is not going to be stored, so what the band
+    // would have said about it is beside the point.
+    if (entryRefusal) return { text: entryRefusal, color: 'error.main' }
     if (rangeFeedback) return { text: rangeFeedback, color: rangeFeedbackColor(rangeSeverity) }
-    const parts = [field.helperText, rangeSummary].filter(Boolean)
+    const parts = [field.helperText, entrySummary, rangeSummary].filter(Boolean)
     if (parts.length === 0) return null
     return { text: parts.join(' · ') }
   }
@@ -322,6 +350,8 @@ export function DynamicFormField({
                 f={f}
                 error={error}
                 rangeSeverity={rangeSeverity}
+                refused={entryRefusal != null}
+                integerOnly={isIntegerOnly(effectiveRangeValidation)}
                 helper={helper}
                 scan={scan}
                 onScanError={setScanError}

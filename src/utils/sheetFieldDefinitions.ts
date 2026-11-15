@@ -141,6 +141,15 @@ function overrideValidation(
     if (override.conditions == null) delete validation.conditions
     else validation.conditions = override.conditions
   }
+  // What can be entered at all on this machine (backend roadmap §40) — under the same rule, in
+  // both modes: the bound so often belongs to the asset, an 8-lamp and a 32-lamp panel of one
+  // class. `null` drops the class's limit for this machine. Left out, the device would refuse a
+  // reading the server accepts, or accept one the server then refuses at sync — either way on
+  // the one asset the administrator singled out.
+  if ('entryRange' in override) {
+    if (override.entryRange == null) delete validation.entryRange
+    else validation.entryRange = override.entryRange
+  }
   return validation
 }
 

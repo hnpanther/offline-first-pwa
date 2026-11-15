@@ -3,6 +3,7 @@
  * Ensures inbox cache and open drafts from a previous login are not shown to the next user.
  */
 
+import { clearAllLookups } from '@/services/lookups/lookupStore'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
 import { getAllLogSheets, getLogSheet, updateLogSheet } from '@/services/storage'
@@ -246,6 +247,10 @@ export async function activateUserSession(
 export async function clearUserSessionContext(): Promise<void> {
   await db.syncMeta.delete(SESSION_USER_ID_KEY)
   await clearInboxSnapshot()
+  // Reference lists may be personal data (a personnel list is names), so — unlike every other
+  // reference store on a shared tablet — they do not stay for the next user (backend roadmap
+  // §31, «the device lease»). Nothing recorded is lost: each answer carries its own label.
+  await clearAllLookups()
 }
 
 export function isLogSheetAccessibleToUser(

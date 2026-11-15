@@ -1358,6 +1358,49 @@ reading.
 A field that genuinely cannot go below zero is expressed as a danger range with `min: 0`. That
 surfaces the mistake as a breach instead of silently swallowing the keystroke.
 
+### A field that draws from a reference list (backend roadmap §31 Phase 2)
+
+`lookup` / `lookupmulti` name a list (`validation.lookupList`) — personnel, contractors — that never
+travels in a bundle. `LookupFieldInput` has two modes and always says which:
+
+| The list on this device | The field |
+|---|---|
+| present, complete, lease running | searches the device's own copy (Persian-folded, active items only, display columns under each) |
+| absent, still syncing, or its lease ended | **code-only** — «فهرست مرجع روی این دستگاه نیست — کد را وارد کنید»; the server resolves the code at sync |
+
+The value is `{ code, label }` (or an array). The server stamps it — a known code takes the list's
+label, a retired or unknown one is accepted and marked `INACTIVE` / `UNKNOWN`, never refused — and
+the device shows a recorded answer exactly as stamped («· غیرفعال», «· خارج از فهرست»). Re-sending an
+unchanged answer changes nothing on the server.
+
+How the lists arrive, how long they stay and when they go: [docs/sync.md](docs/sync.md) «Reference
+lists» and [docs/storage.md](docs/storage.md) `version(4)`. In short — only the lists the user's
+assigned open rounds need, only the columns marked for devices, for the list's lease after the last
+sync, and **cleared at sign-out**. `src/services/lookups/lookups.test.ts` covers it.
+
+### An entry limit — what a number may be at all (backend roadmap §40)
+
+What a field **refuses** is not its bands; it is `validation.entryRange` (`{min, max}`) and
+`validation.integerOnly`, for a value that cannot physically be otherwise — lamps lit out of a
+panel's total, a dial's printed scale. A value outside it is not stored and not judged:
+
+| Where | What happens |
+|---|---|
+| Typing | the helper under the field says why, in red and naming the limit («مقدار باید بین 0 و 32 باشد.»); before anything is typed it shows «مجاز: 0–32، فقط عدد صحیح» |
+| Saving the asset (or a round-level question) | `buildValidationRules` adds a `validate` rule from `entryLimitError`, so the form will not save — the one moment the operator can still correct it |
+| Submitting the round | `findSubmitBlockingIssues` also reports a stored value outside the limit (one a build before the limit saved), naming the asset and the field, so the operator can open the asset and fix it |
+| The server | refuses it at a progress push and at submit with `VALIDATION_ERROR` — which opens correct-and-resubmit |
+
+`integerOnly` asks for `inputMode: 'numeric'` (no separator on the keypad; `±` still covers the
+minus). A typed separator is **not** stripped: dropping it would turn `12.5` into `125`, a
+different reading that may well sit inside the limit — the value is refused by name instead.
+
+A per-asset `entryRange` in `fieldOverridesSnapshot` replaces the class's (an 8-lamp and a 32-lamp
+panel of one class), and `null` removes it for that machine; `integerOnly` stays the class's. Every
+unreadable shape — absent, malformed, inverted — reads as **no limit**, exactly as on the server:
+a device stricter than the server strands a round nobody can fix. `src/utils/fieldEntryLimit.test.ts`
+covers all of it.
+
 `src/utils/fieldValidation.test.ts` covers this end to end — both boundaries of both bands, with
 negative, zero and positive readings, plus the typing, blur and `±` paths.
 
@@ -1590,12 +1633,16 @@ A sheet only becomes **failed** when the server answered and said no, for one of
 Three are not the operator's to fix (a missing server id, a sheet deleted server-side, an asset
 that is not part of the sheet) and need a supervisor to reopen or extend it.
 
-The fourth — **a required field left empty** — is different, and is handled in two places:
+The fourth — **a field value the server refuses** (a required field left empty, or since backend
+roadmap §40 a number outside its entry limit) — is different, and is handled in two places:
 
 **Before submitting.** The app now checks required fields itself and refuses a final submit the
 server would certainly reject, naming the asset and the field: «فیلدهای الزامی تکمیل نشده‌اند —
 پمپ ۱: دما». The operator sees this while still standing at the form, instead of discovering it
 after the work is already stuck.
+A number outside its entry limit is named the same way, with the limit: «مقدار خارج از حد مجاز —
+تابلو ۱: چراغ روشن (مقدار باید بین 0 و 32 باشد.)». The entry form already refuses one, so this is
+reached only by a value a build before the limit stored.
 
 The check mirrors the server's own rules exactly, including the awkward ones — an unchecked
 required checkbox and a photo field whose only image was deleted both count as empty. It is
@@ -1822,7 +1869,7 @@ Each assigned item (and claim/bundle responses) contains:
 | `sheet` | Server log sheet metadata (`ServerLogSheet`) — status, dueAt, assignee, template, scope, … |
 | `entries` | Rows to fill (`ServerLogSheetEntry`) — assetId, assetName, nfcTagId, classId, formData, … |
 | `context` | Scoped reference slice for **this sheet only** — locations, systems, functions, subFunctions, assetEntries, assetClasses, fieldDefinitions, optional `scopeDisplayLabel` |
-| `sheet.fieldOverridesSnapshot` | Optional. Per-asset field overrides frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Copied onto the stored record by `applyLogSheetBundle` and applied through `sheetFieldDefinitions(sheet, classId, fallback, assetId)`. Under `source: RANGES_ONLY` the bands are display only — the server recomputes severity from its own copy, so a client that ignores them still syncs correct data. Under `FULL` it also **adds and removes fields**, so it decides which inputs the form has and what the N-of-M badge counts. May also re-mark a choice field's `warningOptions` / `dangerOptions`, and set or clear a field's `conditions` — which options alert, and **whether a band is judged at all in this state**, are thresholds, so `RANGES_ONLY` carries both. `conditions` is replaced whole rather than merged (it is an ordered first-match statement) and an explicit `null` drops the class's gate for that machine; it is also the one key here that is **not** display-only in effect, since ignoring it paints a stopped pump red while the server records `ok` |
+| `sheet.fieldOverridesSnapshot` | Optional. Per-asset field overrides frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Copied onto the stored record by `applyLogSheetBundle` and applied through `sheetFieldDefinitions(sheet, classId, fallback, assetId)`. Under `source: RANGES_ONLY` the bands are display only — the server recomputes severity from its own copy, so a client that ignores them still syncs correct data. Under `FULL` it also **adds and removes fields**, so it decides which inputs the form has and what the N-of-M badge counts. May also set or clear a number field's `entryRange` (what can be entered at all; `null` drops the class's limit for that machine — not display-only: the form refuses with it), re-mark a choice field's `warningOptions` / `dangerOptions`, and set or clear a field's `conditions` — which options alert, and **whether a band is judged at all in this state**, are thresholds, so `RANGES_ONLY` carries both. `conditions` is replaced whole rather than merged (it is an ordered first-match statement) and an explicit `null` drops the class's gate for that machine; it is also the one key here that is **not** display-only in effect, since ignoring it paints a stopped pump red while the server records `ok` |
 
 Client merge: `mergeLogSheetBundle.ts` applies **server-wins** `bulkPut` for context tables and updates the local `logSheets` row + entries.
 

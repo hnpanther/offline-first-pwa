@@ -33,6 +33,8 @@ import {
   signatureVerdict
 } from '@/utils/signatureVerdict'
 import { LocationFieldInput } from './LocationFieldInput'
+import { LookupFieldInput } from './LookupFieldInput'
+import { isLookupDataType, isLookupMulti, lookupChoices, lookupDisplayValue } from '@/utils/lookupValue'
 import { scanFieldConfig } from '@/services/scan/scanFieldFill'
 import { formatCoordinate, parseCoordinate } from '@/services/device/geolocation'
 import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
@@ -41,6 +43,7 @@ import type { FormField, LogSheetEntryData } from '@/types'
 import { normalizeFieldOptions, resolveOptionLabel } from '@/utils/fieldOptions'
 import { isListedOption } from './choiceControl'
 import {
+  entryLimitError,
   evaluateFieldSeverity,
   optionSeverityMessage,
   supportsSeverity,
@@ -99,6 +102,13 @@ function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: strin
     return { value: formatCoordinate(val) || '—' }
   }
 
+  // A reference-list answer reads as the label it was recorded with, plus the server's verdict
+  // when an item was retired or unknown — never looked up again, since the list may since have
+  // been renamed or be off this device altogether (backend roadmap §31).
+  if (isLookupDataType(def.dataType)) {
+    return { value: lookupDisplayValue(val) ?? '—' }
+  }
+
   const options = normalizeFieldOptions(def.validation?.options)
 
   if (def.dataType === 'checkbox') {
@@ -149,6 +159,14 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
       : {}
   }
 
+  // A reference-list answer is an object or an array; `required` would pass an empty array.
+  // Judged by whether it names at least one code, as the server judges it.
+  if (isLookupDataType(def.dataType)) {
+    return def.required
+      ? { validate: value => lookupChoices(value).length > 0 || 'این فیلد الزامی است' }
+      : {}
+  }
+
   // Same reason as media: a coordinate is an object, and an object is truthy even when it
   // holds nothing usable. Judge it by whether it parses into a real position.
   if (isLocationDataType(def.dataType)) {
@@ -157,8 +175,18 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
       : {}
   }
 
+  // A number's entry limit (backend roadmap §40) refuses the save, which is the whole point of
+  // it: a value outside what is physically possible is a typing error, and the moment it is typed
+  // is the one moment the operator can correct it. The server refuses the same value at sync with
+  // VALIDATION_ERROR, so a build that skipped this would still store nothing wrong — it would only
+  // move the refusal to the end of the round. Never for a field without a limit.
+  const entryLimit = def.dataType === 'number'
+    ? { validate: (value: unknown) => entryLimitError(value, v) ?? true }
+    : {}
+
   return {
     required: def.required ? 'این فیلد الزامی است' : false,
+    ...entryLimit,
 
     ...(v.minLength !== undefined && {
       minLength: { value: v.minLength, message: `حداقل ${v.minLength} کاراکتر لازم است` },
@@ -481,6 +509,29 @@ export function DynamicClassForm({
         const rules = buildValidationRules(def)
         const error = getError(errors, fieldName)
         const gate = gatePlans.get(def.key)
+
+        // A reference-list choice holds an object too — `{ code, label }` — and searches the
+        // device's own copy of its list, or takes a code when the list is not here.
+        if (isLookupDataType(def.dataType)) {
+          return (
+            <Controller
+              key={fieldName}
+              name={fieldName}
+              control={control}
+              rules={rules}
+              render={({ field: f }) => (
+                <LookupFieldInput
+                  label={def.label + (def.required ? ' *' : '')}
+                  listCode={def.validation?.lookupList}
+                  multi={isLookupMulti(def.dataType)}
+                  value={f.value}
+                  onChange={f.onChange}
+                  error={error}
+                />
+              )}
+            />
+          )
+        }
 
         // Neither media nor location goes through DynamicFormField: both hold an object
         // rather than a scalar, and both are captured from the device rather than typed.

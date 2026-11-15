@@ -72,6 +72,9 @@ export type FormFieldType =
   | 'video'
   | 'location'
   | 'signature'
+  // Backend roadmap §31 Phase 2 — rendered by LookupFieldInput, never by DynamicFormField.
+  | 'lookup'
+  | 'lookupmulti'
 
 export interface FormFieldOption {
   value: string
@@ -524,6 +527,12 @@ export interface LogSheet {
    * Dexie version bump, the same as `fieldDefinitions` and `fieldOverridesSnapshot` above.
    */
   sheetFieldDefinitions?: FieldDefinition[]
+  /**
+   * The reference lists this round's lookup fields draw from, as its bundle declared them
+   * (backend roadmap §31 Phase 2). The device keeps a list while any round still open on it needs
+   * one, and drops it when none does — see services/lookups/lookupSync.ts.
+   */
+  requiredLookups?: Array<{ code: string; name: string; revision: number }>
   /** Answers to those questions, keyed by field key. */
   sheetFormData?: Record<string, unknown>
   /**

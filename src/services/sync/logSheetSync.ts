@@ -112,6 +112,13 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
   const sheetFieldsPatch = bundleSheetFields.length > 0
     ? { sheetFieldDefinitions: bundleSheetFields }
     : {}
+  // Which reference lists this round's lookup fields draw from (backend roadmap §31). Absent
+  // from an older server's bundle, and then the round simply asks for nothing — its lookup
+  // fields fall back to entering a code. Present and empty means «this round needs none», which
+  // is also what a round that dropped its last lookup field must say, so it is written as is.
+  const requiredLookupsPatch = Array.isArray(bundle.context?.requiredLookups)
+    ? { requiredLookups: bundle.context!.requiredLookups!.map(l => ({ code: l.code, name: l.name, revision: l.revision })) }
+    : {}
 
   // What this merge does to the values the operator may be editing — entries, round answers,
   // signature baselines — decided from a stored row. The branches that hand the sheet to the
@@ -133,6 +140,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
           ...fieldDefinitionsPatch,
           ...fieldOverridesPatch,
           ...sheetFieldsPatch,
+          ...requiredLookupsPatch,
           ...sheetFormPatch,
           ...signaturePatch,
           // Somebody else's round now; what this device once delivered says nothing about it.
@@ -160,6 +168,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         ...fieldDefinitionsPatch,
         ...fieldOverridesPatch,
         ...sheetFieldsPatch,
+        ...requiredLookupsPatch,
         ...sheetFormPatch,
         ...signaturePatch,
         status: 'submitted',
@@ -206,6 +215,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         ...fieldDefinitionsPatch,
         ...fieldOverridesPatch,
         ...sheetFieldsPatch,
+        ...requiredLookupsPatch,
         ...values.sheetFormPatch,
         ...values.signaturePatch,
         ...(scopeDisplayLabel ? { scopeDisplayLabel } : {})
@@ -242,6 +252,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     ...fieldDefinitionsPatch,
     ...fieldOverridesPatch,
     ...sheetFieldsPatch,
+    ...requiredLookupsPatch,
     ...sheetFormPatch,
     ...signaturePatch,
     createdAt: serverSheet.createdAt ?? now,

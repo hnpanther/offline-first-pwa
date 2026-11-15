@@ -190,6 +190,19 @@ an interrupted upgrade can simply run again.
 It is idempotent and writes per sheet, so an upgrade interrupted halfway leaves every row readable
 and can simply run again.
 
+### `version(4)` — two new stores, nothing else changed
+
+`lookupLists` (keyed by the list's code lower-cased: revision, lease, cursor, the offline columns)
+and `lookupItems` (keyed by the server's item id, indexed by `listId`) — the device's copy of the
+reference lists its open rounds need (backend roadmap §31 Phase 2). No existing store, index or row
+is touched, so the upgrade cannot lose anything already on a tablet.
+
+These two are the **one exception to «reference data survives logout»**: a list may be personal
+data, so it is cleared at sign-out (`clearUserSessionContext`), deleted when its lease ends — online
+or not, at startup and whenever a field reads it — and dropped when no assigned round needs it. Nothing
+an operator recorded goes with it: every lookup answer stores its own `{code, label}`. See
+`services/lookups/` and [sync.md](sync.md) — «Reference lists».
+
 ### The recovery path in `openDatabase()`
 
 ```ts
@@ -208,13 +221,15 @@ wiping a user's database on an unrelated error would be far worse than failing l
 
 ## What survives what
 
-| Event | Reference data | Drafts | Attachments | Settings |
-|---|---|---|---|---|
-| App closed and reopened | ✅ | ✅ | ✅ | ✅ |
-| Logout | ✅ | ✅ | ✅ | ✅ |
-| Browser cache cleared | ❌ | ❌ | ❌ | ❌ |
-| "Clear site data" | ❌ | ❌ | ❌ | ❌ |
-| PWA uninstalled | ❌ | ❌ | ❌ | ❌ |
+| Event | Reference data | Reference **lists** (lookup) | Drafts | Attachments | Settings |
+|---|---|---|---|---|---|
+| App closed and reopened | ✅ | ✅ while the lease runs | ✅ | ✅ | ✅ |
+| Logout | ✅ | ❌ — personal data | ✅ | ✅ | ✅ |
+| Lease ends (from the last sync) / clock set back | ✅ | ❌ | ✅ | ✅ | ✅ |
+| No assigned round needs the list any more | ✅ | ❌ at the next sync | ✅ | ✅ | ✅ |
+| Browser cache cleared | ❌ | ❌ | ❌ | ❌ | ❌ |
+| "Clear site data" | ❌ | ❌ | ❌ | ❌ | ❌ |
+| PWA uninstalled | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 **Logout does not clear local work**, and that is deliberate on a shared tablet: an operator
 signing out at the end of a shift must not destroy a round the next operator has not synced yet.
