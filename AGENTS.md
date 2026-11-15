@@ -560,7 +560,7 @@ By role, the resulting UI is unchanged:
 | Attachment behaviour | `storage/attachments.ts`, `sync/attachmentSync.ts`, `utils/mediaCapture.ts`, and the mirror-image rules in the backend’s `AttachmentService` |
 | Recording ceilings | `utils/mediaCapture.ts` (`beginRecording`), `AttachmentFieldInput`'s auto-save effect, `recordingLimits.test.ts`, and the server's `AttachmentService.enforceDuration` — the two must agree or a capped clip is refused |
 | Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
-| Production deploy | `.env.mobile.example`, README nginx section, and `docker/` (`DEPLOY.md`, the nginx template and snippets). The Docker nginx config and `docs/deployment.md`'s configs describe the same site and must not drift |
+| Production deploy | `.env.mobile.example`, README nginx section, and `docker/` (`DEPLOY.md`, the nginx template and snippets). The Docker nginx config and `docs/deployment.md`'s configs describe the same site and must not drift — except the container's listen ports (8080/8443) and `absolute_redirect off`, which differ on purpose because it runs as uid 101 |
 | A device capability (NFC, camera, mic, GPS) | `docs/device-features.md`, **and** whether the packaged app can do it at all — a browser API is not automatically in a WebView, and a permission not in `AndroidManifest.xml` fails with no prompt. See `docs/apk.md` |
 | The server address | **Browser:** nothing in the app — it follows its own origin; nginx, the certificate's subjectAltName and DNS are what change. **APK:** an administrator changes it on each tablet in Settings while the old address still answers; `.env.mobile` (then `npm run build:apk`, which rebuilds `dist/` too) only decides what a **fresh** install starts with. README **Moving the server to a new address** |
 | Anything under `android/` | `docs/apk.md`, and rebuild — Gradle picks it up, no `cap add` needed |
@@ -1065,6 +1065,29 @@ markers twice at once.
 
 `no-fallthrough` reads a comment between `case 'image':` and `case 'signature':` as an intended
 fall-through without the marker, and fails the lint. Put the comment above the first label.
+
+### The container's nginx runs as uid 101 — ports, redirects and the key follow from it
+
+`docker/Dockerfile` declares `USER 101:101`, so nginx has no root master process (CIS Docker
+Benchmark 4.1). Three things change with it, and each one fails quietly if missed:
+
+- **It listens on 8080/8443 inside the container**, because a non-root process cannot bind below
+  1024; `docker-compose.yml` publishes them as the host's 80/443. A compose file older than the
+  image still publishes the container's 80/443, where nothing listens: the container reports
+  healthy and the host port refuses connections. Ship the two together.
+- **`absolute_redirect off` in `nginx.conf`.** Redirects nginx makes itself — the trailing slash
+  on a directory — would otherwise name the port it listens on (`https://host:8443/assets/`), not
+  the 443 the client used. Measured with it: `Location: /assets/`.
+- **`ssl/key.pem` must be readable by uid 101.** A key left `root:root 0600` stops nginx at start
+  with `[emerg] cannot load certificate key … Permission denied`. The fix is `chown 101:101`; the
+  key is in the workers' memory under any setup, so nothing is given away.
+
+The tmpfs mounts are owned by 101 through their `uid=`/`gid=` options, and the Dockerfile chowns
+the same two directories so a plain `docker run` works too. `apk upgrade` in the build cannot swap
+nginx.org's nginx for Alpine's own package only because the official image pins nginx and its
+modules in `/etc/apk/world`; the build compares `nginx -v` before and after as well (backend
+AGENTS.md #207). The host-install configs in `docs/deployment.md` keep 80/443 and a root master —
+that difference is deliberate, not drift.
 
 ### Lint
 `eslint.config.js` is flat config (ESLint 9); the `lint` script no longer passes `--ext`, which

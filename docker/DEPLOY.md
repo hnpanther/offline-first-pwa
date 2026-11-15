@@ -9,7 +9,7 @@ only needs to reach the backend's port (§5).
 
 | File | What it is |
 |---|---|
-| `Dockerfile` | `nginx:1.30-alpine` + your `dist/` + the config below. Builds nothing itself (§1) |
+| `Dockerfile` | `nginx:1.30.6-alpine3.24` (pinned) + Alpine's newer security fixes + your `dist/` + the config below, running as uid 101 rather than root (§7). Builds nothing itself (§1) |
 | `Dockerfile.dockerignore` | Keeps everything but `dist/` and `docker/nginx/` out of the build context — `certs/` holds the CA's private key and must never reach a layer |
 | `docker-compose.yml` | The service, its volumes and its hardening |
 | `.env.example` | Every setting. Copy to `.env` (gitignored) |
@@ -115,16 +115,21 @@ Rules:
   openssl x509 -in /path/to/plant/rootCA.pem -noout -subject      # must equal the issuer above
   ```
 
-- **File permissions (Linux).** The container drops every capability except the few nginx needs,
-  so its root user can no longer read a file it does not own. Give the key to root:
+- **File permissions (Linux).** nginx runs as uid **101** — the image's own `nginx` user — and
+  never as root, so the key must be readable by uid 101:
 
   ```bash
-  sudo chown root:root ssl/key.pem ssl/cert.pem
+  sudo chown 101:101 ssl/key.pem
   sudo chmod 600 ssl/key.pem && sudo chmod 644 ssl/cert.pem
+  sudo chmod 755 ssl
   ```
 
-  A key owned by your own user with mode 600 makes nginx exit with `Permission denied` on
-  `key.pem`.
+  A key left as `root:root 0600` — what most tools produce, and what this guide asked for before
+  the image stopped running as root — makes nginx exit at start:
+  `[emerg] cannot load certificate key "/etc/nginx/ssl/key.pem" … Permission denied`. The number is
+  what counts; on the host, uid 101 may belong to an account with some other name. Nothing is
+  given away by it: the worker processes that serve traffic hold the key in memory under any
+  setup, root master or not.
 - **The CA's private key never goes in `ssl/`.** Only the server certificate and its key.
 
 mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy them to
@@ -195,10 +200,41 @@ And on **one real tablet**, before walking away:
 | Large media | 32 MB bodies; uploads and downloads stream through without temp files; 300 s proxy timeouts (the client allows 120 s) |
 | Security headers | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`. On **every** response — including locations that set their own caching, which nginx would otherwise strip |
 | Client address | `X-Forwarded-For` is **overwritten** with the real peer, never appended. The backend records the first entry; appending would let any client choose the address the audit trail shows |
-| Hardening | Read-only root filesystem, scratch paths on tmpfs, all capabilities dropped except `CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`, `no-new-privileges`, no server version in headers |
+| Hardening | Runs as uid 101 from start to finish — no root master process — and listens on 8080/8443 inside the container, published as the host's 80/443. No capabilities at all, read-only root filesystem, scratch paths on tmpfs owned by 101, `no-new-privileges`, no server version in headers |
 | Resources | Sized for a 2 vCPU / 16 GB host: a 1 GB memory ceiling and 1.75 CPUs. nginx itself uses tens of megabytes, so the ceiling stops a leak rather than budgeting anything; the reasoning is beside the limits in `docker-compose.yml` |
 | Logs | Container stdout/stderr, rotated at 5 × 20 MB. `docker compose logs -f` |
-| Health | `/healthz` on port 80, checked every 30 s; `restart: unless-stopped` |
+| Health | `/healthz` on port 8080 inside the container (the host's port 80), checked every 30 s; `restart: unless-stopped` |
+
+### Running as a non-root user
+
+The image declares `USER 101:101`, so nothing in the container ever runs as root — the CIS Docker
+Benchmark's check 4.1, which the earlier image failed because nginx's master process started as
+root to bind ports 80 and 443. What follows from it:
+
+| | Before | Now |
+|---|---|---|
+| Ports inside the container | 80, 443 | **8080, 8443** — a non-root process cannot bind below 1024 |
+| Ports on the host | 80, 443 | 80, 443 — unchanged; compose publishes `80:8080` and `443:8443` |
+| Capabilities | `CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE` | **none** |
+| `ssl/key.pem` | readable by root | **readable by uid 101** (§4) |
+| Redirects nginx makes itself | absolute | **relative** (`absolute_redirect off`): an absolute one would name the port nginx listens on, 8443, not the 443 the client used |
+
+**The one host step** is the key's ownership (§4). The tmpfs mounts are given to uid 101 by the
+compose file itself.
+
+**Upgrading a server from an image that ran as root:** `chown` the key first, and deploy the
+`docker-compose.yml` from the same release as the image. The old file publishes the container's
+port 80 and 443, where nothing listens any more — the container is healthy and the host port
+refuses connections.
+
+Verified on 2026-11-15 with the compose file's own settings: the master and every worker run as
+`nginx`; PID 1's effective capabilities are `0000000000000000`; the image's healthcheck reports
+healthy; the log has no permission, read-only, `emerg`, `crit` or `warn` line; envsubst renders the
+site into the uid-101 tmpfs; HTTP redirects to `https://<host>/…` with no port; a directory
+redirect is `Location: /assets/`; every security header is present; the manifest's type, the
+service worker's `no-cache`, the deep-link fallback and the `/assets/` 404 behave as in the table
+above; `docker stop` exits 0. End to end, `POST /api/auth/login` through this nginx to the
+backend and its database answered 200.
 
 ### What the CSP changes
 
@@ -297,7 +333,8 @@ Docker Desktop runs Linux containers fine, with two differences worth knowing:
 | Symptom | Cause | Fix |
 |---|---|---|
 | Container restarts, log: `cannot load certificate "/etc/nginx/ssl/cert.pem"` | `ssl/` empty or wrong names | §4 |
-| Log: `Permission denied` on `key.pem` | Key not readable by root without capabilities | `chown root:root`, §4 |
+| Log: `Permission denied` on `key.pem` | Key not readable by uid 101 — nginx no longer runs as root | `chown 101:101 ssl/key.pem`, §4 |
+| Container healthy, but the host's port 80/443 refuses connections | A `docker-compose.yml` older than the image, still publishing the container's 80/443 | Use the compose file from the same release: `80:8080`, `443:8443` (§7) |
 | Log: `host not found in upstream` | `PWA_BACKEND_UPSTREAM` unresolvable | §5 |
 | `502 Bad Gateway` on `/api/` | Backend down or wrong port | `curl` the upstream from the host; check the WinSW service |
 | `413 Request Entity Too Large` on an upload | Above `PWA_MAX_BODY_SIZE` | Raise it (and the backend's limit) |

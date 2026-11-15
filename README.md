@@ -1866,7 +1866,8 @@ IndexedDB), seeded from `VITE_SERVER_URL` on a fresh install. See
 > **Docker option:** after `npm run build:apk`, the `docker/` folder packages `dist/` behind nginx
 > as one container: TLS and config on volumes, security headers, `/api/` proxy. See
 > [docker/DEPLOY.md](docker/DEPLOY.md). The manual nginx setup below remains valid, and it is
-> what to use on a Windows server.
+> what to use on a Windows server. The container runs nginx as uid 101 rather than root, so its
+> TLS key must be readable by uid 101 (DEPLOY.md §4).
 
 ### Reference architecture (split hosts)
 

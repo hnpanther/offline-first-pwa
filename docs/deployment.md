@@ -14,6 +14,9 @@ which means the tablets work until they do not.
 > Procedure: [docker/DEPLOY.md](../docker/DEPLOY.md). The reasoning for each nginx block below
 > applies to both. The Docker config is the only one that sends security headers today; the
 > systemd and WinSW configs in this file still send none ([roadmap.md §1](roadmap.md)).
+> One difference is deliberate: the container's nginx runs as uid 101, never as root, so it
+> listens on 8080/8443 inside the container (published as 80/443) and sets
+> `absolute_redirect off`. The configs below run a root master process and keep 80/443.
 
 ---
 

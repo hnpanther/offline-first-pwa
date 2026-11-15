@@ -16,9 +16,11 @@ services:
     container_name: mfdcs-pwa
     restart: unless-stopped
 
+    # host:container. Inside, nginx listens on 8080/8443 because it runs as uid 101, which cannot
+    # bind below 1024; the host side stays 80/443, so nothing changes for a client.
     ports:
-      - "${PWA_HTTP_PORT:-80}:80"
-      - "${PWA_HTTPS_PORT:-443}:443"
+      - "${PWA_HTTP_PORT:-80}:8080"
+      - "${PWA_HTTPS_PORT:-443}:8443"
 
     environment:
       PWA_SERVER_NAME: ${PWA_SERVER_NAME:-_}
@@ -31,7 +33,10 @@ services:
       - "host.docker.internal:host-gateway"
 
     volumes:
-      # cert.pem + key.pem, issued by the plant's CA. Read-only: nginx only reads them.
+      # cert.pem + key.pem, issued by the plant's CA. Read-only: nginx only reads them — as uid
+      # 101, so key.pem must be readable by 101 (`chown 101:101 ssl/key.pem && chmod 600
+      # ssl/key.pem`). Otherwise nginx stops at start: "cannot load certificate key ... Permission
+      # denied". docker/DEPLOY.md § "Running as a non-root user".
       - ./ssl:/etc/nginx/ssl:ro
       # Optional site override. Uncomment to replace the whole server config with your own copy
       # (start from nginx/templates/default.conf.template):
@@ -39,22 +44,18 @@ services:
       # Optional header override (e.g. CSP in report-only mode while diagnosing):
       # - ./overrides/snippets:/etc/nginx/snippets:ro
 
-    # Hardening. Nothing in the container needs to write except these scratch paths.
+    # Hardening. The whole container runs as uid 101 (USER in the Dockerfile) with no
+    # capabilities at all, and nothing in it needs to write except these scratch paths — each
+    # mounted owned by 101, since a tmpfs is otherwise root's. /tmp holds the pid file.
     read_only: true
     tmpfs:
-      - /var/cache/nginx:size=16m
-      - /var/run:size=1m
-      - /etc/nginx/conf.d:size=1m
+      - /var/cache/nginx:size=16m,uid=101,gid=101,mode=0700
+      - /etc/nginx/conf.d:size=1m,uid=101,gid=101,mode=0755
       - /tmp:size=8m
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - NET_BIND_SERVICE
 
     # Resources. SIZED FOR a 2 vCPU / 16 GB host that runs nothing but this container.
     #

@@ -14,7 +14,9 @@
 
 server {
     # IPv4 only: a host booted with IPv6 disabled would make [::] fail nginx at start.
-    listen 80;
+    # 8080, not 80: nginx runs as uid 101, which cannot bind below 1024. Compose publishes it as
+    # the host's port 80 (PWA_HTTP_PORT), so clients never see 8080.
+    listen 8080;
     server_name ${PWA_SERVER_NAME};
 
     # Liveness for the container healthcheck. Plain HTTP so the check needs no certificate.
@@ -30,13 +32,15 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    # 8443 for the same reason; published as the host's 443 (PWA_HTTPS_PORT).
+    listen 8443 ssl;
     http2 on;
     server_name ${PWA_SERVER_NAME};
 
     # Mounted from the host (docker/ssl → /etc/nginx/ssl, read-only). The certificate must be
     # issued by the plant's CA — the one bundled into the APK and installed on browser tablets.
     # A certificate from any other CA is valid and trusted by nothing in the fleet.
+    # key.pem must be readable by uid 101, which is what nginx runs as: docker/DEPLOY.md.
     ssl_certificate     /etc/nginx/ssl/cert.pem;
     ssl_certificate_key /etc/nginx/ssl/key.pem;
 
