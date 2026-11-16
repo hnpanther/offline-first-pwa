@@ -262,11 +262,33 @@ everywhere, because a value the schema cannot describe is a client bug either wa
 
 ## When sync runs
 
+Two different things run, on different triggers, and confusing them is how this page once claimed
+something the code never did.
+
+**The push pass** (`syncManager.sync()` — progress, submissions, attachments, fault reports):
+
 | Trigger | Where |
 |---|---|
 | On an interval | `settings.syncIntervalMs` (default 30 s, clamped 10 s–1 h) |
 | When the browser comes back online | `handleOnline` — the `online` event |
 | On demand | The sync button |
+
+**The inbox pull** (`pullAndMergeInbox` — `GET /api/log-sheets/inbox`, the bundle merge, and the
+reference lists right after it) does **not** run on that interval. It runs only:
+
+| Trigger | Where |
+|---|---|
+| Signing in, or opening the app already signed in | `useInboxSync` — its effect on `isAuthenticated` |
+| The connection coming back (and the server becoming reachable again) | the same effect, on `isOnline` / `serverReachable` |
+| The refresh button, and claim / release / assign on the list page | `LogSheetListPage` → `refreshInbox` |
+| After the operator submits a round from the fill page | `LogSheetFillPage` → `refreshInbox` |
+| After a push pass that **delivered something** (`syncedCount > 0`) | `useSync` — the `complete` event |
+
+So a tablet left open and online, delivering nothing, does **not** learn of a newly assigned round,
+a cancellation or a change to a reference list until one of these happens. That is the behaviour
+today, not a guarantee anybody chose: `git log` shows the push timer never pulled the inbox, and
+the post-sync pull was added in `5953a36`. A periodic pull would be a decision with a server-side
+cost — see the backend's `docs/roadmap.md` §3 before adding one.
 
 ```ts
 private intervalMs = 30_000
@@ -283,18 +305,16 @@ twice, and idempotency should be the safety net, not the mechanism.
 
 > **A round in progress is visible to a supervisor within one interval.** The progress push runs
 > on this same timer, so «N از M دارایی» on the panel lags by at most `syncIntervalMs`. Saving an
-> asset deliberately does *not* fire an immediate sync: the inbox tick is already the fleet's cost
-> driver (see below), and one request per asset save would multiply it by the size of a round.
+> asset deliberately does *not* fire an immediate sync: one request per asset save would multiply
+> the push traffic by the size of a round.
 
-> **Lowering the interval costs the server, not the tablet.** Every tick calls
-> `GET /api/log-sheets/inbox`, and the server rebuilds a **full bundle per assigned sheet** on
-> each call — roughly a dozen queries each, with no conditional GET, because the inbox is what
-> pre-provisions a tablet to work offline rather than a listing. So the load is
-> `tablets × assigned sheets × ~12 queries ÷ interval`, and halving the interval doubles it
-> across the whole fleet. Comfortable at this deployment's size; the arithmetic and the three
-> ways out are written down in the backend's
-> [`docs/roadmap.md`](../../../JavaProject/backend-offline-first/docs/roadmap.md) § 3. Check it
-> before making the app "feel more responsive" this way.
+> **What an inbox pull costs the server.** Each pull rebuilds a **full bundle per assigned sheet**
+> — roughly a dozen queries each, with no conditional GET, because the inbox is what
+> pre-provisions a tablet to work offline rather than a listing. It is **not** paid on every push
+> tick (above), only on the triggers listed — most often after a pass that delivered something.
+> Making the pull periodic, or tying it to the push interval, would make the load
+> `tablets × assigned sheets × ~12 queries ÷ interval`; the arithmetic and the three ways to cheapen
+> a pull are in the backend's `docs/roadmap.md` § 3. Read it before adding a timer.
 
 ### Where a pass sends its requests
 
