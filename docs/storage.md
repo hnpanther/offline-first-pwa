@@ -75,7 +75,7 @@ content.
 
 | Store | Key | Holds |
 |---|---|---|
-| `settings` | `key` | `AppSettings` — server URL, sync interval, NFC mode, screen orientation |
+| `settings` | `key` | `AppSettings` — server URL, sync interval, NFC mode, screen orientation, and the server-owned values bootstrap mirrors here (`attachmentLimits`, the scan and annotation policies, and since backend V24 the optional `deviceRetention` — absent until a server sends it, which is what keeps the purge on the shipped constants; no Dexie version change, it is a field of the one settings row) |
 | `syncMeta` | `key` | Last-sync timestamps per resource |
 
 `settings` never syncs. Some of it is device-specific by nature (screen orientation depends on

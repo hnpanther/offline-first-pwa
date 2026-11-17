@@ -275,6 +275,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   overwrite a ceiling a bootstrap just refreshed. A missing/failed bootstrap keeps the last
   known values — offline capture has to work against *some* rules.
 - **`settings.nfcStrictSerialMatch` and `settings.imageAnnotationEnabled` are server-owned too, and arrive together in `mobilePolicy`.** Same rules as the ceilings: applied in the *same* `saveSettings` write as `attachmentLimits` (two read-modify-write passes would race and the second would win with its own stale snapshot), never written from `SettingsPage`, and left untouched when a server sends no `mobilePolicy` — resetting to defaults there would silently re-enable a step an admin switched off, or hand a device a scan rule nobody chose. Both are `app_settings` rows edited in the web panel's Settings page (`nfc.strict_serial_match`, `attachments.image_annotation_enabled`), **not properties** — a scan rule that needs a redeploy to change is useless to a site whose serials are not recorded yet and whose every scan is being rejected right now. Their **defaults are ON and the fallback on an unreadable row is ON**, deliberately: a garbled or missing value must never be the thing that quietly downgrades an integrity rule. `bootstrapLimits.test.ts` pins the client half, `AppSettingsServiceTest` the server half.
+- **`settings.deviceRetention` (backend V24, roadmap §41) is the third server-owned block, and `SettingsPage` must re-send it from the stored row like the others.** That list in `onSubmit` is the whole defence against a form opened before a bootstrap writing an old value back — and it had silently lost one member: `nfcManualEntryEnabled` was never on it, so a Settings save from a stale form could restore a manual-entry policy the server had since changed. Both are on it now. Any new server-owned field must be added there in the same change, or the next admin who presses «ذخیره» on that screen undoes the server. The block itself is read in `pullBootstrap` through `normalizeDeviceRetention` and written in the same single `saveSettings` as the other two; see «Local retention» below for what it controls.
 - **Manual tag entry is `canEnterTagManually(session)` — permission only, no second argument.** The `allowManualEntry` device switch that used to sit beside it granted the ability to *every* caller, so anyone who could open the tablet's Settings screen could let a whole shift type tags instead of scanning them. Do not reintroduce an override parameter; `auth.test.ts` has a regression case that calls it with a legacy truthy second argument and asserts it changes nothing. **A tablet provisioned before this change still has `allowManualEntry: true` sitting in its stored settings row** — `getSettings()` spreads the saved row over the defaults, so the dead key survives. It is inert because nothing reads it, and it is deliberately not migrated away (no Dexie version bump for a value with no readers) — but never reintroduce a read of that key, or those devices would silently come back with manual entry granted to everyone. Confirmed present on a real device during the live run of this change.
 - **The annotation step runs on the output of `compressImage`, never on the camera's `File`.** This is the whole reason marks land where the operator drew them: the compressed bitmap is what gets stored either way, so preview and bake share one source. `createImageBitmap(file)` is called without `imageOrientation`, so EXIF handling can differ between what a preview shows and what a later decode produces — annotate the raw file and every mark is rotated off its target on exactly the devices whose cameras set the EXIF flag. Related invariants in `ImageAnnotationDialog`: the canvas needs `touch-action: none` or the first stroke of every session scrolls the dialog instead of drawing; `setPointerCapture` keeps a stroke alive when a finger leaves the canvas, which is routine on a phone; `ctx.direction = 'rtl'` is required before `fillText` or a mixed Persian/English label comes out reordered; and `await document.fonts.ready` before baking, because unlike the live preview the baked pixels cannot be repainted once the real font loads. Confirming with no marks must return the **original blob** — re-encoding an untouched photo costs a second lossy generation for nothing. Nothing is written to IndexedDB until the operator confirms, so cancelling leaves no orphan row and no orphan blob. Regression tests: `imageAnnotation.test.ts`.
 - **Propagation is not instant, by design.** `useMasterDataSync` throttles bootstrap to once an
@@ -428,13 +429,17 @@ Path alias: `@/*` → `src/*`.
 ### Local retention (`services/sync/cleanupLogSheets.ts`)
 
 Runs after every successful sync pass; deletes from `logSheets` only, never from the
-server. Constants live at the top of that file — check them there before quoting numbers.
+server. **The windows are the server's** (backend roadmap §41, V24): `settings.deviceRetention`,
+mirrored from bootstrap and turned into windows by `resolveRetentionWindows` in
+`services/sync/deviceRetention.ts`; the per-row decision is the pure `isEligibleForLocalPurge`.
+The numbers below are the server's defaults — check the panel before quoting them for a site.
 
 | Local state | Retention | Anchor (first non-null) |
 |---|---|---|
-| Synced | **24h** (`SYNCED_RETENTION_MS`) | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
-| Failed | **7d** (`FAILED_RETENTION_MS`) | `submittedAt` → `updatedAt` → `createdAt` |
-| Expired draft | **24h** (`EXPIRED_DRAFT_RETENTION_MS`) | `dueAt` → `updatedAt` → `createdAt` |
+| Synced | `syncedRetentionHours` — **24h** default (1–720) | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
+| Failed | **never** unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` (168h default, 72–8760) | `submittedAt` → `updatedAt` → `createdAt` |
+| Expired draft | **never** unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` | `dueAt` → `updatedAt` → `createdAt` |
+| — any of the three, on a device that never received `deviceRetention` | the shipped constants: **24h / 7d / 24h** (`LEGACY_RETENTION_WINDOWS`) | as above |
 | Active draft | never | — |
 | Submitted + pending sync | never (waits for a server outcome) | — |
 | Synced, then reopened by a supervisor (`isReopenedAfterSync`) | never while `dueAt` is still ahead; the ordinary rules resume once it passes | — |
@@ -442,8 +447,19 @@ server. Constants live at the top of that file — check them there before quoti
 | `attachments` (bytes) | **7d after upload** (`ATTACHMENT_RETENTION_MS`, in `storage/attachments.ts`); the row survives and the file re-fetches on demand | `uploadedAt` → `createdAt` |
 | `attachments` (rows) | dropped with their sheet — but **only the synced ones** (`deleteSyncedAttachmentsForLogSheet`); anything still queued keeps its own `logSheetServerId` and is still delivered | — |
 
+Three traps in the §41 code, each of which a tidy-up would reintroduce:
+**(a)** `deviceRetention` is optional with **no default in `DEFAULT_SETTINGS`** — its absence is
+how the purge knows no server has spoken, and keeps today's constants for a tablet on an older
+server; a default object would be indistinguishable from a value the server chose.
+**(b)** «Present but unreadable» is not «absent»: a garbled block (or a stored non-object) reads as
+the server defaults with the undelivered purge **off**, never as the legacy constants; an hour
+that is not a positive finite number is the default, never zero; the switch is on only for
+exactly `true`. **(c)** `cleanupLocalLogSheets` returns 0 when the settings row cannot be read —
+purging nothing is always safe, a guessed window is not. Regression: `deviceRetention.test.ts`,
+`cleanupRetention.test.ts`, `retentionRoundTrip.test.ts`.
+
 Two consequences worth internalizing before changing any of this: (1) flipping a row to
-`synced` silently shortens its life to 24h, which is why the `mark-synced` gotcha above
+`synced` silently shortens its life to the synced window (24h by default), which is why the `mark-synced` gotcha above
 had to take an archive copy — the archive is the only storage exempt from retention;
 (2) an archive is removed **only** by `removeArchivedLogSheet` (when that user's own work
 for the sheet is confirmed synced), so anything parked there is effectively permanent —
@@ -880,7 +896,9 @@ pass and counted in the badge for ever. `isVoidedSubmission` reads the outcome t
 Its files go up as the void's evidence (backend V15); a 403 on one is final and parks it with its
 bytes kept — while every *other* 403 stays retryable, because on a shared tablet it usually means
 the wrong person is signed in. **And a 403-parked row is never deleted**: the cleanup that retires
-a week-old failed sheet drops its other parked files, but not these — the refusal is about the
+a failed sheet (after a week on a tablet that never received backend V24's retention, otherwise
+only if an administrator switched the purge of undelivered rounds on) drops its other parked
+files, but not these — the refusal is about the
 server (an old one, or the wrong deploy order), and the bytes are the only copy.
 
 ### "Is there work here?" means answered assets OR answered round questions

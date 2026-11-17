@@ -339,3 +339,146 @@ describe('the store follows the server, not just IndexedDB', () => {
     expect(useAppStore.getState().settings.imageAnnotationEnabled).toBe(false)
   })
 })
+
+/**
+ * Backend roadmap §41 — how long a round stays on the tablet, carried on the same bootstrap as the
+ * ceilings and the policies, and held to the same two rules: a change in the panel must reach the
+ * device, and a server that says nothing must never reset what the device has.
+ *
+ * The third rule is this feature's own: the device clamps, and nothing it receives can turn on
+ * the purge of rounds that never reached the server unless the server said exactly `true`.
+ */
+describe('device retention over bootstrap', () => {
+  const RETENTION = { syncedRetentionHours: 48, unsyncedPurgeEnabled: false, unsyncedRetentionHours: 168 }
+
+  beforeEach(() => {
+    useAppStore.getState().setSettings({ ...DEFAULT_SETTINGS })
+  })
+
+  it('has no policy before any sync — the purge then runs on the shipped constants', async () => {
+    expect((await getSettings()).deviceRetention).toBeUndefined()
+  })
+
+  it('adopts the server values and publishes them to the store', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+    expect(useAppStore.getState().settings.deviceRetention).toEqual(RETENTION)
+  })
+
+  it('applies the block even when the payload carries nothing else', async () => {
+    // Gating the write on attachmentLimits/mobilePolicy being present would make the retention
+    // depend on an unrelated part of the response.
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('lands in the same write as the other blocks, without either overwriting the other', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        attachmentLimits: LIMITS,
+        mobilePolicy: { imageAnnotationEnabled: false, nfcStrictSerialMatch: true, nfcManualEntryEnabled: true },
+        deviceRetention: RETENTION
+      })
+    )
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.attachmentLimits).toEqual(LIMITS)
+    expect(settings.imageAnnotationEnabled).toBe(false)
+    expect(settings.nfcManualEntryEnabled).toBe(true)
+    expect(settings.deviceRetention).toEqual(RETENTION)
+  })
+
+  it('leaves the stored retention alone when an older server sends no block', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, deviceRetention: RETENTION })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('treats a null block like no block', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, deviceRetention: RETENTION })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: null }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('keeps a device that never had a policy on the shipped constants when the server sends none', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toBeUndefined()
+  })
+
+  it('leaves the stored retention alone when the pull fails', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, deviceRetention: RETENTION })
+    fetchBootstrap.mockRejectedValue(new Error('offline'))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('clamps out-of-range values before storing them', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        deviceRetention: { syncedRetentionHours: 9999, unsyncedPurgeEnabled: true, unsyncedRetentionHours: 3 }
+      })
+    )
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual({
+      syncedRetentionHours: 720,
+      unsyncedPurgeEnabled: true,
+      unsyncedRetentionHours: 72
+    })
+  })
+
+  it('never switches the purge of undelivered rounds on for anything but exactly true', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        deviceRetention: { syncedRetentionHours: 24, unsyncedPurgeEnabled: 'true', unsyncedRetentionHours: 168 }
+      })
+    )
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention?.unsyncedPurgeEnabled).toBe(false)
+  })
+
+  it('turns the purge off again when the administrator does', async () => {
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      deviceRetention: { ...RETENTION, unsyncedPurgeEnabled: true, unsyncedRetentionHours: 72 }
+    })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention?.unsyncedPurgeEnabled).toBe(false)
+  })
+
+  it('leaves the device-owned settings untouched', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, serverUrl: 'https://plant.example', syncIntervalMs: 45_000 })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.serverUrl).toBe('https://plant.example')
+    expect(settings.syncIntervalMs).toBe(45_000)
+  })
+})

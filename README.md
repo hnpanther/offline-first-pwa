@@ -1749,21 +1749,31 @@ Runs after every successful sync pass. It only deletes rows from the local `logS
 table — **nothing is ever deleted on the server**, and rows are only removed once they
 are in a terminal state.
 
-| State | Retention | Counted from |
+**How long is set on the server**, not in the app (backend roadmap §41, V24): the panel's
+«تنظیمات» → «نگهداری راند روی تبلت» has three values that reach every tablet on bootstrap.
+The defaults are below; the full rules are in [docs/sync.md](docs/sync.md) («How long a round
+stays on this device»).
+
+| State | Retention (server default) | Counted from |
 |-------|-----------|--------------|
-| Synced (sent successfully) | **24 hours**, then deleted locally | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
-| Failed (server rejected: superseded / revoked / cancelled) | **7 days**, then deleted | `submittedAt` → `updatedAt` → `createdAt` |
-| Expired draft (deadline passed, never submitted) | **24 hours**, then deleted | `dueAt` → `updatedAt` → `createdAt` |
-| Active draft (in progress, not expired) | **Never** auto-deleted | — |
-| Submitted, pending sync | **Never** auto-deleted — kept until the server answers | — |
+| Synced (sent successfully) | **24 hours** (`device.synced_retention_hours`, 1–720), then deleted locally | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
+| Failed (server rejected: superseded / revoked / cancelled / expired) | **Never** — unless `device.unsynced_purge_enabled` is on; then `device.unsynced_retention_hours` (default 168, 72–8760) | `submittedAt` → `updatedAt` → `createdAt` |
+| Expired draft (deadline passed, never submitted) | **Never** — unless that switch is on; then the same hours | `dueAt` → `updatedAt` → `createdAt` |
+| Active draft (in progress, not expired) | **Never** auto-deleted, whatever the settings | — |
+| Submitted, pending sync | **Never** auto-deleted — kept until the server answers, whatever the settings | — |
 | Synced, then **reopened** by a supervisor | **Never** while the new deadline stands; purged on the ordinary rules once it passes | `dueAt` decides whether the reopen is still live |
 | **Archived snapshots** (`logSheetUserArchives`) | **Never** auto-deleted | — |
 
+A tablet that has never talked to a server with this setting keeps the old constants:
+24 hours synced, **7 days** failed, **24 hours** expired draft.
+
 **What this means for operators:** a completed log sheet stays visible under **History**
-on the device for roughly one day after it syncs; a rejected one for a week. After that
-the local copy is purged to keep the tablet small — the record itself still lives on the
-server and remains visible in the web admin panel. Only the **device-local** history is
-time-limited.
+on the device for roughly one day after it syncs (by default). A round that never reached
+the server — rejected, or left as a draft past its deadline — **stays on the tablet** by
+default, because it may hold the only copy of what was recorded. A delivered record still
+lives on the server and remains visible in the web admin panel; only the **device-local**
+history is time-limited. Administrators can see the values the tablet is running under on
+its Settings screen.
 
 **A reopened completion is held back from the purge on purpose.** It is live work again, and
 the local row is where the continue action lives — but it is also the only place `filledVia`

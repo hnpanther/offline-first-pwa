@@ -620,11 +620,65 @@ the `APPROVED` cases in [`logSheetWorkflow.test.ts`](../src/utils/logSheetWorkfl
 
 ---
 
+## How long a round stays on this device
+
+`cleanupLocalLogSheets` (`cleanupLogSheets.ts`) deletes local rounds the device no longer needs.
+It runs after every sync pass and whenever the app comes online with a session, and it deletes
+from `logSheets` only — never anything on the server.
+
+**How long each kind stays is the server's decision** (backend roadmap §41, V24): three settings
+in the panel's «تنظیمات», delivered on bootstrap as `deviceRetention`, stored in
+`settings.deviceRetention`, and turned into windows by `resolveRetentionWindows`
+(`deviceRetention.ts`). The decision for one row is `isEligibleForLocalPurge`, which is pure.
+
+| Local round | Purged |
+|---|---|
+| Synced (accepted by the server) | `syncedRetentionHours` after `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` (1–720, default 24) |
+| Failed (refused by the server) | **never** — unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` after `submittedAt` → `updatedAt` → `createdAt` |
+| Draft past its deadline (`EXPIRED`) | **never** — unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` after `dueAt` → `updatedAt` → `createdAt` (72–8760, default 168) |
+| Active draft | never, whatever the settings |
+| Submitted, still pending sync | never, whatever the settings |
+| Synced, then reopened (`isReopenedAfterSync`) | never while its new deadline stands; the synced rule once it passes |
+| Archived snapshots (`logSheetUserArchives`) | never — cleanup does not touch that table |
+
+A purged sheet takes its **uploaded** attachments with it (`deleteSyncedAttachmentsForLogSheet`);
+a file still waiting to upload stays and is delivered on its own server sheet id.
+
+**Before V24 these windows were constants** — 24 h synced, **7 days refused, 24 h past the
+deadline** — and the last two deleted rounds whose readings had never reached the server
+([issue P-01](issue.md#p-01)). The server default now keeps them.
+
+Four rules, all in `deviceRetention.ts`, that make sure a value nobody chose never deletes work:
+
+1. **Never received → the shipped constants.** `settings.deviceRetention` is optional and has no
+   entry in `DEFAULT_SETTINGS`; its absence is the signal. A tablet talking to an older server
+   therefore behaves exactly as before. Do not add a default object: it would be
+   indistinguishable from a value the server chose.
+2. **Received but unreadable → server defaults, purge off.** A block that is not an object, an
+   hour that is not a positive finite number (zero included — it would mean «now»), a switch that
+   is anything but exactly `true`. Each field is read on its own, so one bad value costs nothing
+   else.
+3. **Clamped twice** — when `pullBootstrap` stores the block and again when the purge reads it, so
+   a record corrupted in IndexedDB is held to the same bounds as one corrupted on the wire.
+4. **A settings row that cannot be read purges nothing that pass.** The pass runs again after the
+   next sync; guessing a window could delete what an administrator chose to keep.
+
+A server that sends no block (or `null`) leaves the stored values alone, like `attachmentLimits`
+and `mobilePolicy`; an offline tablet keeps the last values it saw. Regression tests:
+[`deviceRetention.test.ts`](../src/services/sync/deviceRetention.test.ts),
+[`cleanupRetention.test.ts`](../src/services/sync/cleanupRetention.test.ts),
+[`retentionRoundTrip.test.ts`](../src/services/sync/retentionRoundTrip.test.ts) and the
+«device retention» block of [`bootstrapLimits.test.ts`](../src/services/sync/bootstrapLimits.test.ts).
+
+---
+
 ## Pull
 
 ### `pullBootstrap`
 
-Master data plus server-owned settings (the attachment ceilings). Staleness-gated:
+Master data plus server-owned settings (the attachment ceilings, the scanning policies and, since
+backend V24, `deviceRetention` — see «How long a round stays on this device» above). All three
+blocks land in one settings write. Staleness-gated:
 
 ```ts
 pullBootstrapIfStale(maxAgeMs)
@@ -1156,8 +1210,9 @@ from the server *moments before* this device's own submission landed, which woul
 just-completed sheet look reopened. A fetch issued while the row is already `synced` cannot see
 that state, because the `synced` stamp is only written after the server committed the completion.
 
-`cleanupLogSheets` holds a reopened row back from the 24-hour synced purge while its new
-deadline stands — it is live work, and it is also the only place `filledVia` survives.
+`cleanupLogSheets` holds a reopened row back from the synced purge (24 hours by default, the
+server's `device.synced_retention_hours`) while its new deadline stands — it is live work, and it
+is also the only place `filledVia` survives.
 
 **An approved round cannot be reopened at all** until the supervisor withdraws the approval:
 `reopen`, `void` and `extend` all refuse `APPROVED` on the server. The device does not need to

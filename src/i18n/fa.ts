@@ -245,6 +245,18 @@ const fa = {
     imageAnnotation: 'علامت‌گذاری روی عکس پیش از ذخیره',
     imageAnnotationHint:
       'پس از گرفتن عکس، پیش‌نمایش باز می‌شود و می‌توانید روی تصویر خط، فلش، کادر یا متن اضافه کنید. تصویر نهایی با همان علامت‌ها ذخیره و ارسال می‌شود.',
+    // Backend roadmap §41 — how long a round stays on this tablet. Shown, never edited here.
+    syncedRetention: 'نگهداری راند ارسال‌شده روی این دستگاه',
+    syncedRetentionHint:
+      'راندی که سرور آن را پذیرفته، این مدت در «سابقه» می‌ماند و سپس از این دستگاه پاک می‌شود. خود راند روی سرور می‌ماند.',
+    unsyncedPurge: 'پاک‌کردن خودکار راند ارسال‌نشده',
+    unsyncedPurgeHint:
+      'راندی که به سرور نرسیده — رد شده، یا پیش‌نویسی که مهلتش گذشته — ممکن است تنها نسخه‌ی خوانش‌ها باشد. فقط وقتی خودکار پاک می‌شود که مدیر آن را روی سرور روشن کرده باشد.',
+    retentionHours: (hours: number) => `${hours} ساعت`,
+    unsyncedPurgeAfter: (hours: number) => `فعال — پس از ${hours} ساعت`,
+    unsyncedPurgeNever: 'غیرفعال — هرگز',
+    unsyncedPurgeLegacy: 'فعال — پس از ۷ روز (پیش‌نویس منقضی: ۲۴ ساعت)',
+    retentionNotReceived: 'هنوز از سرور دریافت نشده؛ قاعده‌ی پیش‌فرض همین نسخه از برنامه',
     displaySection: 'نمایش و چرخش صفحه',
     screenOrientation: 'جهت صفحه',
     screenOrientationAuto: 'خودکار (بر اساس چرخش دستگاه)',

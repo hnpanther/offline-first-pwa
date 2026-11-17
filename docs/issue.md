@@ -18,11 +18,11 @@ marked `Fixed` with the commit, not deleted.
 
 | Id | Severity | Kind | Title | Status |
 |---|---|---|---|---|
-| [P-01](#p-01) | High | Data loss | An expired draft's readings are never sent, and are deleted 24 h after the deadline | Open |
-| [P-02](#p-02) | High | Data loss | A round completed after its deadline is never sent, and is deleted after 7 days | Open |
+| [P-01](#p-01) | High | Data loss | An expired draft's readings are never sent, and are deleted 24 h after the deadline | Open — **the deletion is stopped by default** (backend §41 / V24); still never sent |
+| [P-02](#p-02) | High | Data loss | A round completed after its deadline is never sent, and is deleted after 7 days | Open — **the deletion is stopped by default** (backend §41 / V24); still never sent |
 | [P-03](#p-03) | Medium | Data loss | `DUPLICATE` is trusted as "delivered" even when the server voided the work | Open |
 | [P-04](#p-04) | Medium | Bug | Every failure of the submit batch is treated as a network blip, silently, forever | Open |
-| [P-05](#p-05) | Medium | Data loss | A failed row is purged after 7 days whether or not the server holds its readings | Open |
+| [P-05](#p-05) | Medium | Data loss | A failed row is purged after 7 days whether or not the server holds its readings | **Mitigated** by backend §41 / V24 — no failed row is purged unless an administrator switches it on |
 | [P-06](#p-06) | Low | Bug | An upload answered 403 because its id is taken retries forever | Open |
 | [P-07](#p-07) | Low | Bug | `toBatchPayload` invents an idempotency key it does not store | Open |
 | [P-08](#p-08) | Low | Performance | The whole `logSheets` table is read several times per 30 s tick | Open |
@@ -44,6 +44,17 @@ image serves the same `dist/` as 1.0.1 — so P-01 … P-08 are all still open.
 **P-01, P-02 and P-03 are one change across both repositories** with backend B-01, B-02 and
 B-03. Do not ship the device half first: a device that starts sending late work to a server that
 still discards it has gained nothing.
+
+**Update 2026-11-17 — backend roadmap §41 (V24), the purge half of P-01, P-02 and P-05.** How long
+a round stays on the tablet is now three server settings delivered on bootstrap
+([sync.md](sync.md) «How long a round stays on this device»). The default for a round that never
+reached the server — `failed`, or a draft past its deadline — is **never purged**, so the
+deletions these three issues describe no longer happen unless an administrator turns
+`device.unsynced_purge_enabled` on (then after 72–8760 hours, 168 by default). A tablet that has
+never talked to a server with V24 keeps the old constants (7 days / 24 h). **What is still open
+is delivery**: an expired draft is still not pushed, a late completion is still not sent, and the
+server still does not keep either (B-01, B-02). Keeping the rows buys the time for that change;
+it is not that change.
 
 ---
 
@@ -92,6 +103,13 @@ round the server still has open) and notes that it "breaks the first non-negotia
 5. **Say it on screen.** An expired round with undelivered readings shows "N قرائت به سرور
    نرسیده است" until step 2 clears it, not the same chip as an untouched expired round.
 
+*Status of step 1 (2026-11-17).* Met by default, and more broadly than written: with the server's
+`device.unsynced_purge_enabled` off — the V24 default — **no** expired draft is purged, marked
+entries or not (`cleanupRetention.test.ts`). With the switch on, an administrator has chosen to
+purge them after `device.unsynced_retention_hours` (≥ 72 h); this step's narrower rule — keep a row
+with marked entries whatever the switch says — is not built, and belongs with step 2, when a
+`kept` outcome exists to release it.
+
 *Verify.* Vitest: a draft with marked entries and `dueAt` three days ago survives
 `cleanupLocalLogSheets`; after a `kept` outcome it does not; a clock ten days ahead with a
 stored offset does not expire an open round.
@@ -120,6 +138,7 @@ keep it today either; that is B-01.)
 2. `markExpiredSheets` keeps marking the row for the UI, but no longer stands in for the
    server's answer: a row with no `serverKeptAt` stays in the outbound queue.
 3. Retention follows P-05: only a row the server has confirmed it holds may be purged.
+   *(2026-11-17: by default no `failed` row is purged at all — backend §41 / V24.)*
 
 *Verify.* Vitest on `SyncManager`: a submitted sheet with `completedAt > dueAt` is in the batch
 on the first pass and not on the second after a `kept` outcome.
@@ -203,6 +222,12 @@ only copy.
 outcome is `SUPERSEDED` / `CANCELLED`). Everything else stays until the operator dismisses it
 explicitly, after being offered the archive (`archiveLocalWorkBeforeClear`). Add the count of
 such rows to `DeviceCheckPage` so a tablet being retired is checked for them.
+
+*Status (2026-11-17).* Mitigated by backend §41 / V24: `failed` rows are purged only when an
+administrator switches `device.unsynced_purge_enabled` on, and then all of them alike after the
+configured hours — the per-outcome rule above is still the better design for that switch. The
+explicit dismissal and the count on `DeviceCheckPage` are not built; with the purge off, a tablet
+whose rounds keep failing now accumulates them, which is what that count would show.
 
 ## P-06
 

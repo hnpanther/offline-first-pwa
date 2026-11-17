@@ -153,6 +153,30 @@ export interface AppSettings {
    * changing them in the web panel reaches every tablet on its next reconnect.
    */
   attachmentLimits: AttachmentLimits
+  /**
+   * How long this tablet keeps its own copy of a round (backend roadmap §41). Server-owned,
+   * delivered on bootstrap, never edited on the device.
+   *
+   * **Absent until a server has sent it**, and the absence is meaningful: the purge then runs on
+   * the constants this app shipped with (`LEGACY_RETENTION` in `services/sync/deviceRetention.ts`),
+   * so a newer app against an older server behaves exactly as before. There is deliberately no
+   * default object in `DEFAULT_SETTINGS` — one would be indistinguishable from a value the server
+   * chose.
+   */
+  deviceRetention?: DeviceRetentionPolicy
+}
+
+/** The three server settings the local purge reads. Hours, as the panel shows them. */
+export interface DeviceRetentionPolicy {
+  /** A round the server accepted stays this long as history. 1–720. */
+  syncedRetentionHours: number
+  /**
+   * Whether a round that never reached the server — refused by it, or a draft whose deadline
+   * passed — is ever purged automatically. Off means never.
+   */
+  unsyncedPurgeEnabled: boolean
+  /** Used only when `unsyncedPurgeEnabled` is on. 72–8760. */
+  unsyncedRetentionHours: number
 }
 
 export interface AttachmentLimits {

@@ -368,6 +368,17 @@ export interface BootstrapResponse {
     /** Optional: a server older than this field says nothing, and the device stays strict. */
     nfcManualEntryEnabled?: boolean
   }
+  /**
+   * How long the tablet keeps its own copy of a round (backend roadmap §41). Absent from a server
+   * older than that; the device then keeps whatever it had, or the constants it shipped with.
+   * Every field is typed `unknown` because nothing here is trusted until
+   * `normalizeDeviceRetention` has checked it.
+   */
+  deviceRetention?: {
+    syncedRetentionHours?: unknown
+    unsyncedPurgeEnabled?: unknown
+    unsyncedRetentionHours?: unknown
+  }
 }
 
 export type MasterDataResponse = BootstrapResponse
