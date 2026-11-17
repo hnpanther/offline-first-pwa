@@ -11,8 +11,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
       args:
-        APP_VERSION: ${PWA_IMAGE_TAG:-latest}
-    image: mfdcs-pwa:${PWA_IMAGE_TAG:-latest}
+        APP_VERSION: ${PWA_IMAGE_TAG:?set PWA_IMAGE_TAG in docker/.env to the release being run, e.g. 1.0.2}
+    # Required, with no fallback. It used to default to `latest`, which made "which build is
+    # running on this host" a question nobody could answer from the host — and a rollback
+    # impossible to express.
+    image: mfdcs-pwa:${PWA_IMAGE_TAG:?set PWA_IMAGE_TAG in docker/.env to the release being run, e.g. 1.0.2}
     container_name: mfdcs-pwa
     restart: unless-stopped
 
@@ -26,18 +29,74 @@ services:
       PWA_SERVER_NAME: ${PWA_SERVER_NAME:-_}
       PWA_BACKEND_UPSTREAM: ${PWA_BACKEND_UPSTREAM:-http://host.docker.internal:8081}
       PWA_MAX_BODY_SIZE: ${PWA_MAX_BODY_SIZE:-32m}
+      # Sign-in rate limit per client address, and how long browsers remember "HTTPS only".
+      # DEPLOY.md §5 says when to change them.
+      PWA_AUTH_RATE: ${PWA_AUTH_RATE:-60r/m}
+      PWA_AUTH_BURST: ${PWA_AUTH_BURST:-30}
+      PWA_HSTS_MAX_AGE: ${PWA_HSTS_MAX_AGE:-31536000}
+      # Access log format: `json` (one JSON object per line, for Filebeat → Logstash) or `main`
+      # (one line of text). Anything else stops the container at start with a message.
+      PWA_LOG_FORMAT: ${PWA_LOG_FORMAT:-json}
+      # The time zone the log timestamps are written in. They carry their offset either way
+      # (2026-11-17T10:15:00+03:30), so this only decides what a person reading them sees.
+      TZ: ${PWA_TZ:-Asia/Tehran}
 
     # Lets the container reach a backend running on the Docker host itself (Linux needs this
     # line; Docker Desktop provides the name anyway).
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+    # ---- Files on the host: owner and mode ------------------------------------------------------
+    #
+    # nginx runs as uid 101 and gid 101 from start to finish, with no capabilities — so not even
+    # the container's root could read past a permission. Each path below must be readable (and the
+    # logs directory writable) BY THE NUMBER 101; on the host that number may belong to an account
+    # with another name, or to none, and that does not matter. Run from this directory (docker/):
+    #
+    #   path              owner:group   mode   why
+    #   ----------------  ------------  -----  ------------------------------------------------------
+    #   ssl/              root:root     0755   nginx only needs to enter it
+    #   ssl/cert.pem      root:root     0644   public; nginx reads it
+    #   ssl/key.pem       101:101       0400   only nginx may read it, and nothing needs to write it
+    #   logs/             101:101       0750   nginx creates and appends access.log / error.log;
+    #                                          root (Filebeat, logrotate) reads; nobody else
+    #   logs/*.log        101:101       0644   created by nginx itself — nothing to do
+    #   .env              root:root     0644   read by `docker compose`, not by the container; holds
+    #                                          no secret
+    #
+    #   sudo mkdir -p ssl logs
+    #   sudo chown root:root ssl ssl/cert.pem && sudo chmod 0755 ssl && sudo chmod 0644 ssl/cert.pem
+    #   sudo chown 101:101 ssl/key.pem && sudo chmod 0400 ssl/key.pem
+    #   sudo chown 101:101 logs && sudo chmod 0750 logs
+    #
+    # Each row was tested with the image's own user (2026-11-17, DEPLOY.md §4), including what
+    # happens when it is wrong:
+    #   key.pem root:root 0600         nginx stops: [emerg] cannot load certificate key … Permission denied
+    #   key.pem root:101 0440          works too (read through the group) — an equally good choice
+    #   logs/ root:root 0755           the container stops before nginx: "FATAL: /var/log/nginx is not
+    #                                  writable by uid 101. On the host: chown 101:101 …"
+    #   logs/ root:101 0770            nginx starts — but logrotate refuses a group-writable directory
+    #                                  ("insecure permissions") and the logs then grow without limit
+    #   logs/access.log owned by root  the container stops: "FATAL: …/access.log exists and is not
+    #                                  writable by uid 101" — what a logrotate `create` with the wrong
+    #                                  owner produces
     volumes:
-      # cert.pem + key.pem, issued by the plant's CA. Read-only: nginx only reads them — as uid
-      # 101, so key.pem must be readable by 101 (`chown 101:101 ssl/key.pem && chmod 600
-      # ssl/key.pem`). Otherwise nginx stops at start: "cannot load certificate key ... Permission
-      # denied". docker/DEPLOY.md § "Running as a non-root user".
+      # cert.pem + key.pem, issued by the plant's CA. Read-only: nginx only reads them. Owner and
+      # mode: the table above. docker/DEPLOY.md §4.
       - ./ssl:/etc/nginx/ssl:ro
+      # nginx's access and error logs, as files on the host — so they survive the container being
+      # recreated (every `docker compose up -d` with a new image does that, and takes Docker's own
+      # copy of the container's output with it), and so Filebeat can follow them into Logstash.
+      # Rotate them with docker/logrotate/mfdcs-pwa. Owner and mode: the table above.
+      #
+      # ⚠ A BIND MOUNT (a host path, as here), not a named volume. Docker copies the image's
+      # contents into an empty named volume — and in this image /var/log/nginx holds two links,
+      # access.log → /dev/stdout and error.log → /dev/stderr. A named volume would therefore keep
+      # sending every line to `docker logs` and never write a file. The container says which of
+      # the two is happening on its first log line.
+      #
+      # Remove this line to go back to logs in `docker logs` only.
+      - ./logs:/var/log/nginx
       # Optional site override. Uncomment to replace the whole server config with your own copy
       # (start from nginx/templates/default.conf.template):
       # - ./overrides/templates:/etc/nginx/templates:ro
@@ -75,6 +134,9 @@ services:
         reservations:
           memory: 128m
 
+    # Docker's capture of the container's own output. With ./logs mounted that is only the
+    # entrypoint's start-up lines and anything nginx says before it has opened its log files; the
+    # access log is NOT here. Capped all the same, so a misconfiguration cannot fill the disk.
     logging:
       driver: json-file
       options:

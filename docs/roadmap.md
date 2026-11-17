@@ -62,8 +62,14 @@ already reached**: on the nginx host, on the backend, or from a third machine.
    (`docker/nginx/snippets/security-headers.conf`); still open for the systemd and WinSW configs,
    which can include the same snippet.
    Add `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY` in the same pass.
-   **HSTS deliberately excluded**: with a private CA and IP-based URLs it buys little and can
-   strand a site that has to fall back, so it needs its own decision rather than riding along.
+   **HSTS** was excluded here pending its own decision — with a private CA and IP-based URLs it buys
+   little and can strand a site that has to fall back. **Decided and built for the Docker
+   deployment in `mfdcs-pwa:1.0.2`** (2026-11-17, after the security unit's review):
+   `max-age` one year, configurable as `PWA_HSTS_MAX_AGE`, `0` to make browsers forget. It still
+   does nothing for an IP address or for the APK; what it costs is that an expired certificate
+   becomes a hard stop for browser tablets (`docker/DEPLOY.md` § "HSTS"). The same release added a
+   per-address rate limit on sign-in and an AEAD-only TLS 1.2 cipher list. **Still open for the
+   systemd and WinSW configs** in `docs/deployment.md`, which have none of the three.
 2. **File integrity monitoring on the nginx host.** Hash the `dist/` tree at build time, store the
    manifest, re-hash on a timer on the host and alert on drift. This is the honest version of
    "can the backend check the files are intact" — the backend can *hold* the expected hashes;
