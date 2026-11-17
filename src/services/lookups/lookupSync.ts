@@ -97,6 +97,35 @@ async function fetchPass(code: string, since: number, afterId: number, now: numb
   throw new Error(`Reference list ${code} did not end within ${MAX_PAGES_PER_PASS} pages`)
 }
 
+/**
+ * Fetches ONE list now, from where its copy stands — the field's «به‌روزرسانی فهرست» button
+ * (backend roadmap §31). For an item added after the last inbox pull: the inbox, and the list sync
+ * behind it, are pulled only on sign-in, reconnection, the list page's refresh, a submit, or after
+ * a delivering push, so an operator mid-round could otherwise wait a long time for it.
+ *
+ * Unlike {@link syncRequiredLookups} it drops nothing else — it does not know what the inbox
+ * needs — and it fetches even a current list: a person asked for it. Every page is a row in the
+ * server's download log, which is why this is a button and not a timer. Never throws.
+ */
+export async function refreshLookup(
+  code: string,
+  now: number = Date.now(),
+  fetchPage: FetchPage = fetchLookupPage
+): Promise<'fetched' | 'dropped' | 'failed'> {
+  try {
+    const meta = await db.lookupLists.get(listKey(code))
+    await fetchPass(code, meta?.cursorSince ?? 0, meta?.cursorAfterId ?? 0, now, fetchPage)
+    return 'fetched'
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+      // The grant is gone (no open round assigned to this user needs the list): drop the copy.
+      await dropList(code)
+      return 'dropped'
+    }
+    return 'failed'
+  }
+}
+
 /** The lists the assigned rounds of an inbox pull declared. */
 export function requiredFromBundles(
   bundles: Array<{ context?: { requiredLookups?: RequiredLookup[] } | null }>

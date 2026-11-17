@@ -660,6 +660,11 @@ A copy is searched only while **usable** — a full pass reached the end, the le
 device clock is not behind the last server time seen (`lookupStore.isUsable`). Otherwise the field
 says why («not on this device», «still syncing», «lease ended») and takes a code.
 
+Because the inbox is not pulled on the push tick, a list can lag behind the server while the
+operator works. The field's **«به‌روزرسانی فهرست»** button (`refreshLookup`) fetches that one list
+now: from its cursor, renewing its lease, dropped on 403 / 404, no other list touched. A field whose
+definition sets `lookupAcceptsUnlistedCode` also offers «use this code» when a search finds nothing.
+
 ### The local-work archive, and the round trip that broke it
 
 There is **one local row per server sheet**, and a tablet is shared. So when a sheet's ownership

@@ -1,6 +1,7 @@
-import { Autocomplete, Chip, TextField } from '@mui/material'
+import { Autocomplete, Box, Button, Chip, TextField } from '@mui/material'
 import { useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react'
 import { availability, searchList, type LookupAvailability } from '@/services/lookups/lookupStore'
+import { refreshLookup } from '@/services/lookups/lookupSync'
 import type { LookupOption } from '@/services/lookups/lookupTypes'
 import {
   lookupChoiceText,
@@ -8,6 +9,7 @@ import {
   MAX_LOOKUP_CHOICES,
   normalizeLookupCode,
   toLookupValue,
+  unlistedCodeFor,
   type LookupChoiceValue
 } from '@/utils/lookupValue'
 
@@ -25,6 +27,13 @@ import {
  *
  * Never a silent empty list: the helper line names the mode and why (backend AGENTS.md #177).
  *
+ * Two additions (backend roadmap §31, «A code the device copy does not have yet»):
+ * - **«use this code»** — with `acceptsUnlistedCode`, a search that finds nothing ends with one
+ *   explicit row recording the typed code, resolved by the server like code-only entry. Off unless
+ *   the field's definition says so.
+ * - **«به‌روزرسانی فهرست»** — online, fetches this one list now, for an item added since the last
+ *   inbox pull.
+ *
  * The value is `{ code, label }` (one) or an array of them. A recorded answer — stamped by the
  * server with its label and state — is shown as it was recorded, including a retired or unknown
  * item, and re-sent as it is; the server keeps an unchanged answer byte for byte.
@@ -37,6 +46,14 @@ export interface LookupFieldInputProps {
   onChange: (value: unknown) => void
   error?: string
   disabled?: boolean
+  /** `validation.lookupAcceptsUnlistedCode` — offer «use this code» when a search finds nothing. */
+  acceptsUnlistedCode?: boolean
+}
+
+/** The «use this code» row — not an item of the list, so it carries a marker of its own. */
+interface UnlistedOption {
+  code: string
+  unlisted: true
 }
 
 const AVAILABILITY_TEXT: Record<Exclude<LookupAvailability, 'ready'>, string> = {
@@ -45,7 +62,11 @@ const AVAILABILITY_TEXT: Record<Exclude<LookupAvailability, 'ready'>, string> = 
   expired: 'مهلت نگهداری فهرست مرجع روی این دستگاه تمام شده و پاک شد — کد را وارد کنید.'
 }
 
-type Option = LookupOption | LookupChoiceValue
+type Option = LookupOption | LookupChoiceValue | UnlistedOption
+
+function isUnlisted(o: Option | string): o is UnlistedOption {
+  return typeof o !== 'string' && 'unlisted' in o
+}
 
 function optionCode(o: Option | string): string {
   return typeof o === 'string' ? o : o.code
@@ -58,13 +79,18 @@ export function LookupFieldInput({
   value,
   onChange,
   error,
-  disabled
+  disabled,
+  acceptsUnlistedCode = false
 }: LookupFieldInputProps) {
   const chosen = useMemo(() => lookupChoices(value), [value])
   const [mode, setMode] = useState<LookupAvailability>('absent')
   const [options, setOptions] = useState<LookupOption[]>([])
   const [input, setInput] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshNote, setRefreshNote] = useState<string | null>(null)
+  // Bumped after a refresh, so the availability and the search are read again.
+  const [generation, setGeneration] = useState(0)
   const latest = useRef(0)
 
   useEffect(() => {
@@ -75,7 +101,21 @@ export function LookupFieldInput({
     }
     void availability(listCode).then(a => { if (!cancelled) setMode(a) })
     return () => { cancelled = true }
-  }, [listCode])
+  }, [listCode, generation])
+
+  const refresh = async () => {
+    if (!listCode || refreshing) return
+    setRefreshing(true)
+    setRefreshNote(null)
+    const outcome = await refreshLookup(listCode)
+    setRefreshing(false)
+    setRefreshNote(
+      outcome === 'fetched' ? 'فهرست به‌روز شد.'
+        : outcome === 'dropped' ? 'این فهرست دیگر برای لاگ‌شیت بازی از شما لازم نیست و از دستگاه پاک شد.'
+          : 'به‌روزرسانی ممکن نشد؛ اتصال را بررسی کنید.'
+    )
+    setGeneration(g => g + 1)
+  }
 
   useEffect(() => {
     if (mode !== 'ready' || !listCode) {
@@ -96,9 +136,11 @@ export function LookupFieldInput({
       })
     }, 150)
     return () => clearTimeout(timer)
-  }, [mode, listCode, input])
+  }, [mode, listCode, input, generation])
 
   const searching = mode === 'ready'
+  const unlistedCode = searching ? unlistedCodeFor(input, options.length, acceptsUnlistedCode) : null
+  const shownOptions: Option[] = unlistedCode ? [{ code: unlistedCode, unlisted: true }] : options
 
   const commit = (next: LookupChoiceValue[]) => {
     if (next.length > MAX_LOOKUP_CHOICES) {
@@ -121,6 +163,9 @@ export function LookupFieldInput({
         }
         const listed = options.find(o => o.code.toLowerCase() === code.toLowerCase())
         out.push(listed ? { code: listed.code, label: listed.label } : { code })
+      } else if (isUnlisted(item)) {
+        // A code nobody has checked: no label, and the chip says the server will look it up.
+        out.push({ code: item.code })
       } else {
         const kept = chosen.find(c => c.code.toLowerCase() === item.code.toLowerCase())
         out.push(kept ?? { code: item.code, label: item.label })
@@ -131,13 +176,15 @@ export function LookupFieldInput({
 
   const helper = error
     ?? problem
+    ?? refreshNote
     ?? (searching ? undefined : AVAILABILITY_TEXT[mode as Exclude<LookupAvailability, 'ready'>])
 
   const sharedProps = {
-    options: options as Option[],
+    options: shownOptions,
     freeSolo: !searching,
     filterOptions: (o: Option[]) => o,
-    getOptionLabel: (o: Option | string) => typeof o === 'string' ? o : lookupChoiceText(o),
+    getOptionLabel: (o: Option | string) =>
+      typeof o === 'string' ? o : isUnlisted(o) ? o.code : lookupChoiceText(o),
     isOptionEqualToValue: (a: Option, b: Option) => optionCode(a).toLowerCase() === optionCode(b).toLowerCase(),
     inputValue: input,
     onInputChange: (_: unknown, v: string) => setInput(v),
@@ -145,6 +192,13 @@ export function LookupFieldInput({
     noOptionsText: searching ? 'موردی پیدا نشد' : 'کد را بنویسید و Enter بزنید',
     renderOption: (props: HTMLAttributes<HTMLLIElement> & { key?: string }, o: Option) => {
       const { key, ...rest } = props
+      if (isUnlisted(o)) {
+        return (
+          <li key={key ?? `unlisted:${o.code}`} {...rest}>
+            <div>استفاده از کد «{o.code}» — هنگام ارسال بررسی می‌شود</div>
+          </li>
+        )
+      }
       return (
         <li key={key ?? optionCode(o)} {...rest}>
           <div>
@@ -165,8 +219,18 @@ export function LookupFieldInput({
     )
   }
 
+  // Online only, and only when there is a list to ask for. Offline the field already says why it
+  // has nothing and takes a code.
+  const refreshButton = listCode && typeof navigator !== 'undefined' && navigator.onLine ? (
+    <Button size="small" variant="text" onClick={() => void refresh()} disabled={refreshing || disabled}
+      sx={{ mt: 0.5, alignSelf: 'flex-start' }}>
+      {refreshing ? 'در حال به‌روزرسانی فهرست…' : 'به‌روزرسانی فهرست'}
+    </Button>
+  ) : null
+
   if (multi) {
     return (
+      <Box sx={{ display: 'flex', flexDirection: 'column' }}>
       <Autocomplete<Option, true, false, boolean>
         multiple
         {...sharedProps}
@@ -192,10 +256,13 @@ export function LookupFieldInput({
           )
         })}
       />
+      {refreshButton}
+      </Box>
     )
   }
 
   return (
+    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
     <Autocomplete<Option, false, false, boolean>
       {...sharedProps}
       value={chosen[0] ?? null}
@@ -208,5 +275,7 @@ export function LookupFieldInput({
         if (choices) commit(choices)
       }}
     />
+    {refreshButton}
+    </Box>
   )
 }

@@ -83,12 +83,30 @@ export function toLookupValue(choices: LookupChoiceValue[], multi: boolean): unk
   return choices[0] ?? null
 }
 
-/** «علی رضایی (1234)», with the server's verdict beside it when it is not the ordinary case. */
+/**
+ * «علی رضایی (1234)», with the server's verdict beside it when it is not the ordinary case — and,
+ * for a bare code nobody has resolved yet (code-only entry, or «use this code»), a word saying the
+ * server will look it up, so a typed code never reads as if it had been checked.
+ */
 export function lookupChoiceText(choice: LookupChoiceValue): string {
   const base = choice.label && choice.label !== choice.code ? `${choice.label} (${choice.code})` : choice.code
   if (choice.state === 'INACTIVE') return `${base} · غیرفعال`
   if (choice.state === 'UNKNOWN') return `${base} · خارج از فهرست`
+  if (!choice.state && !choice.label) return `${choice.code} · بررسی هنگام ارسال`
   return base
+}
+
+/**
+ * The code a «use this code» row would record for what was typed, or `null` when no row is
+ * offered (backend roadmap §31). Offered only when the field allows it, the search found NOTHING,
+ * and the term could be a code at all (`normalizeLookupCode`, the server's rule). Never beside
+ * results: a typed name that matched somebody is a choice to make from the list.
+ *
+ * Mirrors the panel's `lookup-field.js#unlistedCodeFor`.
+ */
+export function unlistedCodeFor(term: string, resultCount: number, accepts: boolean): string | null {
+  if (!accepts || resultCount > 0) return null
+  return normalizeLookupCode(term)
 }
 
 /** Every choice of a value as a reader sees it, or null for no answer. */

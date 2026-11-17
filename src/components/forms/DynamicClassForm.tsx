@@ -523,6 +523,7 @@ export function DynamicClassForm({
                 <LookupFieldInput
                   label={def.label + (def.required ? ' *' : '')}
                   listCode={def.validation?.lookupList}
+                  acceptsUnlistedCode={def.validation?.lookupAcceptsUnlistedCode === true}
                   multi={isLookupMulti(def.dataType)}
                   value={f.value}
                   onChange={f.onChange}

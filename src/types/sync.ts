@@ -227,6 +227,14 @@ export interface FieldValidation {
    * through `GET /api/lookups/{code}/items`, for the lists `context.requiredLookups` names.
    */
   lookupList?: string
+  /**
+   * The picker may record a code its list does not offer (backend roadmap §31, «A code the device
+   * copy does not have yet»): when a search finds nothing, one explicit row «استفاده از کد «…»».
+   * Only a literal `true` turns it on. It changes what the field OFFERS — the server accepts and
+   * flags an unknown code whatever this says, and code-only entry (no list on the device) is on
+   * for every lookup field regardless.
+   */
+  lookupAcceptsUnlistedCode?: boolean
   /*
    * `allowNegative` used to live here. It is gone, and not just unused: the backend never had the
    * concept, the web panel could not set it, and `FieldValidationSupport.build(...)` rebuilds this

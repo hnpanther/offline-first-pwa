@@ -1373,6 +1373,16 @@ label, a retired or unknown one is accepted and marked `INACTIVE` / `UNKNOWN`, n
 the device shows a recorded answer exactly as stamped («· غیرفعال», «· خارج از فهرست»). Re-sending an
 unchanged answer changes nothing on the server.
 
+Two ways to deal with an item added since the tablet's last pull (backend roadmap §31):
+
+- **«به‌روزرسانی فهرست»** under every lookup field, online only: `refreshLookup` fetches that one
+  list from its cursor, renews its lease, and drops it if the server refuses (the grant is gone).
+  It touches no other list.
+- **«استفاده از کد «…»»** — only on a field whose definition has `lookupAcceptsUnlistedCode`, and only
+  when the search found nothing (`unlistedCodeFor`). Records `{ code }` with no label; the chip reads
+  «… · بررسی هنگام ارسال» until the server stamps it. Code-only entry, when the list is not on the
+  device, is on for every field regardless.
+
 How the lists arrive, how long they stay and when they go: [docs/sync.md](docs/sync.md) «Reference
 lists» and [docs/storage.md](docs/storage.md) `version(4)`. In short — only the lists the user's
 assigned open rounds need, only the columns marked for devices, for the list's lease after the last

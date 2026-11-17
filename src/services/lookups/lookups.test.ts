@@ -13,7 +13,7 @@ import {
   getListMeta,
   searchList
 } from './lookupStore'
-import { requiredFromBundles, syncRequiredLookups } from './lookupSync'
+import { refreshLookup, requiredFromBundles, syncRequiredLookups } from './lookupSync'
 import { buildValidationRules } from '@/components/forms/DynamicClassForm'
 import { isFieldValueBlank } from '@/utils/formDataValidation'
 import {
@@ -21,7 +21,8 @@ import {
   lookupChoices,
   lookupDisplayValue,
   normalizeLookupCode,
-  toLookupValue
+  toLookupValue,
+  unlistedCodeFor
 } from '@/utils/lookupValue'
 import type { FieldDefinition } from '@/types/sync'
 
@@ -238,5 +239,60 @@ describe('lookup sync', () => {
       { context: null },
       { context: { requiredLookups: [{ code: 'X', name: 'x', revision: 1 }] } }
     ]).map(r => r.code)).toEqual(['STAFF', 'X'])
+  })
+})
+
+// ── «use this code», and refreshing one list (backend roadmap §31) ─────────────────────────
+
+describe('a code the device copy does not have yet', () => {
+  it('is offered only when the field allows it and the search found nothing', () => {
+    expect(unlistedCodeFor('1077', 0, true)).toBe('1077')
+    expect(unlistedCodeFor('1077', 0, false)).toBeNull()
+    expect(unlistedCodeFor('1077', 3, true)).toBeNull()
+  })
+
+  it('is normalised as the server keys it, and never offered for what could not be a code', () => {
+    expect(unlistedCodeFor(' ۱۰۷۷ ', 0, true)).toBe('1077')
+    expect(unlistedCodeFor('two words', 0, true)).toBeNull()
+    expect(unlistedCodeFor('', 0, true)).toBeNull()
+    expect(unlistedCodeFor('x'.repeat(101), 0, true)).toBeNull()
+  })
+
+  it('a bare code reads as not yet checked, never as a resolved choice', () => {
+    expect(lookupChoiceText({ code: '1077' })).toBe('1077 · بررسی هنگام ارسال')
+    expect(lookupChoiceText({ code: '1077', label: 'حسین', state: 'ACTIVE' })).toBe('حسین (1077)')
+  })
+})
+
+describe('refreshing one list from the field', () => {
+  it('fetches only what changed since the stored cursor, and renews the lease', async () => {
+    await applyPage(page(), 5, T0)
+    const added = { id: 4, code: '1077', label: 'حسین مرادی', active: true, attributes: {}, updatedAt: 20 }
+    const calls: Array<[number, number]> = []
+    const outcome = await refreshLookup('staff', T0 + HOUR, async (_c, since, after) => {
+      calls.push([since, after])
+      return page({ items: [added], revision: 6, nextSince: 20, nextAfterId: 4 })
+    })
+    expect(outcome).toBe('fetched')
+    expect(calls).toEqual([[12, 3]])
+    expect((await searchList('staff', 'حسین', 30, T0 + HOUR))!.map(o => o.code)).toEqual(['1077'])
+    expect((await getListMeta('staff'))!.leaseUntil).toBe(T0 + HOUR + 24 * HOUR)
+  })
+
+  it('drops the copy when the server refuses it, and keeps it when the network fails', async () => {
+    await applyPage(page(), 5, T0)
+    expect(await refreshLookup('staff', T0 + HOUR, async () => { throw new TypeError('Failed to fetch') }))
+      .toBe('failed')
+    expect(await availability('staff', T0 + HOUR)).toBe('ready')
+    expect(await refreshLookup('staff', T0 + HOUR, async () => { throw new ApiError(403, 'no') }))
+      .toBe('dropped')
+    expect(await getListMeta('staff')).toBeUndefined()
+  })
+
+  it('leaves every other list alone — it does not know what the inbox needs', async () => {
+    await applyPage(page(), 5, T0)
+    await applyPage(page({ code: 'OTHER' }), 1, T0)
+    await refreshLookup('staff', T0 + HOUR, async () => page({ items: [] }))
+    expect(await getListMeta('other')).toBeDefined()
   })
 })
