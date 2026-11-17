@@ -638,6 +638,31 @@ export interface LogSheet {
   progressSyncedAt?: number
   /** Why the last progress push was refused, for the fill page. Never shown as a sync failure. */
   progressError?: string
+  /**
+   * When the server answered a refused **submission** of this round with `kept: true` (backend
+   * V25, issue P-02/B-01): it was not applied, but the server holds it as a void submission for
+   * a supervisor to review. Absent means the readings exist only on this device — unless the
+   * outcome is `SUPERSEDED`/`CANCELLED`, which the server has always kept. Plain, non-indexed
+   * property: no Dexie version bump.
+   */
+  serverKeptAt?: number
+  /**
+   * Late progress (backend V25, issue P-01/B-02): readings of a draft whose deadline passed.
+   *
+   * The progress lane pushes such a draft **once per state of its markers**:
+   * `lateProgressSentMarker` is the newest edit marker the last late push covered, answered
+   * `EXPIRED` either way. `lateProgressKeptMarker` / `lateProgressKeptAt` are set only when that
+   * answer said `kept: true` — the server holds those readings for the supervisor.
+   *
+   * **The edit markers themselves are deliberately not cleared on `kept`.** Kept is not applied:
+   * if the supervisor extends the deadline, the next inbox/bundle merge carries the server's
+   * values for these assets, which do not include the late readings, and only the markers make
+   * this device's values win that merge. Cleared by an ordinary accepted push once the round is
+   * open again — exactly as for any other progress.
+   */
+  lateProgressSentMarker?: number
+  lateProgressKeptMarker?: number
+  lateProgressKeptAt?: number
   createdAt: number
   updatedAt: number
 }

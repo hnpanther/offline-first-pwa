@@ -285,6 +285,11 @@ const fa = {
     pendingSync: 'در انتظار ارسال',
     todaySubmitted: 'ارسال‌شده امروز',
     syncedCount: 'همگام‌سازی‌شده',
+    // Backend V25: rounds whose readings the server has received in no form — not applied, not
+    // kept for review. Distinct from «در انتظار ارسال», which is the queue that drains by itself.
+    undelivered: 'ارسال‌نشده',
+    undeliveredHint:
+      'راندهایی که خوانش‌هایشان به هیچ شکلی به سرور نرسیده است. روی این دستگاه نگه داشته می‌شوند؛ تعدادشان برای سرپرست هم گزارش می‌شود.',
     ownStatsHint: 'این آمار فقط مربوط به کارهای خود شماست.',
     quickCollect: 'جمع‌آوری داده',
     drafts: 'پیش‌نویس'

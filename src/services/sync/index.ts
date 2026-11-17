@@ -29,15 +29,15 @@ import {
 } from '@/services/storage/logSheetArchive'
 import { hasPermission, PERM_LOG_SHEET_PROGRESS, PERM_NFC_FAULT_REPORT } from '@/types/auth'
 import {
-  isLogSheetExpiredForSync,
   isOwnershipReassignError,
-  normalizeLogSheetSyncError,
-  SYNC_OUTCOME_MESSAGES
+  normalizeLogSheetSyncError
 } from '@/utils/logSheetStatus'
 import type { LogSheet, NfcFaultReport } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { clearLocalEditMarkers } from '@/utils/logSheetLocalData'
 import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { reportUndeliveredBacklogIfChanged } from '@/services/sync/backlogReport'
+import { v4 as uuidv4 } from 'uuid'
 
 export type SyncEventType = 'start' | 'progress' | 'complete' | 'error'
 
@@ -122,7 +122,11 @@ class SyncManager {
     const sessionUserId = await ensureSessionUserId()
     if (!sessionUserId) return
 
-    await this.markExpiredSheets()
+    // No local expiry of queued completions any more (issue P-02). `markExpiredSheets` used to
+    // turn a round finished after its deadline into `failed`/EXPIRED here, before anything was
+    // sent, "so it does not queue work the server is certain to refuse" — which removed the one
+    // chance that work had of being kept, since the server's answer to it is to keep it (backend
+    // V25, B-01). The server decides now; the device sends once and records what it was told.
 
     // Before the submit batch, and outside its try/catch. A round being walked reports its
     // progress so a supervisor can see how far it has got; that report is best-effort by
@@ -149,6 +153,7 @@ class SyncManager {
       // synced on an earlier pass can still be waiting on its photos.
       await this.syncAttachments()
       await this.refreshPendingCount()
+      await this.reportBacklog()
       return
     }
 
@@ -245,11 +250,17 @@ class SyncManager {
 
           const syncError = normalizeLogSheetSyncError(result.outcome, result.error)
 
+          // Backend V25 (issues P-02, B-01): a refusal the server KEPT for review. The row stays
+          // failed exactly as before — the round was not applied — but the device now knows its
+          // readings are no longer only here, which is what the «ارسال‌نشده» count reads.
+          const serverKeptAt = result.kept === true ? Date.now() : undefined
+
           if (isOwnershipReassignError(syncError)) {
             await updateLogSheet(ls.localId, {
               syncStatus: 'failed',
               syncError,
               lastSubmitOutcome: result.outcome,
+              ...(serverKeptAt != null ? { serverKeptAt } : {})
             })
             failedCount++
             continue
@@ -258,6 +269,7 @@ class SyncManager {
           await updateLogSheet(ls.localId, {
             syncStatus: 'failed',
             syncError,
+            ...(serverKeptAt != null ? { serverKeptAt } : {}),
             // Kept so the UI can tell the one operator-fixable rejection (bad field values)
             // from the three that are not. Only VALIDATION_ERROR unlocks correct-and-resubmit.
             lastSubmitOutcome: result.outcome,
@@ -314,6 +326,7 @@ class SyncManager {
       await cleanupLocalLogSheets()
       this.emit({ type: 'complete', syncedCount, failedCount, pendingCount: remaining })
       await this.syncAttachments()
+      await this.reportBacklog()
     } catch (err) {
       // Transient network error — keep items pending, avoid UI flash
       this.emit({
@@ -388,19 +401,17 @@ class SyncManager {
     }
   }
 
-  private async markExpiredSheets(): Promise<void> {
-    const userId = await getSessionUserId()
-    const all = await getAllLogSheets()
-    for (const ls of all) {
-      if (ls.status !== 'submitted' || ls.syncStatus === 'synced') continue
-      // Shared tablet: never expire another assignee's queued submission.
-      if (ls.assigneeUserId && userId && ls.assigneeUserId !== userId) continue
-      if (!isLogSheetExpiredForSync(ls)) continue
-      await updateLogSheet(ls.localId, {
-        syncStatus: 'failed',
-        syncError: SYNC_OUTCOME_MESSAGES.EXPIRED,
-        serverStatus: 'EXPIRED'
-      })
+  /**
+   * Tells the panel how many rounds on this tablet hold readings the server has received in no
+   * form (backend V25), when that number has changed or an hour has passed. Best-effort and
+   * isolated like the attachment pass: it is information for a supervisor, and nothing about it
+   * may fail or delay a delivery. An older server answers 403/404, which is swallowed.
+   */
+  private async reportBacklog(): Promise<void> {
+    try {
+      await reportUndeliveredBacklogIfChanged(this.abortController?.signal)
+    } catch (err) {
+      console.warn('Backlog report failed', err)
     }
   }
 
@@ -431,12 +442,24 @@ class SyncManager {
 
   private async getPendingLiveLogSheets(userId: string | null): Promise<LogSheet[]> {
     const all = await getAllLogSheets()
-    return all.filter(
-      ls =>
-        isLogSheetOutboundOwnedByUser(ls, userId) &&
-        ls.serverId &&
-        !isLogSheetExpiredForSync(ls)
-    )
+    // No deadline filter any more (issue P-02). A completion finished after its deadline goes out
+    // once like any other; the server answers EXPIRED and — from backend V25 — keeps it, and the
+    // row then leaves this queue as `failed` (`isLogSheetOutboundOwnedByUser` never takes a failed
+    // row back). An on-time completion the scheduler expired meanwhile is accepted by the server
+    // on its `completedAt`, as it always was.
+    const pending = all.filter(ls => isLogSheetOutboundOwnedByUser(ls, userId) && ls.serverId)
+    // Issue P-07: a queued completion must carry ONE idempotency key for every attempt. The fill
+    // page stamps it at completion, but a row without one used to get a fresh key per pass from
+    // `toBatchPayload`'s fallback — so the server's replay check could never match, and a retry
+    // after a lost response to a refused round was kept as a second void row. Persisted here,
+    // before the first send, so every retry carries the same key.
+    for (const ls of pending) {
+      if (ls.clientActionId) continue
+      const clientActionId = uuidv4()
+      await updateLogSheet(ls.localId, { clientActionId })
+      ls.clientActionId = clientActionId
+    }
+    return pending
   }
 
   /**

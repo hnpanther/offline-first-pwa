@@ -426,6 +426,13 @@ Path alias: `@/*` → `src/*`.
 | `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch` |
 | `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, … |
 
+### Late work (backend V25 — issues P-01, P-02, P-03)
+
+- **The device never decides that the server will refuse.** `markExpiredSheets` and the deadline filter in `getPendingLiveLogSheets` are gone, and the inbox merge re-labels as EXPIRED only a row the server has already answered: each of them used to take a late completion out of the queue before it was sent, and the server's answer to late work is to keep it. Re-adding any "do not queue what the server will refuse" check reintroduces P-02.
+- **`kept` is not applied — so on `kept` the edit markers stay.** A late-progress answer records `lateProgressSentMarker` (and, when kept, `lateProgressKeptMarker` / `lateProgressKeptAt`) and leaves `locallyEditedAt` / `sheetFormLocallyEditedAt` alone. Clearing them, as issue P-01 first proposed, loses the readings on the next merge after an extension: the bundle carries the server's values, which do not include the kept ones, and only the markers make the device win. The extension (the `extended` branch of `mergeInboxIntoLocalSheets`) clears `lateProgressSentMarker` instead, and the readings then go as ordinary progress. Verified live.
+- **Each state of the markers is sent once, expired or not.** `isLogSheetProgressOwnedByUser` refuses a row whose newest marker the last late push already covered. Without it a tablet whose clock runs behind the server's re-sends the same kept readings every 30 s.
+- **«ارسال‌نشده» has one definition** — `services/sync/undelivered.ts` — and the dashboard, the device-check page and the panel report all read it. The report (`backlogReport.ts`) remembers the **session** it last reported to: the server keeps the number on the session's row, and a memory per device left a second operator's session unreported (found live).
+
 ### Local retention (`services/sync/cleanupLogSheets.ts`)
 
 Runs after every successful sync pass; deletes from `logSheets` only, never from the

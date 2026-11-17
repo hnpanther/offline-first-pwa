@@ -478,6 +478,13 @@ export async function mergeInboxIntoLocalSheets(
       // "assigned" inbox bucket with a future dueAt — genuinely reopened. See
       // resolveReopenedSheetUpdates for exactly which stale flags this clears and why.
       Object.assign(updates, resolveReopenedSheetUpdates(local, () => uuidv4()))
+      // The round is open again, so readings the server only KEPT after the deadline (issue
+      // P-01) can now be delivered as ordinary progress and applied: forget that they were sent
+      // late, and the progress lane sends them again on its next pass. Their edit markers were
+      // never cleared, which is what keeps them winning this very merge over the server's values.
+      if (local.lateProgressSentMarker != null) {
+        updates.lateProgressSentMarker = undefined
+      }
     } else if (
       local.status === 'submitted' &&
       local.syncStatus === 'failed' &&
@@ -489,7 +496,15 @@ export async function mergeInboxIntoLocalSheets(
       updates.syncError = undefined
       updates.syncStatus = 'pending'
       updates.clientActionId = uuidv4()
-    } else if (isLogSheetExpiredForSync({ ...local, dueAt, serverStatus }, now) && local.status === 'submitted') {
+    } else if (
+      isLogSheetExpiredForSync({ ...local, dueAt, serverStatus }, now) &&
+      local.status === 'submitted' &&
+      // Only a row the server has already answered (issue P-02). A completion still waiting in
+      // the queue must reach the server, which keeps late work (backend V25); marking it failed
+      // here took it out of the queue before it was ever sent — the same stand-in for the
+      // server's answer that `markExpiredSheets` was, by a second route.
+      local.syncStatus === 'failed'
+    ) {
       updates.serverStatus = 'EXPIRED'
       updates.syncStatus = 'failed'
       updates.syncError = SYNC_OUTCOME_MESSAGES.EXPIRED

@@ -361,14 +361,16 @@ reconnect. Without an id nothing below can be attributed — the outbound queue 
 empty anyway, so returning here is the same outcome stated honestly. Continuing would show a
 zero pending badge, which reads as "everything is sent."
 
-### 3. Expire what has visibly lapsed
+### 3. No local expiry of queued work (backend V25, issue P-02)
 
-```ts
-await this.markExpiredSheets()
-```
-
-A sheet whose deadline passed while the device was offline is marked locally, so the operator
-sees the truth before a round trip rather than after.
+This step used to be `markExpiredSheets()`: a queued completion finished after its deadline was
+marked `failed`/EXPIRED here, **before it was sent**, "so the device does not queue work the
+server is certain to refuse". But the server's answer to such work is to **keep** it as a void
+submission (backend B-01), so not sending it removed the one chance it had. The step is gone; the
+inbox merge no longer does the same thing by a second route either (it re-labels only a row the
+server has already answered). A late completion goes out once, and the device records the answer
+— see «Submission outcomes» and «Deadlines, offline». Drafts are still marked EXPIRED for display
+by `expireStaleLocalDrafts`; that changes nothing about what is sent.
 
 ### 3b. Report how far the open rounds have got
 
@@ -377,6 +379,15 @@ if (hasPermission(session, PERM_LOG_SHEET_PROGRESS)) {
   await this.pushProgress()
 }
 ```
+
+**An expired draft with edits is reported too, once (backend V25, issue P-01).** It used to be
+excluded — «a progress report is about a round still being walked» — and an operator who walked
+most of a round offline and reconnected after the deadline then had no route left: no progress,
+no completion, readings only on the tablet. Now the push goes out; the server answers `EXPIRED`
+with `kept: true` and stores the readings without applying them. The device records
+`lateProgressSentMarker` (the newest marker the push covered, kept or not) and, when kept,
+`lateProgressKeptMarker` / `lateProgressKeptAt`; the row is not pushed again until something newer
+is edited or the round is reopened. **The edit markers stay** — see «Deadlines, offline» for why.
 
 **A separate queue from the submissions, and the separation is the whole design.** A submit
 delivers work the operator has finished and must never be lost; a progress report is a live
@@ -502,10 +513,17 @@ device:
 | Outcome | Meaning | Device does |
 |---|---|---|
 | `SUBMITTED` | Accepted | Mark synced, stamp `serverId`, release attachments. (The *outcome* name; the sheet's later `APPROVED` status is a separate thing — see below) |
-| `DUPLICATE` | Already had it (a retry) | Treat as success — this is idempotency working |
+| `DUPLICATE` | Already delivered (a retry of a **delivered** submission) | Treat as success — this is idempotency working. Since backend V25 a retry of a *refused* submission is never `DUPLICATE` (B-03 / P-03): it is answered with the refusal again |
 | `EXPIRED` | Deadline passed server-side | Keep the data, surface the state; **not** an error |
 | `CANCELLED` | The round was called off | Same |
-| `VOIDED` / other | Server refused | Keep the data, show why |
+| `SUPERSEDED` | Somebody else completed it, or it is no longer assigned to you | Same |
+| `VALIDATION_ERROR` / `ERROR` | Server refused | Keep the data, show why |
+
+**`kept: true` (backend V25).** On `EXPIRED`, `CANCELLED` and `SUPERSEDED` the server says
+whether it stored the submission as a void row for a supervisor. The device records it as
+`serverKeptAt`; the row stays `failed` either way (the round was not applied), but a kept row is
+no longer «ارسال‌نشده» — the server holds its readings. A server older than V25 never says it,
+and an `EXPIRED` from one is counted as undelivered (it really is).
 
 > **A refused submission is never discarded.** The operator did the work. The server stores the
 > payload in `log_sheet_void_submissions` — the per-asset readings and, since backend V14, the
@@ -533,8 +551,19 @@ server, and both sides have to agree or offline work is lost to the clock:
 | | Device (`isLogSheetExpiredForSync`) | Server (`submitIfStillCompletable`) |
 |---|---|---|
 | Submitted locally, `completedAt ≤ dueAt` | Still queued, however late the link returns | Accepted — **even if the sheet is already `EXPIRED`** |
-| Submitted locally, `completedAt > dueAt` | Refused before it is queued | Refused → void submission |
-| Still a draft | Judged on the wall clock — there is no completion to date it by | n/a |
+| Submitted locally, `completedAt > dueAt` | **Sent once** (since V25; it used to be refused before it was queued) | Refused **and kept** → void submission, `kept: true` (B-01) |
+| Still a draft, with edits, deadline passed | **Sent once as late progress** (P-01) | Not applied, **kept** as the round's late-progress row (B-02), `kept: true` |
+| Still a draft, no edits | Judged on the wall clock — there is no completion to date it by | n/a |
+
+**After `kept`, what makes the work stand is the supervisor extending the deadline.** The inbox
+merge sees the round open again and: re-queues a refused completion with a **new**
+`clientActionId` (the server accepts it on its own `completedAt`); and clears a draft's
+`lateProgressSentMarker`, so its readings go out again as ordinary progress and are applied. Their
+edit markers were deliberately never cleared on `kept` — kept is not applied, and the markers are
+what make this device's values win the merge against the server's older ones. If the supervisor
+hands the round to somebody else instead, the first operator's readings stay in the server's kept
+row and, on a shared tablet, in their local archive; the new holder starts from what the round
+holds. All of this was walked live on 2026-11-17 (backend issue.md B-02).
 
 A `serverStatus` of `EXPIRED` overrides the stamps in both directions: the server said so, and
 the device does not argue with it except through the completion time above.
@@ -669,6 +698,31 @@ and `mobilePolicy`; an offline tablet keeps the last values it saw. Regression t
 [`cleanupRetention.test.ts`](../src/services/sync/cleanupRetention.test.ts),
 [`retentionRoundTrip.test.ts`](../src/services/sync/retentionRoundTrip.test.ts) and the
 «device retention» block of [`bootstrapLimits.test.ts`](../src/services/sync/bootstrapLimits.test.ts).
+
+---
+
+## Rounds the server has received in no form — «ارسال‌نشده» (backend V25)
+
+`services/sync/undelivered.ts` is the **one** definition, read by the dashboard card
+«ارسال‌نشده», the device-check page and the report to the panel:
+
+| Counted | Not counted |
+|---|---|
+| A submitted round refused with nothing kept: `failed` with no `serverKeptAt` and an outcome other than `SUPERSEDED` / `CANCELLED` (`EXPIRED` from an older server, `VALIDATION_ERROR`, `ERROR`, or a row an older app failed locally) | `synced`; still queued (`pending` / `syncing` — that is «در انتظار ارسال»); refused but kept (`serverKeptAt`, or `SUPERSEDED` / `CANCELLED`, kept since backend V14) |
+| A draft with edits of its own that can no longer travel as progress — expired, cancelled, revoked — unless the server kept those edits (`lateProgressKeptMarker` ≥ the newest marker) | An open draft (ordinary progress); a draft with no edits; an archived snapshot (its own store) |
+
+The dashboard counts over the viewer's own rows, like its other cards; the device-check page and the
+report count the **whole device**, because they answer "what would be lost if this tablet were
+wiped".
+
+**The report** (`services/sync/backlogReport.ts`) is `POST /api/sync/backlog` with the count and
+the oldest, sent after a sync pass **only when** the number changed, an hour has passed, or the
+signed-in session is a different one (the server keeps it on the session's row — found live: a
+second operator signing in with the count unchanged was otherwise never reported). The last report
+is `syncMeta.lastBacklogReport`. Best-effort: its own try/catch, and a 403/404 from an older server
+is swallowed. It is what lets a supervisor see a tablet holding work nobody has seen, which is
+also what decides whether turning on the server's purge of undelivered rounds (V24) would cost
+anything.
 
 ---
 

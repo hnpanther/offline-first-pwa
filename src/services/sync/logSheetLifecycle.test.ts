@@ -370,8 +370,10 @@ describe('a completion made offline and delivered late', () => {
     expect(sheet.clientActionId).toBe('rejected-action-id')
   })
 
-  it('refuses a queued completion once its deadline has passed with nothing delivered', async () => {
-    // Submitted locally but never sent, and the deadline went by in the meantime.
+  it('leaves a queued late completion in the queue for the server to answer (issue P-02)', async () => {
+    // Submitted locally but never sent, finished after the deadline. This used to be marked
+    // failed/EXPIRED right here, before it was ever sent — so the server, which KEEPS late work
+    // as a void submission (backend V25, B-01), never saw it. The server decides now.
     await saveLogSheet(
       localSheet({
         status: 'submitted',
@@ -385,9 +387,8 @@ describe('a completion made offline and delivered late', () => {
     await mergeInboxIntoLocalSheets([inboxBundle({ status: 'EXPIRED', dueAt: PAST })])
 
     const sheet = await readSheet()
-    expect(sheet.serverStatus).toBe('EXPIRED')
-    expect(sheet.syncStatus).toBe('failed')
-    expect(sheet.syncError).toBe(SYNC_OUTCOME_MESSAGES.EXPIRED)
+    expect(sheet.syncStatus).toBe('pending')
+    expect(sheet.syncError).toBeUndefined()
     expect(await storedReadings()).toEqual(READINGS)
   })
 

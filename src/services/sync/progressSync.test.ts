@@ -256,14 +256,32 @@ describe('isLogSheetProgressOwnedByUser', () => {
       .toBe(false)
   })
 
-  it('refuses a cancelled or expired round', () => {
-    // Both would be refused on every pass forever. Unlike a completion — judged on the device's
-    // completedAt so on-time work delivered late still lands — a progress report is about a
-    // round still being walked, and there is no earlier moment it could belong to.
+  it('refuses a cancelled round', () => {
+    // Refused on every pass forever, and the round is called off — nothing to report to.
     expect(isLogSheetProgressOwnedByUser({ ...base, serverStatus: 'CANCELLED' }, SESSION_USER_ID))
       .toBe(false)
+  })
+
+  it('lets an expired round report once, so the server can keep the readings (issue P-01)', () => {
+    // This used to be refused outright: "a progress report is about a round still being
+    // walked". An operator who walked most of a round offline and reconnected after the
+    // deadline then had no route left at all. The server keeps such a push (backend V25).
     expect(isLogSheetProgressOwnedByUser({ ...base, serverStatus: 'EXPIRED' }, SESSION_USER_ID))
-      .toBe(false)
+      .toBe(true)
+    // …but only once per state of the edits: answered already, nothing newer → wait.
+    expect(isLogSheetProgressOwnedByUser({
+      ...base,
+      serverStatus: 'EXPIRED',
+      entries: [entry({ locallyEditedAt: NOW })],
+      lateProgressSentMarker: NOW
+    }, SESSION_USER_ID)).toBe(false)
+    // A newer edit sends again.
+    expect(isLogSheetProgressOwnedByUser({
+      ...base,
+      serverStatus: 'EXPIRED',
+      entries: [entry({ locallyEditedAt: NOW + 1 })],
+      lateProgressSentMarker: NOW
+    }, SESSION_USER_ID)).toBe(true)
   })
 
   it('refuses when there is no session user id at all', () => {

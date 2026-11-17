@@ -18,13 +18,13 @@ marked `Fixed` with the commit, not deleted.
 
 | Id | Severity | Kind | Title | Status |
 |---|---|---|---|---|
-| [P-01](#p-01) | High | Data loss | An expired draft's readings are never sent, and are deleted 24 h after the deadline | Open — **the deletion is stopped by default** (backend §41 / V24); still never sent |
-| [P-02](#p-02) | High | Data loss | A round completed after its deadline is never sent, and is deleted after 7 days | Open — **the deletion is stopped by default** (backend §41 / V24); still never sent |
-| [P-03](#p-03) | Medium | Data loss | `DUPLICATE` is trusted as "delivered" even when the server voided the work | Open |
+| [P-01](#p-01) | High | Data loss | An expired draft's readings are never sent, and are deleted 24 h after the deadline | **Fixed** — not deleted (V24) and now sent and kept (V25) |
+| [P-02](#p-02) | High | Data loss | A round completed after its deadline is never sent, and is deleted after 7 days | **Fixed** — not deleted (V24) and now sent and kept (V25) |
+| [P-03](#p-03) | Medium | Data loss | `DUPLICATE` is trusted as "delivered" even when the server voided the work | **Fixed** by backend B-03 (V25) |
 | [P-04](#p-04) | Medium | Bug | Every failure of the submit batch is treated as a network blip, silently, forever | Open |
 | [P-05](#p-05) | Medium | Data loss | A failed row is purged after 7 days whether or not the server holds its readings | **Mitigated** by backend §41 / V24 — no failed row is purged unless an administrator switches it on |
 | [P-06](#p-06) | Low | Bug | An upload answered 403 because its id is taken retries forever | Open |
-| [P-07](#p-07) | Low | Bug | `toBatchPayload` invents an idempotency key it does not store | Open |
+| [P-07](#p-07) | Low | Bug | `toBatchPayload` invents an idempotency key it does not store | **Fixed (2026-11-17)** |
 | [P-08](#p-08) | Low | Performance | The whole `logSheets` table is read several times per 30 s tick | Open |
 | [P-09](#p-09) | Info | Security | What the device holds, and what protects it | Accepted, restated |
 | [D-01](#d-01--nothing-limits-the-rate-of-login-attempts-medium) | Medium | Deployment | Nothing limits the rate of sign-in attempts | **Fixed in 1.0.2** |
@@ -43,7 +43,8 @@ image serves the same `dist/` as 1.0.1 — so P-01 … P-08 are all still open.
 
 **P-01, P-02 and P-03 are one change across both repositories** with backend B-01, B-02 and
 B-03. Do not ship the device half first: a device that starts sending late work to a server that
-still discards it has gained nothing.
+still discards it has gained nothing. **Built together on 2026-11-17 (backend V25)** — each entry
+below says how, and what is left. Deploy order: the server first.
 
 **Update 2026-11-17 — backend roadmap §41 (V24), the purge half of P-01, P-02 and P-05.** How long
 a round stays on the tablet is now three server settings delivered on bootstrap
@@ -103,6 +104,19 @@ round the server still has open) and notes that it "breaks the first non-negotia
 5. **Say it on screen.** An expired round with undelivered readings shows "N قرائت به سرور
    نرسیده است" until step 2 clears it, not the same chip as an untouched expired round.
 
+*Fixed (2026-11-17, backend V25).* Step 2 is built: the progress lane sends an expired draft's
+edits once per state of its markers (`lateProgressSentMarker`), the server keeps them as the
+round's late-progress row (B-02) and answers `kept`, recorded as `lateProgressKeptMarker` /
+`lateProgressKeptAt`. **One departure from the text above, on purpose: the markers are NOT
+cleared on `kept`.** Kept is not applied; if the supervisor extends the deadline the bundle brings
+back the server's older values, and only the markers make this device's readings win that merge.
+The extension clears `lateProgressSentMarker` instead, so the same readings then go out as
+ordinary progress and are applied — verified live. Step 3 (archive before a discarding delete) is
+already how a handover works; nothing deletes these rows by default (V24). Step 4 (server clock
+offset) and step 5 (a per-round «N قرائت به سرور نرسیده» chip) are **not built**; the dashboard
+card «ارسال‌نشده» and the panel's per-session count cover the visibility half. Tests:
+`lateWorkRoundTrip.test.ts`, `undelivered.test.ts`, `progressSync.test.ts`.
+
 *Status of step 1 (2026-11-17).* Met by default, and more broadly than written: with the server's
 `device.unsynced_purge_enabled` off — the V24 default — **no** expired draft is purged, marked
 entries or not (`cleanupRetention.test.ts`). With the switch on, an administrator has chosen to
@@ -143,6 +157,16 @@ keep it today either; that is B-01.)
 *Verify.* Vitest on `SyncManager`: a submitted sheet with `completedAt > dueAt` is in the batch
 on the first pass and not on the second after a `kept` outcome.
 
+*Fixed (2026-11-17, backend V25).* `markExpiredSheets` is gone and `getPendingLiveLogSheets` no
+longer filters on the deadline; the inbox merge re-labels only a row the server already answered.
+The completion goes out once; any refusal leaves the queue as `failed` (as before), now with
+`serverKeptAt` when the server kept it. Step 2's "stays in the outbound queue without
+`serverKeptAt`" was **not** built: against an older server it would resend every 30 s forever,
+and that server cannot keep it anyway — the row stays on the device (V24) and is counted
+«ارسال‌نشده». After an extension the existing re-queue (new `clientActionId`) delivers it. Tests:
+`lateWorkRoundTrip.test.ts`; `logSheetLifecycle.test.ts` (its old case asserting the local
+failure was rewritten — it pinned this bug).
+
 ## P-03
 
 **`DUPLICATE` is trusted as "delivered" even when the server voided the work.**
@@ -164,6 +188,13 @@ branch then does the right thing unchanged. Two things to do here anyway:
 2. Until B-03 is deployed everywhere, treat a `DUPLICATE` for a sheet this device had marked
    `failed` with an ownership error as *unknown* rather than success: refresh the bundle before
    clearing anything.
+
+*Fixed (2026-11-17) by backend B-03 (V25)*: a replay of a refused submission is now answered
+with the refusal (and `kept`), never `DUPLICATE`, so this branch is right unchanged. Neither
+device step was built: step 1 would make a genuine `DUPLICATE` look like a reopened round to
+`isReopenedAfterSync` (synced + an open `serverStatus`), and step 2 only matters against a
+server older than V25, which the deploy order excludes. Test: `lateWorkRoundTrip.test.ts` (a kept
+`SUPERSEDED` stays failed; a genuine `DUPLICATE` is delivered).
 
 ## P-04
 
@@ -258,6 +289,13 @@ check can never match — every retry of a voided submission writes another void
 *Fix.* Persist it: if the sheet has none, `updateLogSheet(localId, { clientActionId })` before
 building the payload (in `getPendingLiveLogSheets`, which is already async), and make
 `toBatchPayload` throw on a missing key the way it does on a missing `serverId`.
+
+*Fixed (2026-11-17)* — the first half: `getPendingLiveLogSheets` persists a key on any queued row
+without one before it is sent, so every retry carries the same key. It matters more since backend
+V25, whose replay rule (B-03) is what keeps a lost-response retry of a refused round from being
+kept twice. `toBatchPayload`'s fallback is kept rather than turned into a throw, because the
+archive path builds payloads from snapshots too and a throw there would fail a whole batch. Test:
+`lateWorkRoundTrip.test.ts` («one idempotency key per completion»).
 
 ## P-08
 

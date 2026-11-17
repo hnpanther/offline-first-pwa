@@ -890,10 +890,16 @@ Route: `/` (all authenticated users).
 | Stat cards | **Open log sheets** and **submitted today**, counted from local log sheets (cards link to **Active log sheets**) |
 | Whose numbers | **Only the signed-in user's own work** — supervisors included; their team's work lives in the inbox's team tab. `ADMIN` / `HIGH_USER` see the device-wide totals instead. The rule is in `src/utils/dashboardStats.ts`. |
 | Pending sync | From `SyncManager.getPendingCount()` — submitted log sheets owned by the current user **plus** pending NFC fault reports if the role has `POST:/api/nfc-fault-reports/batch` |
+| **ارسال‌نشده** (backend V25) | Rounds whose readings the server has received **in no form** — refused with nothing kept, or an expired/cancelled/revoked draft whose edits the server never kept. Red when non-zero, links to **History**. Not the queue (that is *Pending sync*) and not the last pass's failures. The same number, over the whole device, is on **بررسی سخت‌افزار دستگاه** and is reported to the panel per session («نشست‌های اپ موبایل»). Definition: `services/sync/undelivered.ts`; see [docs/sync.md](docs/sync.md) |
 | Quick actions | Jump to `/logsheets/active` and `/logsheets/history` |
 | Sync card | Last sync time, pending/failed counts, manual sync button when online |
 
 Primary operator workflow is **Log sheets → Active**, not the dashboard stats.
+
+**Work done late is sent, not dropped (backend V25).** A round finished after its deadline, and
+the answers of a round left unfinished when its deadline passed, are sent once when the tablet
+reconnects; the server keeps them for the supervisor without applying them. If the supervisor then
+extends the deadline, the same work goes through on the next sync — the operator does nothing.
 
 ---
 

@@ -49,7 +49,7 @@ This is the data that matters. Losing it loses field readings.
 
 | Store | Key + indexes | Holds |
 |---|---|---|
-| `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts |
+| `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts. Backend V25 added four plain, non-indexed fields (no Dexie version bump): `serverKeptAt` (a refused submission the server kept), and `lateProgressSentMarker` / `lateProgressKeptMarker` / `lateProgressKeptAt` (an expired draft's edits sent once, and kept) — see [sync.md](sync.md) «Deadlines, offline» |
 | `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. `createdByUserId` is a **plain, unindexed** property — see below |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
@@ -76,7 +76,7 @@ content.
 | Store | Key | Holds |
 |---|---|---|
 | `settings` | `key` | `AppSettings` — server URL, sync interval, NFC mode, screen orientation, and the server-owned values bootstrap mirrors here (`attachmentLimits`, the scan and annotation policies, and since backend V24 the optional `deviceRetention` — absent until a server sends it, which is what keeps the purge on the shipped constants; no Dexie version change, it is a field of the one settings row) |
-| `syncMeta` | `key` | Last-sync timestamps per resource |
+| `syncMeta` | `key` | Last-sync timestamps per resource; `lastBacklogReport` (backend V25) — the last «ارسال‌نشده» count sent to the server and the session it went to, so an unchanged number is not resent every pass |
 
 `settings` never syncs. Some of it is device-specific by nature (screen orientation depends on
 how *that* tablet is mounted), and a shared account must not drag one device's choice onto

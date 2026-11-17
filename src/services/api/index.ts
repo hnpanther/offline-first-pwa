@@ -522,6 +522,11 @@ export interface LogSheetSubmitResult {
   serverId?: number | string
   error?: string | null
   outcome?: 'SUBMITTED' | 'SUPERSEDED' | 'EXPIRED' | 'CANCELLED' | 'DUPLICATE' | 'ERROR'
+  /**
+   * Backend V25: `true` when the server refused to apply this round but kept it as a void
+   * submission for review. Absent from an older server, and on every other outcome.
+   */
+  kept?: boolean | null
 }
 
 export interface ApiLogSheetEntry {
@@ -622,8 +627,13 @@ export interface LogSheetProgressResult {
     | 'EXPIRED'
     | 'VALIDATION_ERROR'
     | 'ERROR'
-  /** Server time the progress was stamped, on an accepted push only. */
+  /** Server time the progress was stamped, on an accepted push only — or, with `kept`, kept. */
   savedAt?: number | null
+  /**
+   * Backend V25: on an `EXPIRED` answer, `true` when the readings were kept for the supervisor
+   * (not applied to the round). Absent from an older server.
+   */
+  kept?: boolean | null
 }
 
 /**
@@ -656,6 +666,22 @@ export interface LogSheetProgressItem {
  *
  * Report how far one or more rounds have got, without completing any of them.
  */
+/**
+ * Backend V25: how many rounds this tablet holds whose readings the server has received in no
+ * form, and the oldest. Shown on the panel's «نشست‌های اپ موبایل»; changes nothing else.
+ */
+export interface SyncBacklogReport {
+  undeliveredCount: number
+  oldestUndeliveredAt: number | null
+}
+
+export async function reportSyncBacklog(
+  report: SyncBacklogReport,
+  signal?: AbortSignal
+): Promise<void> {
+  await apiClient.post<unknown>('/api/sync/backlog', report, signal)
+}
+
 export async function pushLogSheetProgressBatch(
   logSheets: LogSheetProgressItem[],
   signal?: AbortSignal

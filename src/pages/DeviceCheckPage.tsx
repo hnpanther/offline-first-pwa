@@ -19,6 +19,8 @@ import StorageIcon from '@mui/icons-material/Storage'
 import { isNFCSupported, startNFCScan, stopNFCScan, resolveNfcTagId } from '@/services/nfc'
 import { decoderReport, qrScanSupport, startQrScan } from '@/services/scan/qrScanner'
 import { getStorageStatus } from '@/utils/storageQuota'
+import { currentUndeliveredBacklog } from '@/services/sync/backlogReport'
+import { t } from '@/i18n'
 
 /**
  * «بررسی سخت‌افزار دستگاه» — an administrator standing next to a tablet, finding out which of
@@ -351,7 +353,13 @@ export function DeviceCheckPage() {
         return
       }
       const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(0)
-      const detail = `مصرف‌شده: ${mb(status.usage)} مگابایت از ${mb(status.quota)} مگابایت`
+      // Backend V25: over the whole device, every operator's rows — this page is what somebody
+      // runs before a tablet is wiped or retired, and a round whose readings exist only here is
+      // exactly what must not be lost with it.
+      const backlog = await currentUndeliveredBacklog()
+      const detail =
+        `مصرف‌شده: ${mb(status.usage)} مگابایت از ${mb(status.quota)} مگابایت` +
+        ` · ${t.dashboard.undelivered}: ${backlog.count}`
       setStorage(
         status.low
           ? { state: 'fail', detail: `${detail} — فضا رو به اتمام است؛ ضبط پیوست رد می‌شود.` }
