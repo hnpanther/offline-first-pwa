@@ -903,6 +903,57 @@ Three things now hold, and `nativeNfc.test.ts` pins the first:
 If a scan ever opens an asset nobody scanned, check first that the native `stopScan` is actually
 reached.
 
+### Reader mode stays on after a stop (2026-11-18)
+
+**The symptom.** On some tablets a scan read the tag, the app opened the asset, and a moment later
+Android **read the same tag again on its own** and opened something over the app: Chrome for a tag
+holding a URI record, the system Tags app («تگ جدید اسکن شد») for text, or a "no app for this
+tag" toast. It looked like a scan strong enough to happen twice. Tablets with a strong field showed
+it every time; others rarely.
+
+**The cause.** The fill page stops the scan the instant a tag is read, and the tag is still
+against the tablet. Stopping used to switch reader mode off (and, in Chrome, abort Web NFC). That
+hands the antenna back to Android's own tag dispatch, which finds the tag still there and gives it
+to whatever app it maps it to. This is a known Android behaviour, not a fault in the tags.
+
+**The change.** Stopping now stops *delivering*, not *holding*:
+
+| Route | Before | Now | Revert switch |
+|---|---|---|---|
+| Packaged app (`NfcPlugin.java`) | `stopScan` called `disableReaderMode` | reader mode stays on while the activity is resumed, once any scan has been asked for; `onTagDiscovered` drops a tag while no scan is requested; `handleOnPause` still switches it off and `handleOnResume` brings it back | `KEEP_READER_ARMED_AFTER_STOP = false` |
+| Chrome / Web NFC (`services/nfc/index.ts`) | `stopNFCScan` aborted at once | the abort waits `WEB_NFC_STOP_GRACE_MS` (2 s), so the operator can take the tablet off the tag; nothing read in that time is delivered (`scanGeneration`); a new scan releases the held one at once | `WEB_NFC_STOP_GRACE_MS = 0` |
+
+The three rules of the previous section still hold: a stopped scan delivers nothing, the JS
+listeners are removed on stop, and `useNFC` drops a tag while `isScanning` is false. The Java side
+now drops it too, before it crosses the bridge.
+
+**What else changes, and should be watched in the field:**
+
+- **Packaged app:** while the app is in the foreground, after its first scan, a tag held to the
+  tablet opens **nothing** — no other app, no toast — whether or not a scan is running. In the
+  background, or before the first scan since the app started, Android's dispatch works as before.
+- **Packaged app:** a tag already against the tablet when «اسکن NFC» is pressed may not be read
+  until it is taken away and brought back, because reader mode saw it already (and dropped it). It
+  used to read at once, since the reader was switched on again. Expected to be rare: the operator
+  presses scan and then approaches the tag. If it proves a problem, revert, or re-arm the reader in
+  `startScan` (disable then enable) — which reopens a short window for the second read.
+- **Chrome:** the second read can still happen if the tag stays against the tablet longer than
+  2 s after the read. Raise the constant if that is seen.
+
+**To revert**, either route on its own:
+
+1. Packaged app: in `android/app/src/main/java/com/hnp/mfdcs/NfcPlugin.java` set
+   `KEEP_READER_ARMED_AFTER_STOP = false`, and rebuild the APK ([§10](#10-what-to-rebuild-when)). With it
+   false every line of the change is inert: a stop disables reader mode, resume re-enables only a
+   requested scan, and the drop in `onTagDiscovered` never fires because a delivered tag always
+   has a requested scan.
+2. Chrome: in `src/services/nfc/index.ts` set `WEB_NFC_STOP_GRACE_MS = 0` and rebuild the PWA.
+   `stopNFCScan` then aborts at once, as before. Three tests in `webNfcStopGrace.test.ts` pin the
+   delay and will fail; delete or invert them in the same change.
+
+Or revert the whole change from git: it touched only `NfcPlugin.java`, `services/nfc/index.ts`,
+`webNfcStopGrace.test.ts` and these docs.
+
 ---
 
 ## 8. Camera, microphone and location

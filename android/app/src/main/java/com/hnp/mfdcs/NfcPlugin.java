@@ -88,7 +88,32 @@ public class NfcPlugin extends Plugin {
      * disagree: Android tears reader mode down whenever the activity is not resumed. This field is
      * the intent, and the lifecycle hooks below reconcile the hardware to it.
      */
-    private boolean scanRequested = false;
+    private volatile boolean scanRequested = false;
+
+    /**
+     * Whether reader mode stays on after a scan stops: <b>the fix for the second read by Android
+     * itself</b> (2026-11-18).
+     *
+     * <p>The fill page stops the scan the instant a tag is read, while the tag is still against the
+     * tablet. Disabling reader mode at that moment hands the antenna back to Android's own tag
+     * dispatch, which finds the same tag and opens whatever it maps it to: Chrome for a URI record,
+     * the system Tags app for text, a "no app for this tag" toast otherwise. Tablets with a strong
+     * field show it every time.
+     *
+     * <p>So once a scan has been asked for, reader mode stays enabled for as long as the activity
+     * is resumed, and a stop only stops <i>delivering</i>: {@link #onTagDiscovered} drops a tag
+     * that arrives while no scan is requested (which also keeps the Hytera PNC460's repeat report
+     * of a nearby tag out of the page). It is still switched off in {@link #handleOnPause}, as
+     * Android requires, and comes back on resume.
+     *
+     * <p><b>To revert</b> to the behaviour before this change, set this to {@code false}: a stop
+     * disables reader mode again, exactly as it did. See the PWA's {@code docs/apk.md}, "Reader
+     * mode stays on after a stop".
+     */
+    private static final boolean KEEP_READER_ARMED_AFTER_STOP = true;
+
+    /** Whether a scan has been asked for since this plugin was loaded; see the flag above. */
+    private boolean readerArmed = false;
 
     @PluginMethod
     public void isAvailable(PluginCall call) {
@@ -115,6 +140,7 @@ public class NfcPlugin extends Plugin {
             return;
         }
         scanRequested = true;
+        readerArmed = true;
         enableReader();
         call.resolve();
     }
@@ -122,7 +148,9 @@ public class NfcPlugin extends Plugin {
     @PluginMethod
     public void stopScan(PluginCall call) {
         scanRequested = false;
-        disableReader();
+        // Reader mode stays on (KEEP_READER_ARMED_AFTER_STOP): switching it off here, with the tag
+        // just read still against the tablet, lets Android's own dispatch read it a second time.
+        if (!KEEP_READER_ARMED_AFTER_STOP) disableReader();
         call.resolve();
     }
 
@@ -134,7 +162,7 @@ public class NfcPlugin extends Plugin {
      */
     @Override
     protected void handleOnResume() {
-        if (scanRequested) enableReader();
+        if (scanRequested || (KEEP_READER_ARMED_AFTER_STOP && readerArmed)) enableReader();
     }
 
     @Override
@@ -194,6 +222,9 @@ public class NfcPlugin extends Plugin {
      * tapping a dead reader with no way back short of restarting.
      */
     private void onTagDiscovered(Tag tag) {
+        // Reader mode left on after a stop (KEEP_READER_ARMED_AFTER_STOP) still sees tags; they are
+        // swallowed here, which is the point — neither Android nor the page gets them.
+        if (!scanRequested) return;
         try {
             JSObject payload = new JSObject();
             payload.put("serialNumber", hex(tag.getId()));

@@ -109,6 +109,33 @@ type NFCReadCallback = (result: NFCScanResult) => void
 let activeAbortController: AbortController | null = null
 
 /**
+ * How long a stopped Web NFC scan keeps holding the reader before it is aborted — **the fix for the
+ * second read by Android itself** (2026-11-18).
+ *
+ * <p>The fill page stops the scan the instant a tag is read, while the tag is still against the
+ * tablet. Aborting then hands the antenna back to Android's own tag dispatch, which reads the same
+ * tag again and opens whatever it maps it to (Chrome for a URI record, the system Tags app for
+ * text). Holding the scan a little longer — long enough to take the tablet off the tag — keeps the
+ * tag with this page, which simply ignores it: a stopped scan delivers nothing (`scanGeneration`).
+ *
+ * <p>The packaged app solves the same problem natively (`KEEP_READER_ARMED_AFTER_STOP` in
+ * `NfcPlugin.java`). **To revert** to the behaviour before this change, set this to `0`: a stop
+ * aborts at once, exactly as it did. See `docs/apk.md`, «Reader mode stays on after a stop».
+ */
+export const WEB_NFC_STOP_GRACE_MS = 2_000
+
+/** A stopped Web NFC scan still holding the reader for its grace period, and its pending abort. */
+let lingeringScan: { controller: AbortController; timer: ReturnType<typeof setTimeout> } | null = null
+
+/** Aborts a lingering scan now — when a new scan starts, there is nothing left to hold for. */
+function releaseLingeringScan(): void {
+  if (!lingeringScan) return
+  clearTimeout(lingeringScan.timer)
+  lingeringScan.controller.abort()
+  lingeringScan = null
+}
+
+/**
  * The native reader's stop, held here because callers stop through `stopNFCScan()`, not through
  * the handle `startNFCScan` returns — `useNFC` discards that handle.
  *
@@ -173,22 +200,32 @@ export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void>
     return () => {}
   }
 
+  // A previous scan still in its grace period is released now: the new one takes the reader over.
+  releaseLingeringScan()
+  const generation = scanGeneration
+
   try {
     activeAbortController = new AbortController()
     const reader = new window.NDEFReader!()
 
+    // A stopped scan may keep the reader for WEB_NFC_STOP_GRACE_MS; what it reads then is dropped.
     reader.addEventListener('reading', (event: NDEFReadingEvent) => {
+      if (generation !== scanGeneration) return
       const tagData = parseNDEFEvent(event)
       onRead({ success: true, tagData })
     })
 
     reader.addEventListener('readingerror', () => {
+      if (generation !== scanGeneration) return
       onRead({ success: false, error: 'خطا در خواندن تگ NFC' })
     })
 
     await reader.scan({ signal: activeAbortController.signal })
 
-    return () => stopNFCScan()
+    // A stale handle from an earlier scan must not stop the one running now.
+    return () => {
+      if (generation === scanGeneration) stopNFCScan()
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'خطا در راه‌اندازی NFC'
     onRead({ success: false, error: message })
@@ -196,13 +233,32 @@ export async function startNFCScan(onRead: NFCReadCallback): Promise<() => void>
   }
 }
 
-/** Stops whichever reader is running — Web NFC in a browser, the native plugin in the APK. */
+/**
+ * Stops whichever scan is running — Web NFC in a browser, the native plugin in the APK.
+ *
+ * <p>"Stops" means **stops delivering**: from this call on, nothing reaches the callback. The
+ * reader itself is released late on purpose — Web NFC after `WEB_NFC_STOP_GRACE_MS`, the native
+ * reader mode not until the app is paused — so a tag still against the tablet is not read a second
+ * time by Android. See `WEB_NFC_STOP_GRACE_MS`.
+ */
 export function stopNFCScan(): void {
   scanGeneration++
   activeNativeStop?.()
   activeNativeStop = null
-  activeAbortController?.abort()
+  const controller = activeAbortController
   activeAbortController = null
+  if (!controller) return
+  if (WEB_NFC_STOP_GRACE_MS <= 0) {
+    controller.abort()
+    return
+  }
+  // Held, not aborted: see WEB_NFC_STOP_GRACE_MS. Only one scan is ever held at a time.
+  releaseLingeringScan()
+  const timer = setTimeout(() => {
+    controller.abort()
+    if (lingeringScan?.controller === controller) lingeringScan = null
+  }, WEB_NFC_STOP_GRACE_MS)
+  lingeringScan = { controller, timer }
 }
 
 /**
