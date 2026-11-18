@@ -21,6 +21,11 @@ const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 const NOW = 1_800_000_000_000
 
+/**
+ * A completion refused as late and kept by the server for review (backend V25) — the kind of
+ * refused round a purge window applies to at all (issue P-05: one whose readings only the tablet
+ * holds is never purged, whatever the policy).
+ */
 function refusedRound(localId: string, submittedAgoMs: number): LogSheet {
   return {
     id: localId,
@@ -34,6 +39,8 @@ function refusedRound(localId: string, submittedAgoMs: number): LogSheet {
     status: 'submitted',
     syncStatus: 'failed',
     serverStatus: 'EXPIRED',
+    lastSubmitOutcome: 'EXPIRED',
+    serverKeptAt: NOW - submittedAgoMs,
     submittedAt: NOW - submittedAgoMs,
     entries: [],
     createdAt: NOW - submittedAgoMs,

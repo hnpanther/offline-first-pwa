@@ -13,7 +13,10 @@ export const SYNC_OUTCOME_MESSAGES = {
   REASSIGNED: 'این کار به اپراتور دیگری واگذار شده است.',
   SUPERSEDED: 'این کار قبلاً توسط شخص دیگری ثبت شده و مورد شما قابل سینک نیست.',
   DUPLICATE: 'این ارسال قبلاً ثبت شده است.',
-  ERROR: 'خطا در ارسال به سرور.'
+  ERROR: 'خطا در ارسال به سرور.',
+  /** Issue P-04: a round too large for any request on its own (`413` when sent alone). */
+  TOO_LARGE:
+    'این مورد برای ارسال بیش از حد بزرگ است و سرور آن را نپذیرفت؛ روی همین دستگاه نگه داشته شده است. با سرپرست تماس بگیرید.'
 } as const
 
 export function isLogSheetExpired(sheet: Pick<LogSheet, 'dueAt' | 'serverStatus'>, now = Date.now()): boolean {

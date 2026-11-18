@@ -74,16 +74,42 @@ function sheet(overrides: Partial<LogSheet>): LogSheet {
 const synced = (ageMs: number, extra: Partial<LogSheet> = {}) =>
   sheet({ status: 'submitted', syncStatus: 'synced', submittedAt: NOW - ageMs - 60_000, syncedAt: NOW - ageMs, ...extra })
 
-/** Refused by the server; submitted `ageMs` ago. Its readings never reached the server. */
+/**
+ * Refused by the server and **kept** for review (`kept: true`, backend V25); submitted `ageMs` ago.
+ * The only kind of refused round any window may purge (issue P-05) — see {@link onlyHere}.
+ */
 const failed = (ageMs: number, extra: Partial<LogSheet> = {}) =>
   sheet({
     status: 'submitted',
     syncStatus: 'failed',
     serverStatus: 'EXPIRED',
     syncError: SYNC_OUTCOME_MESSAGES.EXPIRED,
+    lastSubmitOutcome: 'EXPIRED',
+    serverKeptAt: NOW - ageMs,
     submittedAt: NOW - ageMs,
     ...extra
   })
+
+/** Refused, and the server holds none of it: the readings exist only on this tablet. */
+const onlyHere = (ageMs: number, extra: Partial<LogSheet> = {}) =>
+  failed(ageMs, { serverKeptAt: undefined, ...extra })
+
+/** A local edit marker on the round's one asset — readings the operator actually entered. */
+const edited = (at: number): Partial<LogSheet> => ({
+  entries: [
+    {
+      assetId: '7',
+      assetName: 'پمپ ۱',
+      subFunctionCode: 'SF-1',
+      subFunctionTag: 'TAG-1',
+      classId: '2',
+      formData: { temp: 42 },
+      createdAt: at,
+      updatedAt: at,
+      locallyEditedAt: at
+    }
+  ]
+})
 
 /** A draft whose deadline passed `ageMs` ago, never delivered. */
 const expiredDraft = (ageMs: number, extra: Partial<LogSheet> = {}) =>
@@ -384,6 +410,68 @@ describe('rounds that are never purged, whatever the settings say', () => {
     expect(await db.attachments.get('waiting')).toBeDefined()
     expect(await db.attachments.get('retrying')).toBeDefined()
     expect(await db.attachments.get('uploaded')).toBeUndefined()
+  })
+
+  // Issue P-05: the switch purges what the server already holds a copy of — never the only copy.
+
+  it('never purges a refusal whose readings only this tablet holds', async () => {
+    await withPolicy(AGGRESSIVE)
+    const expired = onlyHere(400 * DAY)
+    const invalid = onlyHere(400 * DAY, { lastSubmitOutcome: 'VALIDATION_ERROR', serverStatus: 'IN_PROGRESS' })
+    const gone = onlyHere(400 * DAY, { lastSubmitOutcome: 'ERROR', serverStatus: 'IN_PROGRESS' })
+    for (const r of [expired, invalid, gone]) await saveLogSheet(r)
+
+    expect(await cleanupLocalLogSheets(LATER)).toBe(0)
+    for (const r of [expired, invalid, gone]) expect(await exists(r)).toBe(true)
+  })
+
+  it('never purges a refusal the server said it declined to keep, whatever the outcome says', async () => {
+    // V26's cap: SUPERSEDED usually means kept, and `kept: false` is the one exception.
+    await withPolicy(AGGRESSIVE)
+    const declined = onlyHere(400 * DAY, {
+      lastSubmitOutcome: 'SUPERSEDED',
+      serverStatus: 'SUBMITTED',
+      serverKeepRefusedAt: NOW - 400 * DAY
+    })
+    await saveLogSheet(declined)
+
+    expect(await cleanupLocalLogSheets(LATER)).toBe(0)
+    expect(await exists(declined)).toBe(true)
+  })
+
+  it('purges a SUPERSEDED refusal an older server answered, which it has always kept', async () => {
+    await withPolicy(AGGRESSIVE)
+    const voided = onlyHere(400 * DAY, { lastSubmitOutcome: 'SUPERSEDED', serverStatus: 'SUBMITTED' })
+    await saveLogSheet(voided)
+
+    expect(await cleanupLocalLogSheets(LATER)).toBe(1)
+  })
+
+  it('never purges an expired draft holding readings the server has not kept', async () => {
+    await withPolicy(AGGRESSIVE)
+    const draft = expiredDraft(400 * DAY, edited(NOW - 400 * DAY))
+    await saveLogSheet(draft)
+
+    expect(await cleanupLocalLogSheets(LATER)).toBe(0)
+    expect(await exists(draft)).toBe(true)
+  })
+
+  it('purges an expired draft once the server kept its late readings', async () => {
+    await withPolicy(AGGRESSIVE)
+    const at = NOW - 400 * DAY
+    const draft = expiredDraft(400 * DAY, { ...edited(at), lateProgressSentMarker: at, lateProgressKeptMarker: at })
+    await saveLogSheet(draft)
+
+    expect(await cleanupLocalLogSheets(LATER)).toBe(1)
+  })
+
+  it('never purges an unheld refusal on the shipped constants either', async () => {
+    await withPolicy(undefined)
+    const r = onlyHere(400 * DAY)
+    await saveLogSheet(r)
+
+    expect(await cleanupLocalLogSheets(LATER)).toBe(0)
+    expect(isEligibleForLocalPurge(r, LATER, { ...LEGACY_RETENTION_WINDOWS })).toBe(false)
   })
 })
 

@@ -3,6 +3,7 @@ import { deleteSyncedAttachmentsForLogSheet } from '@/services/storage/attachmen
 import type { LogSheet } from '@/types'
 import { isReopenedAfterSync, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 import { resolveRetentionWindows, type RetentionWindows } from '@/services/sync/deviceRetention'
+import { isUndeliveredRound } from '@/services/sync/undelivered'
 
 function syncedRetentionAnchor(sheet: LogSheet): number {
   return sheet.syncedAt ?? sheet.submittedAt ?? sheet.updatedAt ?? sheet.createdAt
@@ -46,10 +47,12 @@ export function isEligibleForLocalPurge(
   // `mapServerEntryToLocal` carries — see AGENTS.md § Log sheet merge).
   if (isReopenedAfterSync(sheet, now)) return false
 
-  // A draft past its deadline that never reached the server. Its readings exist nowhere else
-  // (issue P-01), so it is purged only when an administrator has switched that on — or, on a
-  // device that has never heard from a server that knows the setting, on the shipped constant.
+  // A draft past its deadline. Purged only when an administrator has switched that on — or, on a
+  // device that has never heard from a server that knows the setting, on the shipped constant —
+  // and even then never while its readings exist nowhere else (issues P-01, P-05): a draft whose
+  // late readings the server kept may go, one whose readings only this tablet holds may not.
   if (isExpiredDraftSheet(sheet)) {
+    if (isUndeliveredRound(sheet, now)) return false
     return windows.expiredDraftMs != null && now - expiredDraftAnchor(sheet) > windows.expiredDraftMs
   }
 
@@ -60,8 +63,12 @@ export function isEligibleForLocalPurge(
     return now - syncedRetentionAnchor(sheet) > windows.syncedMs
   }
 
-  // Refused by the server — undelivered, under the same rule as an expired draft.
+  // Refused by the server, under the same rule as an expired draft: only once the server holds
+  // its readings (kept for review), never a refusal whose readings are only here (issue P-05) —
+  // `VALIDATION_ERROR` awaiting the operator's correction, an `ERROR`, an `EXPIRED` an older
+  // server did not keep, or a refusal the server declined to keep (`kept: false`, V26).
   if (sheet.syncStatus === 'failed') {
+    if (isUndeliveredRound(sheet, now)) return false
     return windows.failedMs != null && now - failedRetentionAnchor(sheet) > windows.failedMs
   }
 
@@ -79,9 +86,9 @@ export function isEligibleForLocalPurge(
  * | Local round | Purged |
  * |---|---|
  * | Synced (accepted by the server) | after `device.synced_retention_hours` (default 24 h) |
- * | Failed, or a draft past its deadline | **never** — unless `device.unsynced_purge_enabled` is on; then after `device.unsynced_retention_hours` (default 168 h) |
+ * | Failed, or a draft past its deadline, **whose readings the server holds** (kept for review) | **never** — unless `device.unsynced_purge_enabled` is on; then after `device.unsynced_retention_hours` (default 168 h) |
  * | Any of the above on a device that never received a policy | the shipped constants: 24 h / 7 d / 24 h |
- * | Active draft · submitted, waiting to sync · reopened inside its new deadline | never, whatever the settings |
+ * | Active draft · submitted, waiting to sync · reopened inside its new deadline · **undelivered** (`isUndeliveredRound`: the readings are only on this tablet) | never, whatever the settings |
  *
  * Deleting a sheet also drops its **already-uploaded** attachments, which would otherwise
  * outlive every screen that could show them and grow the database without bound. Attachments
@@ -89,6 +96,19 @@ export function isEligibleForLocalPurge(
  * queue can finish delivering them long after the local sheet is gone.
  */
 export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
+  const all = await getAllLogSheets()
+  const survivors = await purgeLocalLogSheets(all, now)
+  return all.length - survivors.length
+}
+
+/**
+ * The same purge over rows the caller has just read, returning the rows that are still there.
+ *
+ * The sync pass reads the table once and hands the survivors on to the backlog report (issue
+ * P-08) — a read taken *before* the purge would count rows it had just deleted. The rows must be
+ * fresh: deciding to delete from a stale copy could remove a round that was re-opened meanwhile.
+ */
+export async function purgeLocalLogSheets(sheets: LogSheet[], now = Date.now()): Promise<LogSheet[]> {
   let windows: RetentionWindows
   try {
     windows = resolveRetentionWindows((await getSettings()).deviceRetention)
@@ -96,18 +116,17 @@ export async function cleanupLocalLogSheets(now = Date.now()): Promise<number> {
     // The settings row could not be read. Purging nothing is always safe — the pass runs again
     // after the next sync — while guessing a window could delete what an administrator chose to
     // keep. A missing or unreadable value must never mean «purge now».
-    return 0
+    return sheets
   }
 
-  const all = await getAllLogSheets()
-  let deleted = 0
-
-  for (const sheet of all) {
-    if (!isEligibleForLocalPurge(sheet, now, windows)) continue
+  const survivors: LogSheet[] = []
+  for (const sheet of sheets) {
+    if (!isEligibleForLocalPurge(sheet, now, windows)) {
+      survivors.push(sheet)
+      continue
+    }
     await deleteLogSheet(sheet.localId)
     await deleteSyncedAttachmentsForLogSheet(sheet.localId)
-    deleted++
   }
-
-  return deleted
+  return survivors
 }

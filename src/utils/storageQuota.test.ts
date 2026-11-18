@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LOW_STORAGE_THRESHOLD_BYTES,
   getStorageStatus,
+  isStoragePersisted,
   requestPersistentStorage
 } from '@/utils/storageQuota'
 
@@ -93,5 +94,30 @@ describe('requestPersistentStorage', () => {
       }
     })
     expect(await requestPersistentStorage()).toBe(false)
+  })
+})
+
+/** Issue P-09 — what the device-check page warns about; it asks, and never requests. */
+describe('isStoragePersisted', () => {
+  it('reports the grant as it stands, without asking for one', async () => {
+    const persist = vi.fn(async () => true)
+    withNavigator({ persisted: async () => false, persist })
+    expect(await isStoragePersisted()).toBe(false)
+    expect(persist).not.toHaveBeenCalled()
+
+    withNavigator({ persisted: async () => true })
+    expect(await isStoragePersisted()).toBe(true)
+  })
+
+  it('says it does not know, rather than no, when the browser cannot say', async () => {
+    withNavigator(undefined)
+    expect(await isStoragePersisted()).toBeNull()
+
+    withNavigator({
+      persisted: async () => {
+        throw new Error('private mode')
+      }
+    })
+    expect(await isStoragePersisted()).toBeNull()
   })
 })

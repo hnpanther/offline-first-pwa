@@ -477,6 +477,15 @@ export interface LocalAttachment {
    * Plain, non-indexed property — needs no Dexie version bump.
    */
   pendingDelete?: boolean
+  /**
+   * The id this file was first captured under, when the server answered that id
+   * `409 ATTACHMENT_ID_TAKEN` (backend B-10, issue P-06): somebody else's file already holds it,
+   * so the file was given this row's fresh id and its round's reference rewritten to match. Its
+   * presence is also the «one re-mint per file» rule — a second collision parks the row.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  idRemintedFrom?: string
   createdAt: number
   uploadedAt?: number
 }
@@ -646,6 +655,13 @@ export interface LogSheet {
    * property: no Dexie version bump.
    */
   serverKeptAt?: number
+  /**
+   * When the server answered the last refused submission of this round with `kept: false`
+   * (backend V26, issue B-04 §2): it declined to keep it, so the outcome's usual meaning —
+   * `SUPERSEDED`/`CANCELLED` imply kept — does not hold, and the readings are only here.
+   * Cleared whenever a later answer keeps it. Plain, non-indexed property: no Dexie version bump.
+   */
+  serverKeepRefusedAt?: number
   /**
    * Late progress (backend V25, issue P-01/B-02): readings of a draft whose deadline passed.
    *

@@ -238,6 +238,19 @@ export async function getAllLogSheets(): Promise<LogSheet[]> {
   return items.sort((a, b) => b.createdAt - a.createdAt)
 }
 
+/**
+ * Rounds in one local state, read through the `status` index rather than the whole table.
+ *
+ * For the readers that run on every sync tick (issue P-08): the submit queue wants only
+ * `submitted` rows and the progress lane only `draft` ones, and on a tablet that has been
+ * collecting for a week deserialising every round — each with up to 300 entries — five times
+ * every thirty seconds is what makes the form feel slow.
+ */
+export async function getLogSheetsByStatus(status: LogSheet['status']): Promise<LogSheet[]> {
+  const items = await db.logSheets.where('status').equals(status).toArray()
+  return items.sort((a, b) => b.createdAt - a.createdAt)
+}
+
 export async function getLogSheet(localId: string): Promise<LogSheet | undefined> {
   return db.logSheets.where('localId').equals(localId).first()
 }

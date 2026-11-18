@@ -3,7 +3,7 @@ import {
   type LogSheetProgressItem,
   type LogSheetProgressResult
 } from '@/services/api'
-import { getAllLogSheets, getLogSheet, updateLogSheet } from '@/services/storage'
+import { getLogSheet, getLogSheetsByStatus, updateLogSheet } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import {
   isInvalidLocalLogSheet,
@@ -137,8 +137,10 @@ export function hasDirtySheetForm(
 export async function getLogSheetsPendingProgress(userId?: string | null): Promise<LogSheet[]> {
   const resolved = userId === undefined ? await getSessionUserId() : userId
   if (!resolved) return []
-  const all = await getAllLogSheets()
-  return all.filter(
+  // Only drafts can report progress (`isLogSheetProgressOwnedByUser`), so only drafts are read
+  // — through the status index, on every tick (issue P-08).
+  const drafts = await getLogSheetsByStatus('draft')
+  return drafts.filter(
     sheet =>
       isLogSheetProgressOwnedByUser(sheet, resolved) &&
       (dirtyEntriesForProgress(sheet).length > 0 || hasDirtySheetForm(sheet))

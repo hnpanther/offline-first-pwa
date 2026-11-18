@@ -1099,6 +1099,43 @@ markers twice at once.
 `no-fallthrough` reads a comment between `case 'image':` and `case 'signature':` as an intended
 fall-through without the marker, and fails the lint. Put the comment above the first label.
 
+### The submit queue goes in requests of twenty; answers are applied per request (issue P-04)
+
+`submitInChunks` (`submitChunks.ts`) is the only way a queue goes out. Do not go back to one request
+for the whole queue, and do not move the result handling after the loop: each request's answers are
+recorded as they arrive, so a dead link on the third request keeps what the first two delivered.
+`classifySubmitFailure` decides everything about a failure — `0`/`408`/`429`/`502`–`504` stop the pass
+silently, `413` splits, anything else leaves the rounds `pending` and is shown after three refused
+passes in a row. Never mark a round `failed` for a refused *request*: `failed` means the server judged
+*that round* (Rejected submissions, rule 2) — the one exception is a round `413` on its own.
+
+### A purge never deletes what `isUndeliveredRound` covers (issue P-05)
+
+`isEligibleForLocalPurge` asks `isUndeliveredRound` before any window, for failed rows and expired
+drafts alike, and whatever the server's switch says. The two must keep sharing that one definition:
+a purge rule written separately is exactly how a refused round was deleted while the dashboard still
+counted it. And `SUPERSEDED`/`CANCELLED` mean «held by the server» only through
+`isRefusalHeldByServer`, which lets `serverKeepRefusedAt` (an answer of `kept: false`, backend V26)
+override them — never read the outcome on its own.
+
+### Re-minting an attachment id is a move inside one transaction, and only once (issue P-06)
+
+The id is the `attachments` primary key, so `remintTakenAttachment` adds the row under the new id
+and deletes the old one in the same `rw` transaction that rewrites the round's reference — split
+them and a crash leaves an answer naming an id no row holds, which the server then treats as a
+reference that never resolves. Re-mint only while `canStillCarryNewReference` (a draft, or a
+completion not yet sent); otherwise park. Match the refusal by `ApiError.code ===
+'ATTACHMENT_ID_TAKEN'`, never by status alone: a plain `409` means the field is full and must stay
+retryable.
+
+### The sync tick reads by status, and reads the whole table once (issue P-08)
+
+The queue and the pending badge read `getLogSheetsByStatus('submitted')`, the progress lane
+`getLogSheetsByStatus('draft')`. A new per-tick reader should do the same rather than call
+`getAllLogSheets()`. The one full read of a pass is the purge's, after the submit, and it hands its
+survivors on (`purgeLocalLogSheets` → `reportUndeliveredBacklogIfChanged(…, sheets)`); never pass a
+purge rows read *before* awaited work, or it can delete a round that changed meanwhile.
+
 ### The container's nginx runs as uid 101 — ports, redirects and the key follow from it
 
 `docker/Dockerfile` declares `USER 101:101`, so nginx has no root master process (CIS Docker

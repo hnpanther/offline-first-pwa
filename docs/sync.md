@@ -503,6 +503,35 @@ if (result.outcome === 'SUBMITTED') {
 that stamp lands the upload queue skips them by design — an attachment referencing a sheet the
 server has never seen would be rejected, and retried forever.
 
+### 6b. In requests of twenty, and a refusal is not a blip (issue P-04)
+
+The queue used to go out as **one** request under one `catch` that called every failure a network
+blip: a body over nginx's 32 MB (`413`), more than 500 items (`400`) or any server fault that repeats
+for this payload was re-sent every thirty seconds for ever, nothing marked, nothing shown — and one
+oversized round held back every round behind it. `submitChunks.ts` now:
+
+| | |
+|---|---|
+| **Chunks** | at most **20 items and ~8 MB of UTF-8 JSON** per request (`DEFAULT_SUBMIT_LIMITS`), in queue order; an item over the byte budget gets a request of its own |
+| **Applies each answer as it arrives** | so a later failure can never lose an earlier request's outcomes |
+| `0`, `408`, `429`, `502`–`504`, or not an API answer | **transient** — the pass stops; everything unsent stays exactly as it was; no error is flashed |
+| `413` | the request is **halved** and both halves go next; a single item still too large is marked `failed` with `SYNC_OUTCOME_MESSAGES.TOO_LARGE` (kept on the device, counted «ارسال‌نشده», never purged) |
+| any other status | **refused** — the items stay `pending`, the *other* requests still go; after `REFUSED_PASSES_BEFORE_SHOWING` (**3**) such passes in a row the sync indicator shows the server's message (`error` event with `transient: false`). One clean pass resets the count |
+
+Fault reports go through the same function. Results are keyed by `localId`, so nothing else in the
+result handling had to change; it now lives in named steps (`applyLogSheetResult`,
+`markLogSheetDelivered`, `markLogSheetRefused`, `markLogSheetTooLarge`). Tests:
+`submitChunks.test.ts` (pure), `submitBatchFailures.test.ts` (through `SyncManager`).
+
+### 6c. One read of the table per pass (issue P-08)
+
+The queue reads `getLogSheetsByStatus('submitted')` and the progress lane
+`getLogSheetsByStatus('draft')` — the existing `status` index, no Dexie version bump — instead of
+deserialising every round (each with up to 300 entries) several times every thirty seconds. The
+pass reads the whole table **once**, after the submit, for the purge (`purgeLocalLogSheets`) and
+hands the survivors to the backlog report; that read must be fresh, because deciding to delete from a
+stale copy could remove a round re-opened meanwhile.
+
 ---
 
 ## Submission outcomes
@@ -524,6 +553,12 @@ whether it stored the submission as a void row for a supervisor. The device reco
 `serverKeptAt`; the row stays `failed` either way (the round was not applied), but a kept row is
 no longer «ارسال‌نشده» — the server holds its readings. A server older than V25 never says it,
 and an `EXPIRED` from one is counted as undelivered (it really is).
+
+**`kept: false` (backend V26).** The one case where the server answers `SUPERSEDED` or `CANCELLED`
+*without* keeping the submission: this operator already has five different refused submissions
+on the round. Recorded as `serverKeepRefusedAt`, which overrides the outcome's usual meaning — the
+round is «ارسال‌نشده» and is never purged. `kept: true` and `kept: false` each clear the other; an
+answer saying neither leaves both as they were (`keptFieldsOf`, `isRefusalHeldByServer`).
 
 > **A refused submission is never discarded.** The operator did the work. The server stores the
 > payload in `log_sheet_void_submissions` — the per-asset readings and, since backend V14, the
@@ -663,8 +698,9 @@ in the panel's «تنظیمات», delivered on bootstrap as `deviceRetention`, 
 | Local round | Purged |
 |---|---|
 | Synced (accepted by the server) | `syncedRetentionHours` after `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` (1–720, default 24) |
-| Failed (refused by the server) | **never** — unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` after `submittedAt` → `updatedAt` → `createdAt` |
-| Draft past its deadline (`EXPIRED`) | **never** — unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` after `dueAt` → `updatedAt` → `createdAt` (72–8760, default 168) |
+| Failed (refused by the server) **and held by it** — kept for review | **never** — unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` after `submittedAt` → `updatedAt` → `createdAt` |
+| Draft past its deadline (`EXPIRED`) whose edits the server kept, or that has none | **never** — unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` after `dueAt` → `updatedAt` → `createdAt` (72–8760, default 168) |
+| **Undelivered** (`isUndeliveredRound` — its readings exist only on this device) | **never, whatever the settings** (issue P-05) |
 | Active draft | never, whatever the settings |
 | Submitted, still pending sync | never, whatever the settings |
 | Synced, then reopened (`isReopenedAfterSync`) | never while its new deadline stands; the synced rule once it passes |
@@ -676,6 +712,14 @@ a file still waiting to upload stays and is delivered on its own server sheet id
 **Before V24 these windows were constants** — 24 h synced, **7 days refused, 24 h past the
 deadline** — and the last two deleted rounds whose readings had never reached the server
 ([issue P-01](issue.md#p-01)). The server default now keeps them.
+
+**And the switch on never deletes the only copy ([issue P-05](issue.md#p-05), 2026-11-18).** The
+first version of §41 purged every failed row and expired draft alike once `unsyncedRetentionHours`
+had passed. `isEligibleForLocalPurge` now asks `isUndeliveredRound` first — the same question the
+«ارسال‌نشده» count asks — and keeps everything it covers: a `VALIDATION_ERROR` waiting for the
+operator's correction, an `ERROR`, an `EXPIRED` an older server did not keep, a refusal answered
+`kept: false`, a draft with unkept edits. Such a round leaves the tablet only by being delivered;
+clearing one by hand is not built (backend roadmap §41).
 
 Four rules, all in `deviceRetention.ts`, that make sure a value nobody chose never deletes work:
 
@@ -708,7 +752,7 @@ and `mobilePolicy`; an offline tablet keeps the last values it saw. Regression t
 
 | Counted | Not counted |
 |---|---|
-| A submitted round refused with nothing kept: `failed` with no `serverKeptAt` and an outcome other than `SUPERSEDED` / `CANCELLED` (`EXPIRED` from an older server, `VALIDATION_ERROR`, `ERROR`, or a row an older app failed locally) | `synced`; still queued (`pending` / `syncing` — that is «در انتظار ارسال»); refused but kept (`serverKeptAt`, or `SUPERSEDED` / `CANCELLED`, kept since backend V14) |
+| A submitted round refused with nothing kept: `failed` with no `serverKeptAt` and an outcome other than `SUPERSEDED` / `CANCELLED` (`EXPIRED` from an older server, `VALIDATION_ERROR`, `ERROR`, too large to send, or a row an older app failed locally) — **or any outcome answered `kept: false`** (`serverKeepRefusedAt`, backend V26) | `synced`; still queued (`pending` / `syncing` — that is «در انتظار ارسال»); refused but kept (`serverKeptAt`, or `SUPERSEDED` / `CANCELLED` without `kept: false`, kept since backend V14) |
 | A draft with edits of its own that can no longer travel as progress — expired, cancelled, revoked — unless the server kept those edits (`lateProgressKeptMarker` ≥ the newest marker) | An open draft (ordinary progress); a draft with no edits; an archived snapshot (its own store) |
 
 The dashboard counts over the viewer's own rows, like its other cards; the device-check page and the
@@ -720,9 +764,8 @@ the oldest, sent after a sync pass **only when** the number changed, an hour has
 signed-in session is a different one (the server keeps it on the session's row — found live: a
 second operator signing in with the count unchanged was otherwise never reported). The last report
 is `syncMeta.lastBacklogReport`. Best-effort: its own try/catch, and a 403/404 from an older server
-is swallowed. It is what lets a supervisor see a tablet holding work nobody has seen, which is
-also what decides whether turning on the server's purge of undelivered rounds (V24) would cost
-anything.
+is swallowed. It is what lets a supervisor see a tablet holding work nobody has seen — and,
+since issue P-05, exactly the rounds the local purge will never touch, whatever the switch says.
 
 ---
 
@@ -1120,6 +1163,29 @@ fail. That is the merge being right, not the test.
 - **Deleted after confirmation**, and only then — the device's copy is the only copy until the
   server has it.
 - **Deletions drain first**, before any upload in the same pass.
+
+### An id somebody else already used (issue P-06, backend B-10)
+
+The id is minted here and reaches the server inside the round's answers **before** the bytes do,
+and anyone who may read the round may read it — so a colleague could upload their own file under it
+first. The server now answers that `409` with `code: ATTACHMENT_ID_TAKEN` (`ApiError.code`), and
+[`attachmentIdTaken.ts`](../src/services/sync/attachmentIdTaken.ts) re-mints:
+
+1. **Only while the round can still carry a changed answer to the server** — a draft (its next
+   progress or late-progress push carries it) or a completion not yet sent (its submit carries
+   it). A delivered or refused round's answers are final on the server, so a re-mint there would
+   upload a file nothing names: the row is **parked** instead, bytes kept, with
+   `ATTACHMENT_ID_TAKEN_MESSAGE` and status 409 (never revived by sign-in).
+2. **In one Dexie transaction**: the attachment row moves to a fresh UUID (`idRemintedFrom` = the
+   old id), and the reference in the entry's `formData` — or the round's own `sheetFormData` for
+   media with no asset — is rewritten in place, order kept, and marked edited (`locallyEditedAt` /
+   `sheetFormLocallyEditedAt`) so the next push carries it and later merges keep it. A crash can
+   never leave an answer naming an id no row holds.
+3. **Uploaded again at once** — the one retry. `idRemintedFrom` is also the rule: a second
+   collision parks the row.
+
+A plain `409` (the field is full) is unchanged: retried, never re-minted. Tests:
+`attachmentIdTaken.test.ts`.
 
 ### Deleting is sync work too
 

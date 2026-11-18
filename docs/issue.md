@@ -21,12 +21,12 @@ marked `Fixed` with the commit, not deleted.
 | [P-01](#p-01) | High | Data loss | An expired draft's readings are never sent, and are deleted 24 h after the deadline | **Fixed** — not deleted (V24) and now sent and kept (V25) |
 | [P-02](#p-02) | High | Data loss | A round completed after its deadline is never sent, and is deleted after 7 days | **Fixed** — not deleted (V24) and now sent and kept (V25) |
 | [P-03](#p-03) | Medium | Data loss | `DUPLICATE` is trusted as "delivered" even when the server voided the work | **Fixed** by backend B-03 (V25) |
-| [P-04](#p-04) | Medium | Bug | Every failure of the submit batch is treated as a network blip, silently, forever | Open |
-| [P-05](#p-05) | Medium | Data loss | A failed row is purged after 7 days whether or not the server holds its readings | **Mitigated** by backend §41 / V24 — no failed row is purged unless an administrator switches it on |
-| [P-06](#p-06) | Low | Bug | An upload answered 403 because its id is taken retries forever | Open |
+| [P-04](#p-04) | Medium | Bug | Every failure of the submit batch is treated as a network blip, silently, forever | **Fixed (2026-11-18)** |
+| [P-05](#p-05) | Medium | Data loss | A failed row is purged after 7 days whether or not the server holds its readings | **Fixed (2026-11-18)** — purged only once the server holds it; clearing by hand not built |
+| [P-06](#p-06) | Low | Bug | An upload answered 403 because its id is taken retries forever | **Fixed (2026-11-18)** with backend B-10 |
 | [P-07](#p-07) | Low | Bug | `toBatchPayload` invents an idempotency key it does not store | **Fixed (2026-11-17)** |
-| [P-08](#p-08) | Low | Performance | The whole `logSheets` table is read several times per 30 s tick | Open |
-| [P-09](#p-09) | Info | Security | What the device holds, and what protects it | Accepted, restated |
+| [P-08](#p-08) | Low | Performance | The whole `logSheets` table is read several times per 30 s tick | **Fixed (2026-11-18)** |
+| [P-09](#p-09) | Info | Security | What the device holds, and what protects it | Accepted, restated — the eviction warning is **built (2026-11-18)** |
 | [D-01](#d-01--nothing-limits-the-rate-of-login-attempts-medium) | Medium | Deployment | Nothing limits the rate of sign-in attempts | **Fixed in 1.0.2** |
 | [D-02](#d-02--no-hsts-lowmedium) | Low–Medium | Deployment | No HSTS | **Fixed in 1.0.2** |
 | [D-03](#d-03--the-cipher-list-is-nginxs-default-low) | Low | Deployment | Default cipher list (CBC on TLS 1.2) | **Fixed in 1.0.2** |
@@ -230,6 +230,16 @@ with no chunking, so one oversized body blocks every sheet behind it.
 *Verify.* Vitest with a mocked `submitLogSheetsBatch`: 45 pending sheets → three calls; a `413`
 on a chunk of 20 → retried as two of 10; a `400` → a visible error, rows left `pending`.
 
+*Fixed (2026-11-18).* `services/sync/submitChunks.ts` (`chunkForSubmit`, `classifySubmitFailure`,
+`submitInChunks`), used by `SyncManager` for log sheets and fault reports alike. Exactly the fix
+above, with two decisions made explicit: each request's answer is **applied as it arrives**, so a
+later failure never loses an earlier request's outcomes; and a refused request (`400`, `500`, …)
+does not stop the pass — its rounds stay `pending`, the other requests still go, and the indicator
+shows the message after `REFUSED_PASSES_BEFORE_SHOWING` (3) refused passes in a row. A round too
+large on its own is `failed` with `SYNC_OUTCOME_MESSAGES.TOO_LARGE`, kept and counted «ارسال‌نشده».
+Tests: `submitChunks.test.ts` (26), `submitBatchFailures.test.ts` — all three *Verify* cases, plus
+a dead link after a delivered request, `502` as transient, and the count resetting.
+
 ## P-05
 
 **A failed row is purged after seven days whether or not the server holds its readings.**
@@ -260,6 +270,18 @@ configured hours — the per-outcome rule above is still the better design for t
 explicit dismissal and the count on `DeviceCheckPage` are not built; with the purge off, a tablet
 whose rounds keep failing now accumulates them, which is what that count would show.
 
+*Fixed (2026-11-18).* The per-outcome rule, through the one definition the count already used:
+`isEligibleForLocalPurge` asks `isUndeliveredRound` first and never purges what it covers — for a
+failed row and an expired draft alike, under the server's settings and under the shipped constants.
+"Held by the server" is `isRefusalHeldByServer`: `serverKeptAt`, or `SUPERSEDED` / `CANCELLED`
+**unless the server said `kept: false`** — which backend V26 now says when its per-person cap
+declines to keep a refusal, and which the device records as `serverKeepRefusedAt`. The count on
+`DeviceCheckPage` was built with V25 («ارسال‌نشده» in the storage check). **Not built**: dismissing
+one round by hand (backend roadmap §41) — such a round now leaves the tablet only by being
+delivered. Tests: `cleanupRetention.test.ts` («rounds that are never purged» — six new cases),
+`retentionRoundTrip.test.ts`, `submitBatchFailures.test.ts` («kept: false»),
+`handoverWithEvidence.test.ts`.
+
 ## P-06
 
 **An upload answered 403 because its id is taken retries forever.**
@@ -275,6 +297,14 @@ parked.
 *Fix.* Once B-10 answers a distinct `409` (`ATTACHMENT_ID_TAKEN`): mint a new id, rewrite the
 reference in the entry's `formData` (and mark the entry edited so the next progress push carries
 it), and retry. One retry per file; a second collision is parked with its reason.
+
+*Fixed (2026-11-18)* with backend B-10: `services/sync/attachmentIdTaken.ts`. As above, plus one
+rule the issue did not name: a re-mint only helps while the round can still **carry** the new
+reference to the server (a draft, or a completion not yet sent). On a delivered or refused round
+the server's answers are final, so the file is parked at once with its reason and its bytes. The
+move of the row and the rewrite of the reference (entry `formData`, or the round's `sheetFormData`
+for media with no asset) are one Dexie transaction. A plain `409` (field full) is unchanged. Tests:
+`attachmentIdTaken.test.ts` (6).
 
 ## P-07
 
@@ -315,6 +345,12 @@ index (`db.logSheets.where('status').equals('submitted')`) instead of filtering 
 `syncStatus` joins the index that is a Dexie version bump — do it together with another schema
 change rather than alone.
 
+*Fixed (2026-11-18), no Dexie version bump.* `getLogSheetsByStatus(status)` reads through the
+existing `status` index: the queue (and the pending badge, every 15 s) reads `submitted` rows, the
+progress lane `draft` rows. The pass reads the whole table once, after the submit, for the purge
+(`purgeLocalLogSheets`), and hands the survivors to the backlog report. Not done: `syncStatus` in the
+index (the version bump the issue warns against alone).
+
 ## P-09
 
 **Restated, not new: what the device holds, and what protects it.**
@@ -328,7 +364,10 @@ change rather than alone.
 - `navigator.storage.persist()` is requested at start-up (`main.tsx`); a `false` there means the
   browser may evict the database under pressure. **Worth surfacing on `DeviceCheckPage` as a
   warning rather than a fact** — on a tablet that is collecting video, eviction is a data-loss
-  path this app cannot see coming.
+  path this app cannot see coming. *Built (2026-11-18):* the storage check on `DeviceCheckPage` asks
+  `isStoragePersisted()` (asks only, never requests) and, on `false`, shows a **warning** state —
+  a new `warn` outcome beside ok/fail — saying the browser may evict everything, undelivered
+  rounds included, and to run the installed app. `null` (the browser cannot say) is not a warning.
 
 ---
 

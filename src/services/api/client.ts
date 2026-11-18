@@ -16,6 +16,19 @@ export class ApiError extends Error {
     super(message)
     this.name = 'ApiError'
   }
+
+  /**
+   * The stable English token a refusal carries when the client must branch on it rather than
+   * show it (`code` in the body, e.g. `ATTACHMENT_ID_TAKEN`) — never reworded, unlike `message`.
+   */
+  get code(): string | null {
+    const body = this.body
+    if (body && typeof body === 'object' && 'code' in body) {
+      const code = (body as { code: unknown }).code
+      if (typeof code === 'string' && code) return code
+    }
+    return null
+  }
 }
 
 /**

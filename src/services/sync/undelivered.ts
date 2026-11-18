@@ -2,17 +2,18 @@
  * Which rounds on this tablet hold readings the server has received in **no form at all** —
  * neither applied to the round nor kept for a supervisor to review (backend V25).
  *
- * One definition, used by three readers that must agree: the dashboard's «ارسال‌نشده» card, the
- * device-check page, and the report this tablet sends to the panel («نشست‌های اپ موبایل»). It is
- * also what decides whether turning on the server's purge of undelivered rounds (V24) would cost
- * readings nobody has seen.
+ * One definition, used by four readers that must agree: the dashboard's «ارسال‌نشده» card, the
+ * device-check page, the report this tablet sends to the panel («نشست‌های اپ موبایل») — and the
+ * local purge (`isEligibleForLocalPurge`, issue P-05), which never deletes a round this says is
+ * undelivered, whatever the server's retention settings are.
  *
  * Not counted, deliberately:
  * - a submitted round still waiting to sync — that is the pending queue («در انتظار ارسال»), which
  *   drains by itself;
  * - an active draft that is still open — its readings travel as ordinary progress;
  * - a round the server refused but **kept**: `serverKeptAt` (V25), or a `SUPERSEDED`/`CANCELLED`
- *   outcome, which the server has kept as a void submission since V14;
+ *   outcome, which the server has kept as a void submission since V14 — unless it said
+ *   `kept: false` (`serverKeepRefusedAt`, V26), the one case where it declined;
  * - a draft whose late readings the server kept (`lateProgressKeptMarker`) and which has not been
  *   edited since.
  */
@@ -54,15 +55,25 @@ export function isLateProgressDue(
   return sheet.lateProgressSentMarker == null || marker > sheet.lateProgressSentMarker
 }
 
+/**
+ * Whether the server holds the readings of a completion it refused: it said `kept: true`, or the
+ * outcome is one it has always kept — unless it said `kept: false`, which overrides the outcome.
+ */
+export function isRefusalHeldByServer(
+  sheet: Pick<LogSheet, 'serverKeptAt' | 'serverKeepRefusedAt' | 'lastSubmitOutcome'>
+): boolean {
+  if (sheet.serverKeptAt != null) return true
+  if (sheet.serverKeepRefusedAt != null) return false
+  return sheet.lastSubmitOutcome != null && KEPT_BY_SERVER_OUTCOMES.has(sheet.lastSubmitOutcome)
+}
+
 export function isUndeliveredRound(sheet: LogSheet, now = Date.now()): boolean {
   if (isArchivedSessionSnapshot(sheet)) return false
 
   if (sheet.status === 'submitted') {
     // Synced is delivered; pending/syncing is the queue, still on its way.
     if (sheet.syncStatus !== 'failed') return false
-    if (sheet.serverKeptAt != null) return false
-    if (sheet.lastSubmitOutcome && KEPT_BY_SERVER_OUTCOMES.has(sheet.lastSubmitOutcome)) return false
-    return true
+    return !isRefusalHeldByServer(sheet)
   }
 
   // A draft: undelivered only if it has edits of its own that can no longer travel as ordinary

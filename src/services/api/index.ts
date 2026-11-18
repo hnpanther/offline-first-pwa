@@ -524,7 +524,10 @@ export interface LogSheetSubmitResult {
   outcome?: 'SUBMITTED' | 'SUPERSEDED' | 'EXPIRED' | 'CANCELLED' | 'DUPLICATE' | 'ERROR'
   /**
    * Backend V25: `true` when the server refused to apply this round but kept it as a void
-   * submission for review. Absent from an older server, and on every other outcome.
+   * submission for review. `false` (backend V26, issue B-04 §2) when it would normally have kept
+   * it and declined — this operator already has five different refusals on the round — which
+   * matters because `SUPERSEDED`/`CANCELLED` otherwise imply kept. Absent from an older server,
+   * and on every other outcome.
    */
   kept?: boolean | null
 }

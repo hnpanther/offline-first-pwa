@@ -49,8 +49,8 @@ This is the data that matters. Losing it loses field readings.
 
 | Store | Key + indexes | Holds |
 |---|---|---|
-| `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts. Backend V25 added four plain, non-indexed fields (no Dexie version bump): `serverKeptAt` (a refused submission the server kept), and `lateProgressSentMarker` / `lateProgressKeptMarker` / `lateProgressKeptAt` (an expired draft's edits sent once, and kept) — see [sync.md](sync.md) «Deadlines, offline» |
-| `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. `createdByUserId` is a **plain, unindexed** property — see below |
+| `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts. Backend V25 added four plain, non-indexed fields (no Dexie version bump): `serverKeptAt` (a refused submission the server kept), and `lateProgressSentMarker` / `lateProgressKeptMarker` / `lateProgressKeptAt` (an expired draft's edits sent once, and kept) — see [sync.md](sync.md) «Deadlines, offline». Backend V26 added `serverKeepRefusedAt` (a refusal answered `kept: false`), also plain. The sync tick reads the queue and the progress lane through the **`status`** index (`getLogSheetsByStatus`, issue P-08) |
+| `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. `createdByUserId` is a **plain, unindexed** property — see below; so is `idRemintedFrom` (issue P-06) |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
 
@@ -106,6 +106,13 @@ name its own capture until it had a network — precisely the situation this app
 a sheet that has no server id yet; the upload queue skips it by design until
 `bindAttachmentsToServerSheet` stamps the server id after the sheet syncs. Until then there is
 nowhere to send it.
+
+**The id is the primary key, so changing it is a move, not an update.** When the server answers
+that the id already names somebody else's file (`409 ATTACHMENT_ID_TAKEN`, issue P-06),
+`remintTakenAttachment` adds the row under a fresh UUID, deletes the old one and rewrites the
+round's reference to it — all in one `rw` transaction over `attachments` and `logSheets`, so no
+reference can be left naming an id no row holds. `idRemintedFrom` keeps the old id and limits it to
+once per file.
 
 ---
 

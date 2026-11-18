@@ -15,6 +15,7 @@ import { getAllLogSheets } from '@/services/storage'
 import { getAuthSession } from '@/services/auth'
 import { reportSyncBacklog } from '@/services/api'
 import { computeUndeliveredBacklog, type UndeliveredBacklog } from '@/services/sync/undelivered'
+import type { LogSheet } from '@/types'
 
 const META_KEY = 'lastBacklogReport'
 const RESEND_AFTER_MS = 60 * 60 * 1000
@@ -48,14 +49,21 @@ export async function currentUndeliveredBacklog(now = Date.now()): Promise<Undel
   return computeUndeliveredBacklog(await getAllLogSheets(), now)
 }
 
-/** @returns whether a report was sent. */
+/**
+ * @param sheets every local round, when the caller has just read them — the sync pass reads the
+ *        table once and hands the purge's survivors on (issue P-08). Read here when absent.
+ * @returns whether a report was sent.
+ */
 export async function reportUndeliveredBacklogIfChanged(
   signal?: AbortSignal,
-  now = Date.now()
+  now = Date.now(),
+  sheets?: LogSheet[]
 ): Promise<boolean> {
   const sessionKey = await currentSessionKey()
   if (!sessionKey) return false
-  const backlog = await currentUndeliveredBacklog(now)
+  const backlog = sheets
+    ? computeUndeliveredBacklog(sheets, now)
+    : await currentUndeliveredBacklog(now)
   const previous = await lastReport()
   const unchanged =
     previous != null &&

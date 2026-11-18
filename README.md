@@ -112,7 +112,9 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
   otherwise, re-checked every 15 s while on screen. It used to be green unconditionally
 - **Device hardware check (admin)** — «بررسی سخت‌افزار دستگاه» tests NFC, camera, video,
   microphone, QR/barcode scanning, GPS and storage **on the tablet itself**, with no server
-  involved. It reports rather than fixes, asks for each permission only when its own button is
+  involved. The storage check shows a **warning** (not a failure) when the browser has not made
+  the app's storage persistent — it may then evict everything, undelivered rounds included
+  (issue P-09). It reports rather than fixes, asks for each permission only when its own button is
   pressed, and shows the raw answer (`NDEFReader تعریف نشده`) instead of a verdict — so an
   administrator standing next to a tablet can tell a missing permission from a missing API.
   Its «رمزگشا» button opens no camera and asks for no permission: it reports whether the bundled
@@ -1763,8 +1765,9 @@ stays on this device»).
 | State | Retention (server default) | Counted from |
 |-------|-----------|--------------|
 | Synced (sent successfully) | **24 hours** (`device.synced_retention_hours`, 1–720), then deleted locally | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
-| Failed (server rejected: superseded / revoked / cancelled / expired) | **Never** — unless `device.unsynced_purge_enabled` is on; then `device.unsynced_retention_hours` (default 168, 72–8760) | `submittedAt` → `updatedAt` → `createdAt` |
-| Expired draft (deadline passed, never submitted) | **Never** — unless that switch is on; then the same hours | `dueAt` → `updatedAt` → `createdAt` |
+| Failed (server rejected: superseded / revoked / cancelled / expired) **and kept by the server for review** | **Never** — unless `device.unsynced_purge_enabled` is on; then `device.unsynced_retention_hours` (default 168, 72–8760) | `submittedAt` → `updatedAt` → `createdAt` |
+| Expired draft (deadline passed, never submitted) whose edits the server kept, or with none | **Never** — unless that switch is on; then the same hours | `dueAt` → `updatedAt` → `createdAt` |
+| **«ارسال‌نشده»** — refused or expired with readings **only on this tablet** (`isUndeliveredRound`) | **Never** auto-deleted, whatever the settings (issue P-05) | — |
 | Active draft (in progress, not expired) | **Never** auto-deleted, whatever the settings | — |
 | Submitted, pending sync | **Never** auto-deleted — kept until the server answers, whatever the settings | — |
 | Synced, then **reopened** by a supervisor | **Never** while the new deadline stands; purged on the ordinary rules once it passes | `dueAt` decides whether the reopen is still live |

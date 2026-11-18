@@ -11,6 +11,11 @@ import {
 import { getLogSheet, getLogSheetByServerId } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import { isAttachmentUploadableByUser, isVoidedSubmission } from '@/utils/attachmentOwnership'
+import {
+  ATTACHMENT_ID_TAKEN_MESSAGE,
+  isAttachmentIdTaken,
+  remintTakenAttachment
+} from '@/services/sync/attachmentIdTaken'
 import { toIdString } from '@/utils/ids'
 import type { LocalAttachment, LogSheet } from '@/types'
 
@@ -230,6 +235,22 @@ async function isRefusedVoidEvidence(attachment: LocalAttachment, err: unknown):
   return isVoidedSubmission(await getLogSheet(attachment.logSheetLocalId))
 }
 
+/**
+ * The server holds this id for somebody else's file (issue P-06): re-mint it and upload again at
+ * once — the one retry. When the rule is not to re-mint (done once already, or the round can no
+ * longer carry a new reference), the row is parked with its reason: retrying the same id can
+ * only meet the same answer.
+ */
+async function answerTakenId(
+  attachment: LocalAttachment,
+  signal?: AbortSignal
+): Promise<UploadOutcome> {
+  const reminted = await remintTakenAttachment(attachment)
+  if (reminted) return uploadOne(reminted, signal)
+  await markAttachmentFailed(attachment.id, ATTACHMENT_ID_TAKEN_MESSAGE, true, 409)
+  return 'failed'
+}
+
 async function uploadOne(
   attachment: LocalAttachment,
   signal?: AbortSignal
@@ -257,6 +278,9 @@ async function uploadOne(
       // Offline or server unreachable — leave the row exactly as it was so the next pass
       // retries it. Marking it failed here would make a network blip look like a rejection.
       return 'aborted'
+    }
+    if (isAttachmentIdTaken(err)) {
+      return answerTakenId(attachment, signal)
     }
     const message = err instanceof Error ? err.message : 'خطا در ارسال پیوست'
     // Permanent → parked (never retried). 5xx or anything unclassified → still retryable, but
