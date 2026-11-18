@@ -277,8 +277,12 @@ failed row and an expired draft alike, under the server's settings and under the
 **unless the server said `kept: false`** — which backend V26 now says when its per-person cap
 declines to keep a refusal, and which the device records as `serverKeepRefusedAt`. The count on
 `DeviceCheckPage` was built with V25 («ارسال‌نشده» in the storage check). **Not built**: dismissing
-one round by hand (backend roadmap §41) — such a round now leaves the tablet only by being
-delivered. Tests: `cleanupRetention.test.ts` («rounds that are never purged» — six new cases),
+one round by hand — such a round now leaves the tablet only by being delivered. How it may ever
+leave otherwise is **backend roadmap §42, undecided**: clearing by hand, or a hard ceiling set in the
+panel that removes even the only copy after N days. The data is sensitive and a tablet leaving the
+organisation must not carry it permanently, so the recommendation there is the ceiling (off by
+default, and running offline at app start, which no purge does today), with clearing by hand as
+its complement. Tests: `cleanupRetention.test.ts` («rounds that are never purged» — six new cases),
 `retentionRoundTrip.test.ts`, `submitBatchFailures.test.ts` («kept: false»),
 `handoverWithEvidence.test.ts`.
 

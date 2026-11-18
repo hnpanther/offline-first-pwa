@@ -719,7 +719,10 @@ had passed. `isEligibleForLocalPurge` now asks `isUndeliveredRound` first — th
 «ارسال‌نشده» count asks — and keeps everything it covers: a `VALIDATION_ERROR` waiting for the
 operator's correction, an `ERROR`, an `EXPIRED` an older server did not keep, a refusal answered
 `kept: false`, a draft with unkept edits. Such a round leaves the tablet only by being delivered;
-clearing one by hand is not built (backend roadmap §41).
+clearing one by hand, or a ceiling that removes even the only copy after N days, is **backend
+roadmap §42 — weighed there, undecided**. Note for whoever builds either: this purge runs only
+online with a session (`useSyncManager`, and after a sync pass), so a time limit means nothing on a
+tablet opened offline until it also runs at app start.
 
 Four rules, all in `deviceRetention.ts`, that make sure a value nobody chose never deletes work:
 
