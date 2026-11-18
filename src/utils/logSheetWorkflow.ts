@@ -7,6 +7,7 @@ import {
   sheetHasLocalWork
 } from '@/utils/logSheetLocalData'
 import { isOwnershipReassignError, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
+import { serverNow } from '@/services/clock/serverClock'
 
 /** Drop stale local completion when the server still has the sheet open. */
 export function alignLocalWorkflowWithServer(
@@ -162,7 +163,7 @@ export function revivalUpdatesAfterReassign(
 export function canContinueReopenedLogSheet(
   serverSheet: ServerLogSheet,
   sessionUserId: string | null,
-  now = Date.now()
+  now = serverNow()
 ): { ok: boolean; reason?: string } {
   if (!sessionUserId) {
     return { ok: false, reason: 'کاربر جاری شناسایی نشد. پس از اتصال به سرور دوباره تلاش کنید.' }

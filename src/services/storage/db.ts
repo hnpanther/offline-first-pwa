@@ -9,6 +9,9 @@ import { deviceServerUrl } from '@/services/settings/deliveryServerUrl'
 
 const DB_NAME = 'offline-pwa-db'
 
+/** The main database's name, for the one caller that deletes it whole: a wipe ordered by the server. */
+export const MAIN_DATABASE_NAME = DB_NAME
+
 class AppDatabase extends Dexie {
   assetClasses!: Table<AssetClass>
   assetEntries!: Table<AssetEntry>

@@ -76,7 +76,18 @@ content.
 | Store | Key | Holds |
 |---|---|---|
 | `settings` | `key` | `AppSettings` — server URL, sync interval, NFC mode, screen orientation, and the server-owned values bootstrap mirrors here (`attachmentLimits`, the scan and annotation policies, and since backend V24 the optional `deviceRetention` — absent until a server sends it, which is what keeps the purge on the shipped constants; no Dexie version change, it is a field of the one settings row) |
-| `syncMeta` | `key` | Last-sync timestamps per resource; `lastBacklogReport` (backend V25) — the last «ارسال‌نشده» count sent to the server and the session it went to, so an unchanged number is not resent every pass |
+| `syncMeta` | `key` | Last-sync timestamps per resource; `lastBacklogReport` (backend V25) — the last «ارسال‌نشده» count sent to the server and the session it went to, so an unchanged number is not resent every pass; `serverClock` (roadmap §7) — the measured `server − device` offset, its round trip, when it was measured and the server time last seen; `sessionLastContactAt` (backend V28) — server time of the last authenticated answer, which the offline-session ceiling counts from, cleared at sign-out; `deviceStatusCheckedAt` (backend V28) — device time of the signed-in device-status check, which spaces them 30 minutes apart |
+
+`settings` also holds, since backend V28, the optional `offlineSessionLimit` (`{enabled, hours}`),
+absent until a server sends it — which means never lock. No Dexie version change for either.
+
+**Outside IndexedDB, three small things (backend V28):** `localStorage['mfdcs.deviceWipe']` — a wipe
+order being carried out (`wiping`) or awaiting its signed confirmation (`confirming`), kept outside
+`offline-pwa-db` because it must survive that database being deleted; `sessionStorage['mfdcs.deviceWiped']`
+— «this start followed a wipe», read once by the login page; and in the separate
+`mfdcs-device-identity` database a second row, `wipe-ack`, holding the key set aside to sign the wipe
+confirmation (one store, one schema version, as before — a second row is not a schema change). The
+app stores nothing else in either storage area.
 
 `settings` never syncs. Some of it is device-specific by nature (screen orientation depends on
 how *that* tablet is mounted), and a shared account must not drag one device's choice onto
@@ -237,6 +248,8 @@ wiping a user's database on an unrelated error would be far worse than failing l
 | Browser cache cleared | ❌ | ❌ | ❌ | ❌ | ❌ |
 | "Clear site data" | ❌ | ❌ | ❌ | ❌ | ❌ |
 | PWA uninstalled | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Offline-session lock** (backend V28) | ✅ | ❌ — as logout | ✅ | ✅ | ✅ |
+| **Wipe ordered by the server** (backend V28) | ❌ | ❌ | ❌ — **unsent rounds too** | ❌ | ✅ server address only |
 
 **Logout does not clear local work**, and that is deliberate on a shared tablet: an operator
 signing out at the end of a shift must not destroy a round the next operator has not synced yet.

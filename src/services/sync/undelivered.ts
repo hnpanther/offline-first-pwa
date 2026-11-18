@@ -26,6 +26,7 @@ import {
   isLogSheetExpired,
   isRevokedAssignment
 } from '@/utils/logSheetStatus'
+import { serverNow } from '@/services/clock/serverClock'
 
 /** Outcomes the server has always answered after keeping the payload as a void submission. */
 const KEPT_BY_SERVER_OUTCOMES = new Set(['SUPERSEDED', 'CANCELLED'])
@@ -67,7 +68,7 @@ export function isRefusalHeldByServer(
   return sheet.lastSubmitOutcome != null && KEPT_BY_SERVER_OUTCOMES.has(sheet.lastSubmitOutcome)
 }
 
-export function isUndeliveredRound(sheet: LogSheet, now = Date.now()): boolean {
+export function isUndeliveredRound(sheet: LogSheet, now = serverNow()): boolean {
   if (isArchivedSessionSnapshot(sheet)) return false
 
   if (sheet.status === 'submitted') {
@@ -103,7 +104,7 @@ export interface UndeliveredBacklog {
   oldestAt: number | null
 }
 
-export function computeUndeliveredBacklog(sheets: LogSheet[], now = Date.now()): UndeliveredBacklog {
+export function computeUndeliveredBacklog(sheets: LogSheet[], now = serverNow()): UndeliveredBacklog {
   let count = 0
   let oldestAt: number | null = null
   for (const sheet of sheets) {

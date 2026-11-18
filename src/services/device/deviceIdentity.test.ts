@@ -12,7 +12,11 @@ import {
   loginMessage,
   normalizeEnrollmentCode,
   saveEnrollmentState,
-  signMessage
+  signMessage,
+  wipeMessage,
+  retireIdentityForWipe,
+  loadRetiredIdentity,
+  discardRetiredIdentity
 } from './deviceIdentity'
 
 /** The main database's name — `src/services/storage/db.ts`. */
@@ -129,5 +133,43 @@ describe('what gets signed', () => {
     expect(normalizeEnrollmentCode('۱۲۳۴‌۵۶۷۸')).toBe('12345678')
     // Anything else stays, so it cannot match — never quietly dropped.
     expect(normalizeEnrollmentCode('1234a5678')).toBe('1234a5678')
+  })
+})
+
+describe('wipe on revoke (backend V28)', () => {
+  afterEach(async () => {
+    await discardIdentity()
+    await discardRetiredIdentity()
+  })
+
+  it('the wipe confirmation matches the server byte for byte', () => {
+    // Twin of DeviceKeysTest.theWipeMessageIsExactlyWhatTheTabletSigns…
+    expect(wipeMessage(42, 1763452800123)).toBe('mfdcs-wipe\n42\n1763452800123')
+  })
+
+  it('setting the key aside unenrols the tablet and keeps the key able to sign', async () => {
+    const live = await createIdentity('tablet')
+    await saveEnrollmentState({ status: 'approved', requestId: 42, keyFingerprint: 'fp' })
+
+    expect(await retireIdentityForWipe()).toBe(true)
+
+    expect(await loadIdentity()).toBeNull()
+    const retired = await loadRetiredIdentity()
+    expect(retired?.requestId).toBe(42)
+    expect(retired?.publicKey).toBe(live.publicKey)
+    const signature = await signMessage(retired!, wipeMessage(42, 7))
+    expect(await verify(live.publicKey, wipeMessage(42, 7), signature)).toBe(true)
+  })
+
+  it('is idempotent: a second run leaves the set-aside key alone and a new key is separate', async () => {
+    await createIdentity()
+    await saveEnrollmentState({ status: 'approved', requestId: 42, keyFingerprint: 'fp' })
+    await retireIdentityForWipe()
+    expect(await retireIdentityForWipe()).toBe(false)
+    expect((await loadRetiredIdentity())?.requestId).toBe(42)
+
+    const fresh = await createIdentity()
+    expect((await loadIdentity())?.publicKey).toBe(fresh.publicKey)
+    expect((await loadRetiredIdentity())?.requestId).toBe(42)
   })
 })

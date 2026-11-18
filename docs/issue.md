@@ -26,7 +26,7 @@ marked `Fixed` with the commit, not deleted.
 | [P-06](#p-06) | Low | Bug | An upload answered 403 because its id is taken retries forever | **Fixed (2026-11-18)** with backend B-10 |
 | [P-07](#p-07) | Low | Bug | `toBatchPayload` invents an idempotency key it does not store | **Fixed (2026-11-17)** |
 | [P-08](#p-08) | Low | Performance | The whole `logSheets` table is read several times per 30 s tick | **Fixed (2026-11-18)** |
-| [P-09](#p-09) | Info | Security | What the device holds, and what protects it | Accepted, restated — the eviction warning is **built (2026-11-18)** |
+| [P-09](#p-09) | Info | Security | What the device holds, and what protects it | Accepted, restated — the eviction warning, **wipe on revoke and the offline-session lock are built (2026-11-18, backend V28)** |
 | [D-01](#d-01--nothing-limits-the-rate-of-login-attempts-medium) | Medium | Deployment | Nothing limits the rate of sign-in attempts | **Fixed in 1.0.2** |
 | [D-02](#d-02--no-hsts-lowmedium) | Low–Medium | Deployment | No HSTS | **Fixed in 1.0.2** |
 | [D-03](#d-03--the-cipher-list-is-nginxs-default-low) | Low | Deployment | Default cipher list (CBC on TLS 1.2) | **Fixed in 1.0.2** |
@@ -362,7 +362,15 @@ index (the version bump the issue warns against alone).
 - The bearer token, the readings, captured media and (for a leased round) reference lists live
   in IndexedDB, unencrypted by the app. Protection is Android's storage encryption, the screen
   lock, `allowBackup="false"`, device enrolment and the CSP that keeps foreign script out.
-- Nothing is in `localStorage` or `sessionStorage` (checked).
+- Nothing is in `localStorage` or `sessionStorage` (checked) — except, since backend V28, a wipe
+  order being carried out (`mfdcs.deviceWipe`: device id and order timestamp, no data) and the
+  one-shot «this device was wiped» notice.
+- *Built (2026-11-18, backend V28):* **wipe on revoke** — a revoked device ordered wiped deletes
+  everything the app holds at its next contact with the server and confirms with its own key; and
+  the **offline-session lock** — a session the server has not answered for N hours (a plant setting,
+  off by default) locks and needs the password and the network again, deleting nothing. Neither
+  protects a tablet that is never opened again; that remains Android's encryption and screen lock.
+  [sync.md](sync.md), «Wipe on revoke» and «The offline-session ceiling».
 - The device key for enrolment is a non-extractable WebCrypto key, protected by the browser and
   not by hardware (backend roadmap §30).
 - `navigator.storage.persist()` is requested at start-up (`main.tsx`); a `false` there means the

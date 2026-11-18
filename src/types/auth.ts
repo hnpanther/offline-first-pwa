@@ -1,4 +1,5 @@
 import { useAppStore } from '@/store'
+import { serverNow } from '@/services/clock/serverClock'
 
 export interface AuthSession {
   accessToken: string
@@ -40,11 +41,18 @@ export interface LoginResponse {
   accessToken: string
   tokenType: string
   expiresAt: number
+  /** The server's clock when it answered (backend V28). Absent from an older server. */
+  serverTime?: number
 }
 
+/**
+ * Whether the stored session may be used. `now` is the server's time (`serverNow()`), because
+ * `expiresAt` is: a tablet clock running fast by more than a token's life would otherwise drop a
+ * fresh session the moment the server answered — a sign-out loop (PWA roadmap §7).
+ */
 export function isSessionValid(
   session: AuthSession | null,
-  now = Date.now(),
+  now = serverNow(),
   serverReachable: boolean | null = useAppStore.getState().serverReachable
 ): boolean {
   if (!session?.accessToken) return false

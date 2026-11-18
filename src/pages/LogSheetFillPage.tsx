@@ -107,6 +107,7 @@ import { isLogSheetAccessibleToUser } from '@/services/auth/sessionContext'
 import { toIdString } from '@/utils/ids'
 import type { LogSheet, AssetClass, LogSheetEntryData, NfcFaultReport } from '@/types'
 import { FONT_MONO } from '@/theme'
+import { clockOffsetMs, serverNow } from '@/services/clock/serverClock'
 
 const formatDate = formatJalaliDateTime
 
@@ -1040,13 +1041,16 @@ export function LogSheetFillPage() {
     setSaving(true)
     setSaveError(null)
     try {
-      const completedAt = Date.now()
+      // On the server's clock (PWA roadmap §7): the server judges the deadline on this value, and
+      // a tablet whose clock nobody corrects must not make on-time work late, or late work on time.
+      const completedAt = serverNow()
       const clientActionId = logSheet.clientActionId ?? uuidv4()
       await updateLogSheet(localId, {
         status: 'submitted',
         syncStatus: 'pending',
         submittedAt: completedAt,
         completedAt,
+        completionClockOffsetMs: clockOffsetMs(),
         clientActionId,
         ...(sessionUserId
           ? { assigneeUserId: sessionUserId, localOwnerUserId: sessionUserId }

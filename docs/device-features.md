@@ -648,6 +648,15 @@ once the device is approved the operator presses «ورود» once more:
 
 From then on every login fetches a nonce and signs `mfdcs-login\n<nonce>\n<username>`.
 
+Every step, what each side stores, the limits (30-minute request, 10-minute code, five tries,
+two-minute nonce) and what each piece defends against are in the backend's `docs/security.md` §3c,
+«Step by step — enrolling a tablet with a code».
+
+**When the switch is turned off and on again** nothing on the tablet is lost: the key and the
+approval stay. Off, an enrolled tablet logs in plainly (one extra challenge request); on again, it
+signs its next login without a new code. A request left waiting while the switch was off is
+re-armed with the same key once it is on.
+
 ## The key
 
 `crypto.subtle.generateKey({name: 'ECDSA', namedCurve: 'P-256'}, false, ['sign', 'verify'])` —
@@ -675,8 +684,19 @@ cannot prove it is the old one.
 | enrolment switched on between the challenge and the login | one automatic retry with a proof, so an enrolled tablet never sees the card for that |
 
 A revoked device's running session ends through the existing "session ended" path: the next
-request gets 401 and the operator lands on the login page with the usual notice. Nothing about
-unsynced work changes — it stays on the device, as for any ended session.
+request gets 401 and the operator lands on the login page with the usual notice. Unsynced work
+stays on the device, as for any ended session — **unless the administrator also ordered a wipe**
+(backend V28): the login page then finds the order and the app deletes everything it holds, unsent
+rounds included ([sync.md](sync.md), «Wipe on revoke»).
+
+**A session the revoke cannot reach.** A session opened while enrolment was off is not tied to the
+device on the server, so a revoke does not end it and no 401 comes. The tablet therefore asks about
+its own device while signed in (`useDeviceStatusWatch`, at most every 30 minutes while online): a
+**wipe order** is carried out whatever the switch says; a **plain revoke** signs the operator out —
+keeping every round, and never over an open asset form — but only while enrolment is **on**. With it
+off a revoked tablet can still sign in (off means the server reads no device field at login), so
+signing it out would achieve nothing, and the server does not say. [sync.md](sync.md), «Wipe on
+revoke».
 
 ---
 

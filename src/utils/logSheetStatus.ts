@@ -5,6 +5,7 @@ import {
   findSubmitBlockingIssues
 } from '@/utils/formDataValidation'
 import { parseArchivedLogSheetViewId } from '@/services/storage/logSheetArchive'
+import { serverNow } from '@/services/clock/serverClock'
 
 export const SYNC_OUTCOME_MESSAGES = {
   EXPIRED: 'مهلت تکمیل این کار گذشته است و امکان سینک وجود ندارد.',
@@ -19,7 +20,7 @@ export const SYNC_OUTCOME_MESSAGES = {
     'این مورد برای ارسال بیش از حد بزرگ است و سرور آن را نپذیرفت؛ روی همین دستگاه نگه داشته شده است. با سرپرست تماس بگیرید.'
 } as const
 
-export function isLogSheetExpired(sheet: Pick<LogSheet, 'dueAt' | 'serverStatus'>, now = Date.now()): boolean {
+export function isLogSheetExpired(sheet: Pick<LogSheet, 'dueAt' | 'serverStatus'>, now = serverNow()): boolean {
   if (sheet.serverStatus === 'EXPIRED') return true
   return sheet.dueAt != null && sheet.dueAt <= now
 }
@@ -44,7 +45,7 @@ export function completedWithinDeadline(
  */
 export function isLogSheetExpiredForSync(
   sheet: Pick<LogSheet, 'dueAt' | 'serverStatus' | 'status' | 'completedAt' | 'submittedAt'>,
-  now = Date.now()
+  now = serverNow()
 ): boolean {
   if (sheet.serverStatus === 'EXPIRED') return true
 
@@ -173,7 +174,7 @@ export function failedOnFieldValidation(
  */
 export function canSubmitLogSheet(
   sheet: LogSheet,
-  now = Date.now(),
+  now = serverNow(),
   fallbackDefs: FieldDefinition[] = []
 ): { ok: boolean; reason?: string } {
   if (isLogSheetCancelled(sheet)) {
@@ -204,7 +205,7 @@ export function canSubmitLogSheet(
 export function canRevertSubmittedLogSheetToDraft(
   sheet: LogSheet,
   effectivelyOffline: boolean,
-  now = Date.now()
+  now = serverNow()
 ): { ok: boolean; reason?: string } {
   if (sheet.status !== 'submitted') {
     return { ok: false }
@@ -264,7 +265,7 @@ export function canRevertSubmittedLogSheetToDraft(
  */
 export function isReopenedAfterSync(
   sheet: Pick<LogSheet, 'localId' | 'status' | 'syncStatus' | 'serverStatus' | 'dueAt'>,
-  now = Date.now()
+  now = serverNow()
 ): boolean {
   if (isArchivedSessionSnapshot(sheet)) return false
   if (sheet.status !== 'submitted' || sheet.syncStatus !== 'synced') return false
@@ -274,7 +275,7 @@ export function isReopenedAfterSync(
 
 export function isExpiredDraft(
   sheet: Pick<LogSheet, 'status' | 'dueAt' | 'serverStatus' | 'syncError'>,
-  now = Date.now()
+  now = serverNow()
 ): boolean {
   if (sheet.status !== 'draft') return false
   if (sheet.serverStatus === 'EXPIRED' || sheet.syncError === SYNC_OUTCOME_MESSAGES.EXPIRED) {
@@ -290,7 +291,7 @@ export function isCancelledDraft(sheet: Pick<LogSheet, 'status' | 'serverStatus'
 }
 
 /** Expiry banner on fill page — hide once the sheet is successfully synced to the server. */
-export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = Date.now()): boolean {
+export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = serverNow()): boolean {
   if (sheet.status === 'submitted' && sheet.syncStatus === 'synced') {
     return false
   }
@@ -301,7 +302,7 @@ export function shouldShowLogSheetExpiryAlert(sheet: LogSheet, now = Date.now())
 }
 
 /** Submitted sheets awaiting sync stay in the active list; revoked assignments go to history. */
-export function isActiveLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+export function isActiveLogSheet(sheet: LogSheet, now = serverNow()): boolean {
   if (parseArchivedLogSheetViewId(sheet.localId)) return false
   if (isInvalidLocalLogSheet(sheet)) return false
   if (isRevokedAssignment(sheet)) return false
@@ -329,7 +330,7 @@ export function isReassignedAwayFromUser(
 }
 
 /** Synced/failed submissions, revoked work, archived snapshots, and expired local drafts belong in history. */
-export function isHistoryLogSheet(sheet: LogSheet, now = Date.now()): boolean {
+export function isHistoryLogSheet(sheet: LogSheet, now = serverNow()): boolean {
   if (isArchivedSessionSnapshot(sheet)) return true
   if (isRevokedAssignment(sheet)) return true
   if (sheet.status === 'submitted') {

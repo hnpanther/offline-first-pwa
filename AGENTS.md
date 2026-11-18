@@ -1136,6 +1136,69 @@ The queue and the pending badge read `getLogSheetsByStatus('submitted')`, the pr
 survivors on (`purgeLocalLogSheets` → `reportUndeliveredBacklogIfChanged(…, sheets)`); never pass a
 purge rows read *before* awaited work, or it can delete a round that changed meanwhile.
 
+### A time compared with a server time is `serverNow()`; a time compared with a device stamp is `Date.now()` (roadmap §7)
+
+`dueAt`, a token's `expiresAt` and `lastBootstrapAt` are the server's; `syncedAt`, `submittedAt` as a
+retention anchor, `locallyEditedAt` and an entry's `createdAt`/`updatedAt` are this device's. Every
+deadline helper in `utils/logSheetStatus.ts` (and `isUndeliveredRound`, `canContinueReopenedLogSheet`,
+`isSessionValid`) now **defaults** to `serverNow()`, so a caller passing `Date.now()` explicitly
+silently goes back to the old behaviour — pass nothing, or convert (`serverNow(deviceNow)`), as the
+purge does for its guards while its retention ages stay on the device clock. Do **not** move the
+entry timestamps: the server echoes them back as the base it compares against, and a corrected value
+would make it refuse the clear that `locallyEditedAt` exists to protect. And `serverClock.ts` must
+not import the database: the deadline helpers read it, the database module reads those, and the
+cycle is why persistence is injected from `serverClockStore.ts`.
+
+### A wipe order is looked for before anything routes on the challenge, and before any key is thrown away (backend V28)
+
+`prepareProof` checks `wipeOrderOf(challenge)` **before** `routeFromChallenge`: with enrolment off the
+server answers `{enforced: false, wipe: true}`, and routing first takes the plain-login branch past
+the order. `startEnrollment` (on `DEVICE_REVOKED`) and `restartEnrollment` call `checkWipe` **before**
+`discardIdentity`, because a discarded key can never be told. The deletion runs only in
+`resumeDeviceWipe`, before `openDatabase()` — never from inside the running app, where a live query or
+a sync tick would reopen the database between the deletion and the reload. One order is carried out
+once: a repeat of an order the marker says is `confirming` only retries the confirmation, since the
+tablet may hold new work by then.
+
+### The offline-session lock never interrupts the asset form, and a re-run effect is not a navigation (backend V28)
+
+`useOfflineSessionGuard` decides its trigger from the path actually changing (`lastPathRef`), not from
+its effect re-running: if `signOut`'s identity ever changes, the effect re-runs with the same path,
+and treating that as a navigation would lock a form mid-entry. `timer` and `visible` never interrupt
+`/logsheets/:localId`; `start` and `route` may, because nothing typed exists yet or the form was left.
+The verdict uses `rawServerNow()` — **without** the floor, which would hide exactly the clock set back
+that the `clock` reason exists for.
+
+### A reason for an app-initiated sign-out lives in the store, and a late 401 must not overwrite it (backend V28)
+
+Two navigations land on `/login` when the app signs someone out: `signOut`'s own
+`navigate('/login', { state })` and `ProtectedRoute`'s `<Navigate to="/login" state={{ from }} />`,
+which fires the moment the session is cleared and **replaces** the router state. A reason carried
+only in router state therefore vanishes on some runs — found live: the «device revoked» notice
+disappeared when the sign-out followed a navigation away from a form. So `signOut` sets
+`store.signOutNotice` **before** clearing anything, and the login page reads the store first, like
+`sessionEnded`. Second half of the same race: while `signOut` is clearing the session, a request
+already in flight finds it gone (`sessionSilentlyExpired`) or answers 401 and raises the generic
+`sessionEnded` — found live as the offline lock's notice replaced by «نشست شما به پایان رسیده است».
+The login page clears `sessionEnded` when it shows a specific reason, and the unauthorized handler
+does nothing once the store holds no session. Keep both.
+
+### A check that may fire from several triggers claims its in-flight flag before its first await
+
+`useDeviceStatusWatch` reads its throttle from IndexedDB; set `inFlight` after that `await` and a
+reconnection plus a return to the foreground both read «due» and both ask the server — found live as
+two challenges a few milliseconds apart. Claim first, then read. The same applies to any hook whose
+triggers can coincide.
+
+### The device-status watch acts on a plain revoke only while enrolment is enforced (backend V28)
+
+`checkDeviceStatus` answers `revoked` only for `{enforced: true, deviceStatus: 'REVOKED'}`. With
+enrolment off the server says nothing about the device — a revoke then stops no login, so signing out
+would only send the operator back in — and a wipe order is the one thing it answers regardless. Its
+30-minute interval (`DEVICE_STATUS_CHECK_INTERVAL_MS`) is promised by the panel in Persian
+(«حداکثر نیم ساعت», backend `FaMessages.WIPE_TAKES_EFFECT` and `device-revoke.html`): change one and
+change the other.
+
 ### The container's nginx runs as uid 101 — ports, redirects and the key follow from it
 
 `docker/Dockerfile` declares `USER 101:101`, so nginx has no root master process (CIS Docker

@@ -5,6 +5,9 @@ import type { AuthSession } from '@/types/auth'
 import type { ServerLogSheet } from '@/services/api'
 import { DEFAULT_SETTINGS } from '@/services/storage/db'
 
+/** Why the app signed the operator out on its own (backend V28) — see `signOutNotice`. */
+export type SignOutNotice = 'offlineLockedLimit' | 'offlineLockedClock' | 'deviceRevoked'
+
 // ---------------------------------------------------------------------------
 // NFC slice
 // ---------------------------------------------------------------------------
@@ -81,6 +84,13 @@ interface AuthSlice {
    */
   sessionEnded: boolean
   /**
+   * Why the app itself signed the operator out, when it was not a 401 (backend V28): the
+   * offline-session lock, or a revoke found by the device-status watch. In the store for the same
+   * reason as `sessionEnded` — router state loses the race to `ProtectedRoute`'s own redirect,
+   * found live: the device-revoked notice vanished on exactly that path. Read once by the login page.
+   */
+  signOutNotice: SignOutNotice | null
+  /**
    * The session has no resolved `sessionUserId` yet — login succeeded but the bootstrap call
    * that identifies the user did not.
    *
@@ -95,6 +105,7 @@ interface AuthSlice {
   setAuthLoaded: (v: boolean) => void
   setSessionUserId: (id: string | null) => void
   setSessionEnded: (v: boolean) => void
+  setSignOutNotice: (v: SignOutNotice | null) => void
   setSessionBindingPending: (v: boolean) => void
 }
 
@@ -183,11 +194,13 @@ export const useAppStore = create<AppStore>()(
     authLoaded: false,
     sessionUserId: null,
     sessionEnded: false,
+    signOutNotice: null,
     sessionBindingPending: false,
     setAuthSession: (session) => set({ authSession: session }),
     setAuthLoaded: (v) => set({ authLoaded: v }),
     setSessionUserId: (id) => set({ sessionUserId: id }),
     setSessionEnded: (v) => set({ sessionEnded: v }),
+    setSignOutNotice: (v) => set({ signOutNotice: v }),
     setSessionBindingPending: (v) => set({ sessionBindingPending: v }),
 
     // Inbox

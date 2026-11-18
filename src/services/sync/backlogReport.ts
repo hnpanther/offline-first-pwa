@@ -16,6 +16,7 @@ import { getAuthSession } from '@/services/auth'
 import { reportSyncBacklog } from '@/services/api'
 import { computeUndeliveredBacklog, type UndeliveredBacklog } from '@/services/sync/undelivered'
 import type { LogSheet } from '@/types'
+import { serverNow } from '@/services/clock/serverClock'
 
 const META_KEY = 'lastBacklogReport'
 const RESEND_AFTER_MS = 60 * 60 * 1000
@@ -46,7 +47,7 @@ async function lastReport(): Promise<StoredReport | null> {
 }
 
 export async function currentUndeliveredBacklog(now = Date.now()): Promise<UndeliveredBacklog> {
-  return computeUndeliveredBacklog(await getAllLogSheets(), now)
+  return computeUndeliveredBacklog(await getAllLogSheets(), serverNow(now))
 }
 
 /**
@@ -62,7 +63,7 @@ export async function reportUndeliveredBacklogIfChanged(
   const sessionKey = await currentSessionKey()
   if (!sessionKey) return false
   const backlog = sheets
-    ? computeUndeliveredBacklog(sheets, now)
+    ? computeUndeliveredBacklog(sheets, serverNow(now))
     : await currentUndeliveredBacklog(now)
   const previous = await lastReport()
   const unchanged =

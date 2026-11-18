@@ -164,6 +164,21 @@ export interface AppSettings {
    * chose.
    */
   deviceRetention?: DeviceRetentionPolicy
+  /**
+   * How long a signed-in session may keep working without any answer from the server before the
+   * app locks and asks for the password again (backend V28). Server-owned, delivered on bootstrap,
+   * never edited on the device. Absent until a server has sent it — and absent means never lock,
+   * exactly the behaviour before this existed.
+   */
+  offlineSessionLimit?: OfflineSessionPolicy
+}
+
+/** The offline-session ceiling as the server sends it — see `services/auth/offlineSession.ts`. */
+export interface OfflineSessionPolicy {
+  /** Off means a session never locks for lack of contact. */
+  enabled: boolean
+  /** Hours since the server last answered this session. 8–720. */
+  hours: number
 }
 
 /** The three server settings the local purge reads. Hours, as the panel shows them. */
@@ -628,7 +643,17 @@ export interface LogSheet {
    */
   lastSubmitOutcome?: string
   submittedAt?: number
+  /**
+   * When the operator finished the round — **on the server's clock** as this device last measured
+   * it (`serverNow()`, PWA roadmap §7), not the raw device clock. The server judges the deadline on
+   * this value and refuses one lying in its own future (backend B-17).
+   */
   completedAt?: number
+  /**
+   * The correction (server − device, ms) that went into `completedAt`, sent with the round as
+   * evidence (`clientClockOffsetMs`). Absent on a round completed by an older build.
+   */
+  completionClockOffsetMs?: number
   clientActionId?: string
   /**
    * Whether this device still owes the server a progress report for this round.

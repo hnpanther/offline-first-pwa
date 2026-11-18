@@ -594,10 +594,20 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 1. `useAuthInit` reads session from IndexedDB.
 2. Valid session → dashboard (no login screen).
 3. **Online** + expired JWT → session cleared, redirect to login.
-4. **Offline** + expired JWT → session still accepted (offline-first).
+4. **Offline** + expired JWT → session still accepted (offline-first) — **unless the plant switched on
+   the offline-session lock** (backend V28, panel Settings, off by default): a session the server has
+   not answered for that many hours, or whose device clock reads earlier than the last answer, locks
+   and asks for the password again (which needs the network). Nothing is deleted; unsent rounds are
+   sent after the next sign-in. The app warns hours before, and never locks over an open asset form.
+   See [docs/sync.md](docs/sync.md) «The offline-session ceiling».
 5. **Login** always redirects to `/` (never restores a previous user’s deep link).
 6. The login form submits through its button or the keyboard’s **Enter / Go** action.
 7. **User switch** on a shared tablet clears inbox cache and isolates other users’ local work (`sessionContext.ts`). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
+8. **A wipe the server ordered is finished before anything else** (backend V28, *wipe on revoke*). An administrator who revokes this device may order it emptied; the order arrives on the login page, at the next sign-in, or — while someone is signed in — through the tablet's own check at most every 30 minutes online (which also signs out a device revoked while enrolment is on, keeping its work), the app reloads and deletes **everything it holds — unsent rounds included** — before the database opens, keeps only the server address, and confirms with its device key. The login page then says «به دستور مدیر سامانه، همهٔ داده‌های این برنامه از این دستگاه پاک شد…»; the tablet must be enrolled again. See [docs/sync.md](docs/sync.md) «Wipe on revoke».
+
+### The device clock
+
+Deadlines and the completion time are decided on **the server's clock as this tablet measured it** (on sign-in, bootstrap and every inbox pull), never earlier than the server time it last saw — so a tablet whose clock runs fast does not turn on-time work into late work, and one set back cannot reopen a deadline the server had already seen pass. Settings shows the measured difference («اختلاف ساعت این دستگاه با سرور»). See [docs/sync.md](docs/sync.md) «The server's clock, on this device».
 
 ### Roles (frontend checks)
 
@@ -1100,7 +1110,7 @@ Reference: [`docs/sync.md`](docs/sync.md) § *Restoring an archived round*.
 | Capability | Offline |
 |------------|---------|
 | PWA UI (installed from :4173) | Yes |
-| Session (even expired JWT) | Yes |
+| Session (even expired JWT) | Yes — until the offline-session lock, if the plant switched it on (backend V28) |
 | Cached per-sheet reference data (from bundles) | Yes |
 | Assigned log sheets pre-provisioned earlier | Yes |
 | Open / fill / save log sheets | Yes |
@@ -1127,7 +1137,8 @@ Reference: [`docs/sync.md`](docs/sync.md) § *Restoring an archived round*.
 |----------|---------------|
 | Operator worked offline; supervisor revoked/reassigned | Draft marked `REVOKED` — cannot continue |
 | Operator submitted offline; assignee changed on server | Sync `SUPERSEDED` |
-| Completed before deadline offline; sync after deadline online | Accepted — deadline checked against device `completedAt` |
+| Completed before deadline offline; sync after deadline online | Accepted — deadline checked against `completedAt`, stamped on the server's clock as the tablet measured it |
+| Device revoked **and ordered wiped** | Everything the app holds is deleted at the next contact with the server, unsent rounds included; the device must be enrolled again |
 | Completion synced, then supervisor **reopened** the sheet | History card reads **بازگشایی شده — قابل ادامه**; «ادامه‌ی کار» on the fill page verifies with the server and returns it to an editable draft with the readings intact |
 
 ### Stale data limitations

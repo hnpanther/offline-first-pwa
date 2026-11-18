@@ -24,6 +24,7 @@ import {
   signMessage,
   type DeviceIdentity
 } from './deviceIdentity'
+import { checkForWipeOrder, handleChallengeWipe, wipeOrderOf, type WipeOutcome } from './deviceWipe'
 
 /**
  * Logging in from an enrolled device, and enrolling one.
@@ -63,6 +64,9 @@ const GATE_MESSAGES: Record<DeviceGate, string> = {
   unknown: 'این دستگاه در سرور شناخته نمی‌شود. دستگاه را دوباره ثبت کنید.'
 }
 
+/** Said while the app reloads to carry out a wipe the server ordered (backend V28). */
+export const WIPING_MESSAGE = 'به دستور مدیر سامانه، داده‌های برنامه روی این دستگاه در حال پاک شدن است.'
+
 /** The calls this module makes, injectable so every branch can be tested without a server. */
 export interface DeviceAuthDeps {
   fetchLoginChallenge: (deviceId: number, keyFingerprint: string) => Promise<LoginChallengeResponse>
@@ -73,6 +77,13 @@ export interface DeviceAuthDeps {
     enrollmentCode: string,
     signature: string
   ) => Promise<EnrollmentStateResponse>
+  /**
+   * Backend V28 — carries out a wipe order found in a challenge answer. Optional so a test that
+   * builds its own deps without it exercises the login exactly as before; the app's defaults have it.
+   */
+  handleWipe?: (deviceId: number, challenge: LoginChallengeResponse | null) => Promise<WipeOutcome>
+  /** Backend V28 — asks the server for a wipe order before this device would discard its key. */
+  checkWipe?: () => Promise<WipeOutcome>
 }
 
 const defaultDeps: DeviceAuthDeps = {
@@ -80,7 +91,21 @@ const defaultDeps: DeviceAuthDeps = {
   login: request => apiLogin(request),
   requestDeviceEnrollment: (publicKey, label) => requestDeviceEnrollment(publicKey, label),
   confirmDeviceEnrollment: (requestId, code, signature) =>
-    confirmDeviceEnrollment(requestId, code, signature)
+    confirmDeviceEnrollment(requestId, code, signature),
+  handleWipe: (deviceId, challenge) => handleChallengeWipe(deviceId, challenge),
+  checkWipe: () => checkForWipeOrder()
+}
+
+/**
+ * Before a key is thrown away (backend V28): a key that is gone can never be told about a wipe
+ * order, so the server is asked first. Stops the caller only when a wipe has begun — the app is
+ * reloading to carry it out.
+ */
+async function stopIfWiping(deps: DeviceAuthDeps): Promise<void> {
+  if (!deps.checkWipe) return
+  if ((await deps.checkWipe()) === 'wiping') {
+    throw new DeviceGateError('revoked', WIPING_MESSAGE)
+  }
 }
 
 // =============================================================================================
@@ -163,6 +188,15 @@ async function prepareProof(username: string, deps: DeviceAuthDeps): Promise<Pro
     challenge = null
   }
 
+  // A wipe order is answered before anything else, and with enrolment off as well (`enforced` is
+  // false then), so it is looked for before the route is: a revoked tablet told to wipe must not
+  // fall through to a plain login.
+  if (wipeOrderOf(challenge) != null && deps.handleWipe) {
+    if ((await deps.handleWipe(identity.requestId, challenge)) === 'wiping') {
+      throw new DeviceGateError('revoked', WIPING_MESSAGE)
+    }
+  }
+
   const route = routeFromChallenge(challenge)
   if (route === 'plain') return { kind: 'none' }
   if (route === 'sign' && challenge?.nonce) {
@@ -235,6 +269,7 @@ export async function startEnrollment(
     state = await deps.requestDeviceEnrollment(identity.publicKey, trimmed ?? identity.label)
   } catch (err) {
     if (!(err instanceof ApiError && deviceErrorCode(err.body) === 'DEVICE_REVOKED')) throw err
+    await stopIfWiping(deps)
     await discardIdentity()
     identity = await createIdentity(trimmed ?? identity.label)
     state = await deps.requestDeviceEnrollment(identity.publicKey, trimmed ?? identity.label)
@@ -280,6 +315,7 @@ export async function restartEnrollment(
   label: string | undefined,
   deps: DeviceAuthDeps = defaultDeps
 ): Promise<EnrollmentView> {
+  await stopIfWiping(deps)
   await discardIdentity()
   return startEnrollment(label, deps)
 }

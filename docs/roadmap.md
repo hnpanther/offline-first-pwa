@@ -285,9 +285,30 @@ linked document. Do not copy it here.*
 
 ---
 
-# 7. A tablet whose clock is wrong
+# 7. A tablet whose clock is wrong — **the offset, the floor and the server's upper bound built (2026-11-18, backend V28)**
 
-*Found in a production-risk review on 2026-10-15. Nothing is built yet.*
+*Found in a production-risk review on 2026-10-15.*
+
+> **Built**, and described where built behaviour belongs — [sync.md](sync.md), «The server's clock,
+> on this device»: the server-clock offset measured on sign-in, bootstrap and the inbox and
+> persisted (design item 1); every absolute-time decision and `completedAt` on `serverNow()`, with
+> durations and device-only stamps left on the device clock (item 2); a floor so `serverNow()` never
+> reads earlier than the server time last seen («the clock must not run backwards», detection rule 1,
+> applied rather than only detected); the offset sent with each completion as `clientClockOffsetMs`
+> and stored by the server as evidence; the session check on the server's clock; and on the server,
+> **`completedAt` no later than its receipt plus 5 minutes** — the first of the three server bounds
+> (backend issue B-17). The cleanup guard (item 3) was already in place since P-05.
+>
+> **Still open, as designed below:** detection within a run (`performance.now()`) and across
+> restarts in the APK (`elapsedRealtime`) — note `performance.now()` stops during Android's deep
+> sleep, so the in-run comparison must tolerate a sleep, not read it as a clock change; the server's
+> **lower** bound (`completedAt` not earlier than the claim, the assignment or the latest progress
+> `savedAt` the server itself recorded); the «clock looks wrong» banner (item 4); and a flag sent when
+> a change was detected. A clock set back offline by less than the time since the last sync is still
+> believed — that is the limit stated below, unchanged.
+>
+> The «What is true today» table below is the state **before** that change and is kept as the record
+> of what was decided.
 
 Every deadline and retention decision on the device is taken against the **device's** clock. The
 server already sends its own time, and the client stores it and uses it for nothing. On a plant

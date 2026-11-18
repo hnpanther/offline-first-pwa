@@ -27,6 +27,19 @@ export interface LoginChallengeResponse {
   /** Present only for an approved device. Single-use, short-lived. */
   nonce?: string
   expiresAt?: number
+  /**
+   * Backend V28: an administrator revoked this device AND ordered it to delete everything the app
+   * holds. Present only then — and answered even with enrolment switched off, so `enforced` says
+   * nothing about it. `wipeOrderedAt` is the order's identity; the confirmation signs it back.
+   */
+  wipe?: boolean
+  wipeOrderedAt?: number
+}
+
+/** The answer to a wipe confirmation: the first time the server recorded one. */
+export interface WipeConfirmedResponse {
+  deviceId: number
+  confirmedAt: number
 }
 
 /**
@@ -50,6 +63,7 @@ export type DeviceErrorCode =
   | 'DEVICE_UNKNOWN'
   | 'DEVICE_NOT_APPROVED'
   | 'DEVICE_REVOKED'
+  | 'WIPE_ORDER_UNKNOWN'
 
 export interface DeviceErrorBody {
   code: DeviceErrorCode
@@ -82,5 +96,6 @@ const DEVICE_ERROR_CODES = new Set<DeviceErrorCode>([
   'CHALLENGE_INVALID',
   'DEVICE_UNKNOWN',
   'DEVICE_NOT_APPROVED',
-  'DEVICE_REVOKED'
+  'DEVICE_REVOKED',
+  'WIPE_ORDER_UNKNOWN'
 ])

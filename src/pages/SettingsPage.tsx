@@ -32,6 +32,8 @@ import {
   DEFAULT_SYNCED_RETENTION_HOURS,
   normalizeDeviceRetention
 } from '@/services/sync/deviceRetention'
+import { normalizeOfflineSessionLimit } from '@/services/auth/offlineSession'
+import { currentServerClock } from '@/services/clock/serverClock'
 import type { AppSettings } from '@/types'
 
 export function SettingsPage() {
@@ -56,6 +58,9 @@ export function SettingsPage() {
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
   // `undefined` until a server has sent one — the purge then runs on the shipped constants.
   const retention = normalizeDeviceRetention(settings.deviceRetention)
+  // Backend V28 — shown as this device runs it: absent means it never locks.
+  const offlineLimit = normalizeOfflineSessionLimit(settings.offlineSessionLimit)
+  const measuredClock = currentServerClock()
   const orientationLockSupported = isOrientationLockSupported()
   // Calling the hook here re-applies the lock and reports back, so the alert below reflects
   // the choice that was just saved rather than the one in force when the app launched.
@@ -341,6 +346,40 @@ export function SettingsPage() {
                       {t.settings.retentionNotReceived}
                     </Typography>
                   )}
+                </Box>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.offlineSessionLimit}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.offlineSessionLimitHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {offlineLimit?.enabled
+                      ? t.settings.offlineSessionLimitAfter(offlineLimit.hours)
+                      : t.settings.offlineSessionLimitOff}
+                  </Typography>
+                </Box>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.serverClockOffset}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.serverClockOffsetHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {measuredClock
+                      ? t.settings.serverClockOffsetValue(Math.trunc(measuredClock.offsetMs / 60_000))
+                      : t.settings.serverClockUnmeasured}
+                  </Typography>
                 </Box>
               </Box>
             </Box>

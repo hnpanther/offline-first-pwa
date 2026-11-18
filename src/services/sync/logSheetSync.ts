@@ -32,6 +32,7 @@ import {
   revivalUpdatesAfterReassign,
   resolveReopenedSheetUpdates
 } from '@/utils/logSheetWorkflow'
+import { serverNow } from '@/services/clock/serverClock'
 
 export interface EnsureLocalLogSheetOptions {
   /** When online, fetch the latest bundle from the server before opening. */
@@ -441,7 +442,8 @@ export async function mergeInboxIntoLocalSheets(
   assigned: LogSheetBundleDto[],
   _options?: MergeInboxOptions
 ): Promise<void> {
-  const now = Date.now()
+  // Server time: every comparison below is against the server's own `dueAt` (PWA roadmap §7).
+  const now = serverNow()
   const assignedSheets: ServerLogSheet[] = []
 
   for (const bundle of assigned) {
@@ -517,7 +519,7 @@ export async function mergeInboxIntoLocalSheets(
   await expireStaleLocalDrafts(now)
 }
 
-export async function expireStaleLocalDrafts(now = Date.now()): Promise<void> {
+export async function expireStaleLocalDrafts(now = serverNow()): Promise<void> {
   const all = await getAllLogSheets()
   for (const local of all) {
     if (local.status !== 'draft' || !local.serverId) continue
@@ -604,7 +606,7 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
     throw new Error('Log sheet server id was not provided.')
   }
   const clientActionId = sheet.clientActionId ?? uuidv4()
-  const completedAt = sheet.completedAt ?? sheet.submittedAt ?? Date.now()
+  const completedAt = sheet.completedAt ?? sheet.submittedAt ?? serverNow()
 
   return {
     id: Number(serverId),
@@ -646,6 +648,9 @@ export function toBatchPayload(sheet: LogSheet): import('@/services/api').LogShe
       : undefined,
     completedAt,
     clientActionId,
+    // Backend V28 (issue B-17): what this device corrected its clock by, kept beside the round.
+    // Omitted when unknown — a round completed before this build recorded none.
+    ...(sheet.completionClockOffsetMs != null ? { clientClockOffsetMs: sheet.completionClockOffsetMs } : {}),
     // Omitted entirely when the round asks nothing, so a sheet with no round-level form sends
     // exactly the payload it sent before this feature existed. The server reads an absent key
     // as "not carried" rather than "cleared".

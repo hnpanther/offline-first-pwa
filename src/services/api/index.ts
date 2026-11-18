@@ -26,7 +26,8 @@ import type {
 } from '@/types'
 import type { AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
-import type { EnrollmentStateResponse, LoginChallengeResponse } from '@/types/device'
+import type { EnrollmentStateResponse, LoginChallengeResponse, WipeConfirmedResponse } from '@/types/device'
+import { measuredRequest } from '@/services/clock/serverClock'
 
 // ===========================================================================
 // Health
@@ -36,7 +37,10 @@ export async function login(
   credentials: LoginRequest,
   signal?: AbortSignal
 ): Promise<LoginResponse> {
-  return apiClient.post<LoginResponse>('/api/auth/login', credentials, signal, false)
+  // Measured: a server from V28 on says its time in the answer, which sets this device's clock
+  // correction from the first moment of a session (PWA roadmap §7). An older server says nothing,
+  // and nothing is recorded.
+  return measuredRequest(() => apiClient.post<LoginResponse>('/api/auth/login', credentials, signal, false))
 }
 
 // ===========================================================================
@@ -81,6 +85,25 @@ export async function confirmDeviceEnrollment(
   return apiClient.post<EnrollmentStateResponse>(
     '/api/devices/enrollment-requests/confirm',
     { requestId, enrollmentCode, signature },
+    signal,
+    false
+  )
+}
+
+/**
+ * A revoked device confirming it has deleted its data (backend V28, wipe on revoke). Signed with
+ * this device's key over `wipeMessage(deviceId, wipeOrderedAt)`; unauthenticated, because the
+ * revoke ended every session. Under the enrolment prefix so the nginx rate limit already covers it.
+ */
+export async function confirmDeviceWipe(
+  deviceId: number,
+  wipeOrderedAt: number,
+  signature: string,
+  signal?: AbortSignal
+): Promise<WipeConfirmedResponse> {
+  return apiClient.post<WipeConfirmedResponse>(
+    '/api/devices/enrollment-requests/wipe-confirm',
+    { deviceId, wipeOrderedAt, signature },
     signal,
     false
   )
@@ -249,7 +272,7 @@ export interface LogSheetInboxResponse {
 export async function fetchLogSheetInbox(
   signal?: AbortSignal
 ): Promise<LogSheetInboxResponse> {
-  return apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal)
+  return measuredRequest(() => apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal))
 }
 
 export async function fetchLogSheetBundle(
@@ -379,12 +402,21 @@ export interface BootstrapResponse {
     unsyncedPurgeEnabled?: unknown
     unsyncedRetentionHours?: unknown
   }
+  /**
+   * How long a signed-in session may keep working without any answer from the server (backend
+   * V28). Absent from an older server; the device then never locks for lack of contact. Typed
+   * `unknown` until `normalizeOfflineSessionLimit` has read it.
+   */
+  offlineSession?: {
+    limitEnabled?: unknown
+    limitHours?: unknown
+  }
 }
 
 export type MasterDataResponse = BootstrapResponse
 
 export async function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
-  return apiClient.get<BootstrapResponse>('/api/bootstrap', signal)
+  return measuredRequest(() => apiClient.get<BootstrapResponse>('/api/bootstrap', signal))
 }
 
 /** Backward-compat alias — always returns slim bootstrap, never full master data. */
@@ -576,6 +608,8 @@ export interface LogSheetBatchItem {
   operationalUnitId?: number | string
   completedAt?: number
   clientActionId?: string
+  /** Backend V28: the clock correction that went into `completedAt`. Evidence only. */
+  clientClockOffsetMs?: number
   /**
    * Answers to the round's own questions.
    *

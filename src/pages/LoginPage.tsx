@@ -21,6 +21,7 @@ import type { DeviceGate } from '@/services/device/deviceAuth'
 import type { Reachability } from '@/services/api/serverProbe'
 import { t } from '@/i18n'
 import { postLoginPath } from '@/utils/loginRedirect'
+import { checkForWipeOrder, confirmPendingWipe, takeWipedNotice } from '@/services/device/deviceWipe'
 
 const REACHABILITY_COLOR: Record<Reachability, string> = {
   checking: 'text.disabled',
@@ -35,11 +36,17 @@ interface LoginForm {
 
 interface LoginLocationState {
   sessionEnded?: boolean
+  /** Backend V28: the offline-session ceiling locked the app — and why. */
+  offlineLocked?: 'limit' | 'clock'
+  /** Backend V28: the device-status watch found this device revoked under enforced enrolment. */
+  deviceRevoked?: boolean
 }
 
 export function LoginPage() {
   const { signIn, isAuthenticated, authLoaded } = useAuth()
   const sessionEnded = useAppStore(s => s.sessionEnded)
+  const signOutNotice = useAppStore(s => s.signOutNotice)
+  const setSignOutNotice = useAppStore(s => s.setSignOutNotice)
   const setSessionEnded = useAppStore(s => s.setSessionEnded)
   const { settings } = useSettings()
   const navigate = useNavigate()
@@ -64,12 +71,57 @@ export function LoginPage() {
     // immune to the redirect race) or the router state, kept for the direct
     // navigate path. Both are cleared once shown so a refresh or a back
     // navigation does not replay the notice.
-    const fromRouter = (location.state as LoginLocationState | null)?.sessionEnded
+    const routerState = location.state as LoginLocationState | null
+    // Backend V28: the store first — router state can lose the race to ProtectedRoute's redirect.
+    if (signOutNotice) {
+      setSessionNotice(
+        signOutNotice === 'offlineLockedClock'
+          ? t.auth.offlineLockedClock
+          : signOutNotice === 'offlineLockedLimit'
+            ? t.auth.offlineLockedLimit
+            : t.auth.deviceRevokedSignedOut
+      )
+      setSignOutNotice(null)
+      // The specific reason wins over the generic one. While this sign-out was clearing the
+      // session, a request already in flight can find it gone and raise `sessionEnded` too; left
+      // set, the next run of this effect replaced the lock's notice with «نشست شما به پایان رسیده
+      // است» — found live.
+      if (sessionEnded) setSessionEnded(false)
+      if (routerState) navigate(location.pathname, { replace: true, state: null })
+      return
+    }
+    if (routerState?.offlineLocked) {
+      setSessionNotice(routerState.offlineLocked === 'clock' ? t.auth.offlineLockedClock : t.auth.offlineLockedLimit)
+      navigate(location.pathname, { replace: true, state: null })
+      return
+    }
+    if (routerState?.deviceRevoked) {
+      setSessionNotice(t.auth.deviceRevokedSignedOut)
+      navigate(location.pathname, { replace: true, state: null })
+      return
+    }
+    const fromRouter = routerState?.sessionEnded
     if (!sessionEnded && !fromRouter) return
     setSessionNotice(t.auth.sessionEnded)
     if (sessionEnded) setSessionEnded(false)
     if (fromRouter) navigate(location.pathname, { replace: true, state: null })
-  }, [location.pathname, location.state, navigate, sessionEnded, setSessionEnded])
+  }, [location.pathname, location.state, navigate, sessionEnded, setSessionEnded, signOutNotice, setSignOutNotice])
+
+  // Backend V28 — wipe on revoke. A start that followed a wipe says so, once.
+  useEffect(() => {
+    if (takeWipedNotice()) setSessionNotice(t.auth.deviceWiped)
+  }, [])
+
+  // Whenever the server is reachable from here: a revoked tablet lands on this page (its session
+  // answered 401), so this is where it learns of a wipe order — and where a wipe already carried
+  // out retries its signed confirmation. Neither does anything without an enrolled identity.
+  useEffect(() => {
+    if (reachability !== 'reachable') return
+    void (async () => {
+      await confirmPendingWipe()
+      await checkForWipeOrder()
+    })()
+  }, [reachability])
 
   const { control, handleSubmit } = useForm<LoginForm>({
     defaultValues: { username: '', password: '' }

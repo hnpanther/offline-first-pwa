@@ -482,3 +482,54 @@ describe('device retention over bootstrap', () => {
     expect(settings.syncIntervalMs).toBe(45_000)
   })
 })
+
+// =============================================================================================
+// Backend V28 — the offline-session ceiling, and the staleness check on the server's clock
+// =============================================================================================
+
+describe('the offline-session ceiling over bootstrap', () => {
+  it('a device that was never told has none, and so never locks', async () => {
+    expect((await getSettings()).offlineSessionLimit).toBeUndefined()
+  })
+
+  it('adopts the plant ceiling, clamped, and keeps it when a later server says nothing', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: true, limitHours: 2 } }))
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: true, hours: 8 })
+    expect(useAppStore.getState().settings.offlineSessionLimit).toEqual({ enabled: true, hours: 8 })
+
+    fetchBootstrap.mockResolvedValue(bootstrapPayload())
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: true, hours: 8 })
+  })
+
+  it('turns it off again when the plant does', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: true, limitHours: 24 } }))
+    await pullBootstrap()
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: false, limitHours: 24 } }))
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: false, hours: 24 })
+  })
+
+  it('a malformed switch is off — a value nobody chose must not lock anybody out', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: 'yes', limitHours: 'x' } }))
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: false, hours: 72 })
+  })
+})
+
+describe('the staleness check is on the server clock', () => {
+  it('a device clock running hours behind still refreshes once the server hour has passed', async () => {
+    const { recordServerTimeSample, resetServerClockForTests } = await import('@/services/clock/serverClock')
+    const deviceNow = Date.now()
+    // The device runs three hours behind the server; the last pull was two hours ago, server time.
+    recordServerTimeSample(deviceNow + 3 * 3_600_000, deviceNow, deviceNow)
+    await db.syncMeta.put({ key: 'lastBootstrapAt', value: deviceNow + 3_600_000 })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload())
+
+    await pullBootstrapIfStale(60 * 60 * 1000)
+
+    expect(fetchBootstrap).toHaveBeenCalledOnce()
+    resetServerClockForTests()
+  })
+})

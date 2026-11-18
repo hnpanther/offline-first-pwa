@@ -4,6 +4,7 @@ import type { LogSheet } from '@/types'
 import { isReopenedAfterSync, SYNC_OUTCOME_MESSAGES } from '@/utils/logSheetStatus'
 import { resolveRetentionWindows, type RetentionWindows } from '@/services/sync/deviceRetention'
 import { isUndeliveredRound } from '@/services/sync/undelivered'
+import { serverNow } from '@/services/clock/serverClock'
 
 function syncedRetentionAnchor(sheet: LogSheet): number {
   return sheet.syncedAt ?? sheet.submittedAt ?? sheet.updatedAt ?? sheet.createdAt
@@ -45,15 +46,18 @@ export function isEligibleForLocalPurge(
   // loses which assets were filled manually, and editing one of those after the reopen would
   // re-stamp its `entry_source` as PWA_NFC despite no scan (the same local-only-field trap
   // `mapServerEntryToLocal` carries — see AGENTS.md § Log sheet merge).
-  if (isReopenedAfterSync(sheet, now)) return false
+  // The guards below compare with the server's `dueAt`, so they take the server's «now»; the
+  // retention ages compare with this device's own stamps and stay on its clock (PWA roadmap §7).
+  const deadlineNow = serverNow(now)
+  if (isReopenedAfterSync(sheet, deadlineNow)) return false
 
   // A draft past its deadline. Purged only when an administrator has switched that on — or, on a
   // device that has never heard from a server that knows the setting, on the shipped constant —
   // and even then never while its readings exist nowhere else (issues P-01, P-05): a draft whose
   // late readings the server kept may go, one whose readings only this tablet holds may not.
   if (isExpiredDraftSheet(sheet)) {
-    if (isUndeliveredRound(sheet, now)) return false
-    return windows.expiredDraftMs != null && now - expiredDraftAnchor(sheet) > windows.expiredDraftMs
+    if (isUndeliveredRound(sheet, deadlineNow)) return false
+    return windows.expiredDraftMs != null && deadlineNow - expiredDraftAnchor(sheet) > windows.expiredDraftMs
   }
 
   // An active draft: never.
@@ -68,7 +72,7 @@ export function isEligibleForLocalPurge(
   // `VALIDATION_ERROR` awaiting the operator's correction, an `ERROR`, an `EXPIRED` an older
   // server did not keep, or a refusal the server declined to keep (`kept: false`, V26).
   if (sheet.syncStatus === 'failed') {
-    if (isUndeliveredRound(sheet, now)) return false
+    if (isUndeliveredRound(sheet, deadlineNow)) return false
     return windows.failedMs != null && now - failedRetentionAnchor(sheet) > windows.failedMs
   }
 
