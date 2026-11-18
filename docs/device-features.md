@@ -46,6 +46,13 @@ Samsung tablets report once per tap and never showed it.
 `useNFC` also clears the stored tag when a scan starts and ignores tags that arrive while no scan
 was requested. Details in [apk.md §7](apk.md#7-nfc).
 
+**A stop releases the reader late, on purpose** (2026-11-18). Stopping the scan while the tag just
+read was still against the tablet let **Android itself** read it a second time and open Chrome or
+the system Tags app over the app. Now the packaged app keeps reader mode on after a stop (and drops
+what it reads), and Chrome holds the stopped scan for 2 s before aborting it. Both have a one-line
+revert switch — `KEEP_READER_ARMED_AFTER_STOP` and `WEB_NFC_STOP_GRACE_MS`; what changed, what to
+watch for and how to revert are in [apk.md](apk.md), «Reader mode stays on after a stop».
+
 ## What a valid tag contains
 
 | | |
