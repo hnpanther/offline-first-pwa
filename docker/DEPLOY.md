@@ -58,6 +58,23 @@ Check three things — each one has already shipped wrong once in this project:
 3. **`dist/` is fresh**: `dist/sw.js` exists and its timestamp is from this build. The image build
    fails on purpose if `index.html`, `sw.js` or `manifest.webmanifest` is missing.
 
+**Addresses a security scan will find in `dist/assets/index-*.js` — expected, and what to check.**
+A scan of the bundle reports two addresses (raised by the plant's security unit, 2026-11-19):
+
+- **The value of `VITE_SERVER_URL`** from `.env.mobile`. Every `VITE_*` value is compiled into the
+  bundle in plain text, and this one must be: the APK needs to know its server. A server address
+  is configuration, not a secret. **What is wrong is a developer's address in a production
+  build** — e.g. `https://192.168.1.159:4173` (`:4173` is `vite preview`), which would point every
+  freshly installed tablet at a workstation, and at whatever device later holds that IP. Check 1
+  above is the fix: the site's own production address, one build per site.
+- **`http://localhost:8081`** — `FALLBACK_SERVER_URL` in `services/settings/deliveryServerUrl.ts`,
+  used only by a device with no address configured, and always in the bundle. On a tablet
+  `localhost` is the tablet itself, so it reaches nothing. Harmless; it could be compiled out of
+  production builds (`import.meta.env.DEV`), which was offered and not done.
+
+**Never put a secret in a `VITE_*` variable** (a key, a token, a password): it is published to
+every browser and every APK. Today `.env.mobile` holds only the address.
+
 ---
 
 ## 3. Build the image
