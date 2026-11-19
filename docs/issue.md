@@ -36,6 +36,8 @@ marked `Fixed` with the commit, not deleted.
 | [D-07](#d-07--the-cas-private-key-is-the-root-of-trust-for-every-tablet-info) | Info → **High on the server** | Deployment | The CA's private key | **Open — found on the PWA server** by the security unit (report 6-4) |
 | [D-08](#d-08--modules-and-packages-the-site-never-uses-low) | Low | Deployment | nginx modules and packages the site never uses | **Fixed in 1.0.2** |
 | [D-09](#d-09--nginx-logs-are-lost-whenever-the-container-is-re-created-medium) | Medium | Deployment | nginx logs are lost whenever the container is re-created | **Fixed in 1.0.3** |
+| [D-10](#d-10--the-csp-may-block-the-qr-and-barcode-decoder-in-the-browser-high-unverified) | **High (unverified)** | Deployment / Bug | The CSP has no `'wasm-unsafe-eval'`: QR and barcode scanning may fail in the browser delivery | **Open — test first** |
+| [D-11](#d-11--systemd-and-winsw-nginx-send-no-security-headers-medium) | Medium | Deployment | systemd / WinSW nginx configs send no security headers (no CSP) | Open |
 
 **Status on 2026-11-17.** `mfdcs-pwa:1.0.2` is built and verified (`docker/DEPLOY.md` § "Verified
 on 2026-11-17"). It closes D-01, D-02, D-03, D-06 and D-08. **No application code changed** — the
@@ -541,6 +543,50 @@ start-up check with a precise message for every wrong owner or mode, and `docker
 (USR1 reopen, no `copytruncate`). Every owner/mode row in `docker-compose.yml` and the rotation were
 tested against the running image. The backend image is unchanged: it already accepted
 `X-Correlation-Id`.
+
+## D-10 — the CSP may block the QR and barcode decoder in the browser (High, unverified)
+
+*Raised 2026-11-19 while reviewing the CSP for the plant's security unit. Not run — **test before
+anything else in this file that touches scanning.***
+
+*Where.* `docker/nginx/snippets/security-headers.conf` :18 — `script-src 'self'`, with no
+`'wasm-unsafe-eval'`; `src/services/scan/zxingModule.ts` — the QR / 1-D decoder is `zxing-wasm`,
+WebAssembly fetched from `/assets` and instantiated in the page.
+
+*What.* Chrome (and every current browser) refuses `WebAssembly.compile` / `instantiate` on a page
+whose CSP has a `script-src` that names neither `'wasm-unsafe-eval'` nor `'unsafe-eval'`. If that
+holds here, **every QR and barcode scan in the browser delivery behind nginx fails**, while the
+APK — which never goes through nginx — works, so a test on a tablet will not show it. The CSP was
+verified on 2026-10-21 for service-worker install and offline start only; scanning under it is
+not recorded as tested.
+
+*How to test.* Open the image's browser delivery (`https://<server>/`), sign in, start a round
+whose scan mode is `QR` or `NFC_OR_QR`, open the scanner, and watch the console for «Refused to
+compile or instantiate WebAssembly module». Also `DeviceCheckPage`, which exercises the decoder.
+
+*Fix, if confirmed.* Add `'wasm-unsafe-eval'` to `script-src` in `security-headers.conf`. It permits
+WebAssembly compilation only — it does **not** permit JavaScript `eval` or `new Function`, so the
+policy keeps what it protects. Rebuild the image, re-run the test, and record the result here and
+in `docker/DEPLOY.md` §7's checks. If a `<meta>` CSP is ever added to `index.html` (for the APK —
+see D-11), it needs the same keyword, because a meta policy also applies to the browser delivery
+and the two are combined.
+
+## D-11 — systemd and WinSW nginx send no security headers (Medium)
+
+*Where.* The nginx configs of the non-Docker deployments (`docs/deployment.md`); `docs/roadmap.md`
+records it: every `add_header` there is `Cache-Control`.
+
+*What.* The CSP, `nosniff`, `X-Frame-Options`, `Referrer-Policy` and `Permissions-Policy` exist only
+in the Docker image. A site installed with systemd or WinSW serves the PWA with none of them.
+
+*Fix.* Include the same `security-headers.conf` (with D-10's keyword) in those configs, re-included
+in every location that sets its own `add_header`, exactly as the Docker template does.
+
+*The APK, for the record.* It needs no CSP to work: its files load from inside the package, never
+through nginx, and React escapes what the server returns. A `<meta>` CSP in `index.html` would be
+the one policy a compromised nginx cannot remove (backend `roadmap.md` §15) and is optional
+hardening; its `connect-src` cannot be just `'self'`, because the server address is editable on the
+tablet — it must name the site's server (one build per site already) or stay broad.
 
 ---
 
