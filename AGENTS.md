@@ -27,7 +27,7 @@ This file is conventions and traps. The references below are kept current with t
 | License | GPL-3.0-or-later — Copyright (C) 2026 hadi_hnp |
 | UI language | Persian (RTL); agent docs in English |
 | Backend (separate repo) | `backend-offline-first` — Spring Boot, default **8081** |
-| Typical backend path (local) | `D:\LocalStorage\Project\JavaProject\backend-offline-first` |
+| Typical backend path (local) | `H:\Project\offline-first-project\backend-offline-first` (the sibling `../backend-offline-first`) |
 | Primary user journey | Log sheets (inbox → fill → local submit → batch sync) — the only journey; the legacy DataRecord stack was deleted |
 
 ---
@@ -538,7 +538,7 @@ By role, the resulting UI is unchanged:
 
 > These are UI gates only; the server is authoritative. Hiding a control the server would allow
 > misleads the operator just as much as showing one it would refuse — which is why the sets must
-> match. Backend model: [backend `docs/security.md`](../../JavaProject/backend-offline-first/docs/security.md).
+> match. Backend model: [backend `docs/security.md`](../backend-offline-first/docs/security.md).
 
 ---
 

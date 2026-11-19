@@ -2,7 +2,8 @@
 
 React + TypeScript + Vite offline-first PWA for industrial field data collection. Persian (RTL),
 MUI, Dexie/IndexedDB. Its backend lives at
-`D:\LocalStorage\Project\JavaProject\backend-offline-first`.
+`H:\Project\offline-first-project\backend-offline-first` — the sibling directory
+`../backend-offline-first`.
 
 The operators using this app are standing in a plant, often with **no network**, holding a
 tablet against a pipe. Every design decision here follows from that.

@@ -4,7 +4,7 @@ The PWA is static files. Everything hard about deploying it is around them: ngin
 those files **and** proxy `/api/` to the backend from the same origin, over TLS that Android will
 accept, started by the machine rather than by a person.
 
-The backend half is in [the backend's `docs/deployment.md`](../../../JavaProject/backend-offline-first/docs/deployment.md).
+The backend half is in [the backend's `docs/deployment.md`](../../backend-offline-first/docs/deployment.md).
 The two must agree on one thing above all: **the origin the tablet loads the app from is the
 origin its API calls go to.** Get that wrong and every request is cross-origin, which means CORS,
 which means the tablets work until they do not.
@@ -849,7 +849,7 @@ curl -s http://127.0.0.1:8081/actuator/health/readiness
 
 ## Related
 
-- [Backend deployment — the Java service, database, backups](../../../JavaProject/backend-offline-first/docs/deployment.md)
+- [Backend deployment — the Java service, database, backups](../../backend-offline-first/docs/deployment.md)
 - [README § Production Deployment](../README.md#production-deployment)
 - [docs/storage.md § Changing the schema](storage.md#changing-the-schema)
 - [docs/device-features.md](device-features.md) — what each device capability needs
