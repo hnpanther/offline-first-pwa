@@ -36,7 +36,7 @@ marked `Fixed` with the commit, not deleted.
 | [D-07](#d-07--the-cas-private-key-is-the-root-of-trust-for-every-tablet-info) | Info → **High on the server** | Deployment | The CA's private key | **Open — found on the PWA server** by the security unit (report 6-4) |
 | [D-08](#d-08--modules-and-packages-the-site-never-uses-low) | Low | Deployment | nginx modules and packages the site never uses | **Fixed in 1.0.2** |
 | [D-09](#d-09--nginx-logs-are-lost-whenever-the-container-is-re-created-medium) | Medium | Deployment | nginx logs are lost whenever the container is re-created | **Fixed in 1.0.3** |
-| [D-10](#d-10--the-csp-may-block-the-qr-and-barcode-decoder-in-the-browser-high-unverified) | **High (unverified)** | Deployment / Bug | The CSP has no `'wasm-unsafe-eval'`: QR and barcode scanning may fail in the browser delivery | **Open — test first** |
+| [D-10](#d-10--the-csp-may-block-the-qr-and-barcode-decoder-in-the-browser-high-unverified) | **High** | Deployment / Bug | The CSP had no `'wasm-unsafe-eval'`: QR and barcode scanning failed in the browser delivery | **Confirmed 2026-11-19; fixed in the next image (1.0.4) — retest pending** |
 | [D-11](#d-11--systemd-and-winsw-nginx-send-no-security-headers-medium) | Medium | Deployment | systemd / WinSW nginx configs send no security headers (no CSP) | Open |
 
 **Status on 2026-11-17.** `mfdcs-pwa:1.0.2` is built and verified (`docker/DEPLOY.md` § "Verified
@@ -405,7 +405,7 @@ follows is what is left.
 | Secrets | none in any layer; `./ssl` mounted read-only |
 | Runtime | `read_only`, tmpfs for the two paths nginx writes, `cap_drop: ALL`, `no-new-privileges`, memory and CPU limits |
 | TLS | 1.2 and 1.3 only, session tickets off, HTTP redirects to HTTPS |
-| Headers | CSP with `script-src 'self'`, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: no-referrer`, a `Permissions-Policy`; re-included in every location that sets a header of its own |
+| Headers | CSP with `script-src 'self'` (`'wasm-unsafe-eval'` since D-10, for the decoder), `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: no-referrer`, a `Permissions-Policy`; re-included in every location that sets a header of its own |
 | Proxy | `/api/` only — the panel, `/integration/`, `/actuator` and Swagger are not reachable through it; `X-Forwarded-For` **overwritten**, not appended |
 | Build guard | the build fails if `dist/` has no `index.html`, `sw.js` or manifest |
 | Source maps | none in `dist/` |
@@ -437,7 +437,7 @@ not as a wrong password.
 
 **Fixed in 1.0.2**, as proposed with three refinements: one zone for all four endpoints (sign-in,
 challenge, both enrolment calls), rate and burst configurable (`PWA_AUTH_RATE` 60/min,
-`PWA_AUTH_BURST` 30), and the `429` returned as the backend's own JSON shape with a Persian
+`PWA_AUTH_BURST` 30 — renamed `PWA_LOGIN_RATE` / `PWA_LOGIN_BURST` in 1.0.4), and the `429` returned as the backend's own JSON shape with a Persian
 message — the app shows the server's `message`, so no client change was needed. The four
 locations carry `proxy_pass` with **no URI** (AGENTS.md: an exact location with a URI rewrites the
 whole path) and share `snippets/api-proxy.conf`. Measured: 45 rapid sign-ins → 33 answered, 12
@@ -545,6 +545,18 @@ tested against the running image. The backend image is unchanged: it already acc
 `X-Correlation-Id`.
 
 ## D-10 — the CSP may block the QR and barcode decoder in the browser (High, unverified)
+
+> **Confirmed and fixed, 2026-11-19.** Behind the image's nginx the scanner said «رمزگشای کد در این
+> دستگاه بارگذاری نشد»; under `npm run preview:mobile` it scanned QR and barcodes — because
+> `vite preview` sends no CSP. `'wasm-unsafe-eval'` is now in `script-src`
+> (`docker/nginx/snippets/security-headers.conf`). **Takes effect only in a rebuilt image (1.0.4)**;
+> retest with QR and a barcode through nginx, then mark this closed.
+> **A browser that already installed the app may keep the old policy**: the service worker answers
+> navigations from its precache, and a cached `index.html` carries the headers it was cached with.
+> A new image whose `dist/` is unchanged does not change the precache, so test with a hard reload
+> (Ctrl+Shift+R bypasses the service worker) or a fresh profile, and ship the fix to sites together
+> with an app build so the precache is refreshed. Lesson: a scan test under
+> `vite preview` or on the APK says nothing about the CSP — only the image does.
 
 *Raised 2026-11-19 while reviewing the CSP for the plant's security unit. Not run — **test before
 anything else in this file that touches scanning.***

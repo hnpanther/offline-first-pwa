@@ -43,8 +43,8 @@ ENV NGINX_ENVSUBST_FILTER="^PWA_" \
     PWA_SERVER_NAME="_" \
     PWA_BACKEND_UPSTREAM="http://host.docker.internal:8081" \
     PWA_MAX_BODY_SIZE="32m" \
-    PWA_AUTH_RATE="60r/m" \
-    PWA_AUTH_BURST="30" \
+    PWA_LOGIN_RATE="60r/m" \
+    PWA_LOGIN_BURST="30" \
     PWA_HSTS_MAX_AGE="31536000" \
     PWA_LOG_FORMAT="json"
 

@@ -184,17 +184,23 @@ mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy th
 | `PWA_SERVER_NAME` | `_` | The name(s) or IP tablets type, space-separated; `_` accepts any. Informational with the shipped template: it has one `server` block per port, and nginx hands a request whose name matches none to that block anyway, so this restricts nothing |
 | `PWA_BACKEND_UPSTREAM` | `http://host.docker.internal:8081` | Spring Boot, as seen **from inside the container**. Scheme, host, port; no `/api`, no trailing slash |
 | `PWA_MAX_BODY_SIZE` | `32m` | Largest request forwarded. Must stay above the backend's 25 MB attachment limit |
-| `PWA_AUTH_RATE` | `60r/m` | How often **one client address** may call the four endpoints that need no session — sign-in, the device challenge, both enrolment calls. nginx syntax (`r/m`, `r/s`) |
-| `PWA_AUTH_BURST` | `30` | How many of those may arrive at once before the rate applies. A sign-in is 2 requests from a browser, 4 from the APK (each call has a CORS preflight) |
+| `PWA_LOGIN_RATE` | `60r/m` | How often **one client address** may call the four endpoints that need no session — sign-in, the device challenge, both enrolment calls. nginx syntax (`r/m`, `r/s`) |
+| `PWA_LOGIN_BURST` | `30` | How many of those may arrive at once before the rate applies. A sign-in is 2 requests from a browser, 4 from the APK (each call has a CORS preflight) |
 | `PWA_HSTS_MAX_AGE` | `31536000` | Seconds a browser remembers "HTTPS only" for this name. `0` tells browsers that remember it to forget |
 | `PWA_LOG_FORMAT` | `json` | Access log format: `json` (one object per line, for Filebeat → Logstash) or `main` (one line of text). Anything else stops the container at start, with a message. §7a |
 | `PWA_TZ` | `Asia/Tehran` | Time zone of the log timestamps. They carry their offset either way (`+03:30`) |
 
 **If every tablet reaches this server through one NAT address**, they share one rate-limit
 bucket: a shift of thirty signing in within the same minute needs about 60–120 requests. Read the
-access log at a shift change before trusting the defaults, and raise `PWA_AUTH_RATE` /
-`PWA_AUTH_BURST` until it fits. A refused request gets `429` and the app shows «تعداد درخواست‌های
+access log at a shift change before trusting the defaults, and raise `PWA_LOGIN_RATE` /
+`PWA_LOGIN_BURST` until it fits. A refused request gets `429` and the app shows «تعداد درخواست‌های
 ورود از این دستگاه بیش از حد مجاز است…»; nothing else under `/api/` is limited.
+
+**Renamed in 1.0.4:** these were `PWA_AUTH_RATE` / `PWA_AUTH_BURST`. The old names are **not read
+any more** — a site `.env` that still sets them silently gets the defaults, so rename them there
+when moving to 1.0.4. Why: BuildKit's `SecretsUsedInArgOrEnv` check flags any `ENV` whose name
+contains `AUTH` as a possible secret, and these are a rate limit, not a secret. Renaming keeps
+that check on for the day a real secret is put in an `ENV` by mistake.
 
 Where the backend runs decides `PWA_BACKEND_UPSTREAM`:
 
@@ -227,7 +233,8 @@ Then, from a machine on the plant network:
 ```bash
 curl -s  http://<server>/healthz                          # ok
 curl -sI http://<server>/                                 # 301 → https://
-curl -sI --cacert rootCA.pem https://<server>/            # 200, Content-Security-Policy present
+curl -sI --cacert rootCA.pem https://<server>/            # 200, Content-Security-Policy present,
+                                                          # its script-src with 'wasm-unsafe-eval' (issue D-10)
 curl -sI --cacert rootCA.pem https://<server>/sw.js       # Cache-Control: no-cache
 curl -s  --cacert rootCA.pem https://<server>/api/health  # the backend answers through nginx
 ```
@@ -235,6 +242,9 @@ curl -s  --cacert rootCA.pem https://<server>/api/health  # the backend answers 
 And on **one real tablet**, before walking away:
 
 - the browser opens the app with no certificate warning, and it still opens with Wi-Fi off;
+- **in the browser delivery** (not the APK, not `vite preview` — neither sends this CSP), scan one QR
+  code and one barcode: «رمزگشای کد در این دستگاه بارگذاری نشد» means the CSP is blocking the
+  WebAssembly decoder (issue D-10);
 - the APK signs in (it trusts the CA bundled at build time, not the one installed on the device).
 
 ---
@@ -248,7 +258,7 @@ And on **one real tablet**, before walking away:
 | Large media | 32 MB bodies; uploads and downloads stream through without temp files; 300 s proxy timeouts (the client allows 120 s) |
 | Security headers | CSP, `Strict-Transport-Security` (since 1.0.2), `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`. On **every** HTTPS response — including locations that set their own caching, which nginx would otherwise strip |
 | TLS | 1.2 and 1.3 only. Since 1.0.2 TLS 1.2 offers only forward-secret AEAD suites (ECDHE with AES-GCM or ChaCha20-Poly1305); CBC-mode and static-RSA suites are refused |
-| Sign-in rate limit | Since 1.0.2, per client address on the four endpoints that need no session (`PWA_AUTH_RATE`, `PWA_AUTH_BURST`); `429` with a Persian JSON message. The backend's own lockout stops guessing a password, not asking |
+| Sign-in rate limit | Since 1.0.2, per client address on the four endpoints that need no session (`PWA_LOGIN_RATE`, `PWA_LOGIN_BURST`); `429` with a Persian JSON message. The backend's own lockout stops guessing a password, not asking |
 | What is in the image | Since 1.0.2, 19 Alpine packages (71 before): nginx's five dynamic modules (xslt, image-filter, geoip, njs, acme — none ever loaded), `curl` and the package manager are removed, and with them libxml2, libxslt, the image libraries and the X11 client libraries. The build fails if nginx's version moved or a removed piece is still there |
 | Client address | `X-Forwarded-For` is **overwritten** with the real peer, never appended. The backend records the first entry; appending would let any client choose the address the audit trail shows |
 | Hardening | Runs as uid 101 from start to finish — no root master process — and listens on 8080/8443 inside the container, published as the host's 80/443. No capabilities at all, read-only root filesystem, scratch paths on tmpfs owned by 101, `no-new-privileges`, no server version in headers |

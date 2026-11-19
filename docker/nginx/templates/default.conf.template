@@ -6,9 +6,9 @@
 #   PWA_BACKEND_UPSTREAM  where Spring Boot listens, scheme + host + port, no path
 #                         (default: http://host.docker.internal:8081)
 #   PWA_MAX_BODY_SIZE     largest request body nginx forwards (default: 32m)
-#   PWA_AUTH_RATE         sustained rate one client address may call the sign-in and enrolment
+#   PWA_LOGIN_RATE         sustained rate one client address may call the sign-in and enrolment
 #                         endpoints, nginx syntax (default: 60r/m)
-#   PWA_AUTH_BURST        how many such requests may arrive at once before the rate applies
+#   PWA_LOGIN_BURST        how many such requests may arrive at once before the rate applies
 #                         (default: 30)
 #   PWA_LOG_FORMAT        access log format: `main` (text) or `json` (default: json). The two
 #                         formats are defined in nginx.conf; entrypoint.d/05-pwa-logs.sh refuses
@@ -30,9 +30,9 @@
 #
 # Keyed by client address. On a site where every tablet reaches this server through one NAT
 # address they all share one bucket: read the access log before deciding the default is right,
-# and raise PWA_AUTH_RATE / PWA_AUTH_BURST if a shift change does not fit — docker/DEPLOY.md.
+# and raise PWA_LOGIN_RATE / PWA_LOGIN_BURST if a shift change does not fit — docker/DEPLOY.md.
 # 10m of shared memory holds about 160,000 addresses.
-limit_req_zone $binary_remote_addr zone=pwa_auth:10m rate=${PWA_AUTH_RATE};
+limit_req_zone $binary_remote_addr zone=pwa_auth:10m rate=${PWA_LOGIN_RATE};
 
 # The access log, at http level so both servers below inherit it (/healthz switches it off). The
 # format name comes from the environment; the formats are in nginx.conf.
@@ -158,14 +158,14 @@ server {
 
     # The endpoints that can be called before signing in — see the zone at the top of this file.
     location = /api/auth/login {
-        limit_req zone=pwa_auth burst=${PWA_AUTH_BURST} nodelay;
+        limit_req zone=pwa_auth burst=${PWA_LOGIN_BURST} nodelay;
         error_page 429 @pwa_rate_limited;
         proxy_pass ${PWA_BACKEND_UPSTREAM};
         include /etc/nginx/snippets/api-proxy.conf;
     }
 
     location = /api/auth/challenge {
-        limit_req zone=pwa_auth burst=${PWA_AUTH_BURST} nodelay;
+        limit_req zone=pwa_auth burst=${PWA_LOGIN_BURST} nodelay;
         error_page 429 @pwa_rate_limited;
         proxy_pass ${PWA_BACKEND_UPSTREAM};
         include /etc/nginx/snippets/api-proxy.conf;
@@ -173,7 +173,7 @@ server {
 
     # Both enrolment calls: the request itself and …/confirm.
     location ^~ /api/devices/enrollment-requests {
-        limit_req zone=pwa_auth burst=${PWA_AUTH_BURST} nodelay;
+        limit_req zone=pwa_auth burst=${PWA_LOGIN_BURST} nodelay;
         error_page 429 @pwa_rate_limited;
         proxy_pass ${PWA_BACKEND_UPSTREAM};
         include /etc/nginx/snippets/api-proxy.conf;

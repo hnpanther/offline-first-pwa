@@ -31,8 +31,8 @@ services:
       PWA_MAX_BODY_SIZE: ${PWA_MAX_BODY_SIZE:-32m}
       # Sign-in rate limit per client address, and how long browsers remember "HTTPS only".
       # DEPLOY.md §5 says when to change them.
-      PWA_AUTH_RATE: ${PWA_AUTH_RATE:-60r/m}
-      PWA_AUTH_BURST: ${PWA_AUTH_BURST:-30}
+      PWA_LOGIN_RATE: ${PWA_LOGIN_RATE:-60r/m}
+      PWA_LOGIN_BURST: ${PWA_LOGIN_BURST:-30}
       PWA_HSTS_MAX_AGE: ${PWA_HSTS_MAX_AGE:-31536000}
       # Access log format: `json` (one JSON object per line, for Filebeat → Logstash) or `main`
       # (one line of text). Anything else stops the container at start with a message.
