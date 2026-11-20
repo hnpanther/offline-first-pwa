@@ -28,7 +28,7 @@
 # carries no registry digest, and that build must pass the tag alone:
 #   --build-arg NGINX_IMAGE=nginx:1.30.6-alpine3.24
 # Recorded 2026-11-16. When the base is moved to a newer build, change both halves together.
-ARG NGINX_IMAGE=nginx:1.30.6-alpine3.24@sha256:901e593c95dc85f5a729f5765516321366ef4ac401821431d408897e95287d0a
+ARG NGINX_IMAGE=nginx:1.30.7-alpine3.24@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
 FROM ${NGINX_IMAGE}
 
 ARG APP_VERSION=unknown
