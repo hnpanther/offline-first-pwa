@@ -38,6 +38,12 @@ limit_req_zone $binary_remote_addr zone=pwa_auth:10m rate=${PWA_LOGIN_RATE};
 # format name comes from the environment; the formats are in nginx.conf.
 access_log /var/log/nginx/access.log ${PWA_LOG_FORMAT};
 
+# The error log's level for everything a request can cause — upstream failures, rate-limit
+# refusals, oversized bodies, TLS — set at http level so both servers inherit it. nginx.conf keeps
+# its own process-level line (start, reload, shutdown), because that one is read before any
+# template exists. Same file; nginx opens it once. Checked at start by 05-pwa-logs.sh.
+error_log /var/log/nginx/error.log ${PWA_ERROR_LOG_LEVEL};
+
 server {
     # IPv4 only: a host booted with IPv6 disabled would make [::] fail nginx at start.
     # 8080, not 80: nginx runs as uid 101, which cannot bind below 1024. Compose publishes it as

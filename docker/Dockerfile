@@ -46,7 +46,8 @@ ENV NGINX_ENVSUBST_FILTER="^PWA_" \
     PWA_LOGIN_RATE="60r/m" \
     PWA_LOGIN_BURST="30" \
     PWA_HSTS_MAX_AGE="31536000" \
-    PWA_LOG_FORMAT="json"
+    PWA_LOG_FORMAT="json" \
+    PWA_ERROR_LOG_LEVEL="notice"
 
 # Alpine security fixes published since the base image was built (an image scan lists every one
 # of them as this image's). It cannot swap nginx: the official image pins nginx and each of its

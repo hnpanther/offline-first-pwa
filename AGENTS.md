@@ -1209,6 +1209,24 @@ would only send the operator back in — and a wipe order is the one thing it an
 («حداکثر نیم ساعت», backend `FaMessages.WIPE_TAKES_EFFECT` and `device-revoke.html`): change one and
 change the other.
 
+### Nothing sensitive in a URL — nginx writes the whole URL into both of its logs
+
+The access log's `uri` and the error log's `request: "…"` carry the path **and the query string**,
+verified with a real container; headers and bodies are never logged. The logs outlive the request
+by months (rotation, Filebeat, backups) and are readable by people the app's access rules do not
+cover. So a token, the enrolment code, or a name or personnel code a user typed must travel in a
+header or a `POST` body, never in `?…`. A server-side search added later is the likely way to break
+this. `docker/DEPLOY.md` §7a «Nothing sensitive in a URL».
+
+### The error log's level is set in the template, not in `nginx.conf`
+
+`nginx.conf` is copied into the image and is not rendered with the environment, so a `${PWA_…}`
+there would be passed to nginx literally. `PWA_ERROR_LOG_LEVEL` therefore drives a second
+`error_log` at http level in `templates/default.conf.template`; the `notice` line in `nginx.conf`
+stays for the process's own start/reload/shutdown messages. `05-pwa-logs.sh` refuses `debug` — the
+image runs the non-debug `nginx` binary, which accepts it and logs nothing more — and any unknown
+value, before nginx starts.
+
 ### The container's nginx runs as uid 101 — ports, redirects and the key follow from it
 
 `docker/Dockerfile` declares `USER 101:101`, so nginx has no root master process (CIS Docker

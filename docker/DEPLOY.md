@@ -188,6 +188,7 @@ mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy th
 | `PWA_LOGIN_BURST` | `30` | How many of those may arrive at once before the rate applies. A sign-in is 2 requests from a browser, 4 from the APK (each call has a CORS preflight) |
 | `PWA_HSTS_MAX_AGE` | `31536000` | Seconds a browser remembers "HTTPS only" for this name. `0` tells browsers that remember it to forget |
 | `PWA_LOG_FORMAT` | `json` | Access log format: `json` (one object per line, for Filebeat → Logstash) or `main` (one line of text). Anything else stops the container at start, with a message. §7a |
+| `PWA_ERROR_LOG_LEVEL` | `notice` | How much goes into `error.log`, most to least: `info`, `notice`, `warn`, `error`, `crit`, `alert`, `emerg`. `debug` and anything else stop the container at start, with a message. **Not read by 1.0.4 and earlier.** §7a «The error log» |
 | `PWA_TZ` | `Asia/Tehran` | Time zone of the log timestamps. They carry their offset either way (`+03:30`) |
 
 **If every tablet reaches this server through one NAT address**, they share one rate-limit
@@ -350,7 +351,12 @@ files on the host:
 | File | What | Format |
 |---|---|---|
 | `logs/access.log` | one line per request (not `/healthz`) | `PWA_LOG_FORMAT`: `json` (default) or `main` |
-| `logs/error.log` | start-up, warnings, rate-limit refusals, `reopening logs` | nginx's own text |
+| `logs/error.log` | start-up, warnings, rate-limit refusals, `reopening logs` — at `PWA_ERROR_LOG_LEVEL` (below) | nginx's own text |
+
+**Everything nginx writes is in these two files** — both are on the bind mount, so both survive a
+re-created container and both are rotated. The one thing that is **not** there is what the
+container prints *before* nginx starts: the `logs: …` line and any `FATAL: …` from the start-up
+checks go to `docker compose logs`, which is where to look when the container will not start.
 
 **Why files, not `docker logs`:** Docker keeps a container's output **with the container**, and
 every `docker compose up -d` with a new image re-creates it — the previous version's logs went with
@@ -412,7 +418,8 @@ quotes, backslashes or a tab stays on its own line and cannot forge another. Fie
 ```
 
 **Not in either, on purpose:** request bodies (the sign-in password) and the `Authorization` header
-(the bearer token). Verified: neither appeared in a log that contained a sign-in.
+(the bearer token). Verified: neither appeared in a log that contained a sign-in. **The URL,
+query string included, is in both** — see «Nothing sensitive in a URL» below.
 
 **Switching the format** takes effect at the next start, and new lines are appended to the same
 file — so for a while `access.log` holds both shapes, and a JSON reader trips on the text lines.
@@ -427,6 +434,71 @@ access log, the id in the backend's lines and the one in the response header wer
 **A byte that is not UTF-8**, if a client sends one in a header, reaches the line unchanged —
 nginx escapes quotes and control characters, not invalid UTF-8. The line is still one line and
 still JSON in shape; configure the reader to replace invalid sequences rather than drop the line.
+
+### The error log — its level, and what it holds
+
+**It is text, and stays text.** `log_format` applies to the access log only; the error log's
+line is fixed by nginx and no directive changes it, in the open-source build or in NGINX Plus. To
+get JSON, parse it where it is shipped — Filebeat/Fluent Bit/Vector each have a parser for this
+shape — rather than in nginx. One line:
+
+```text
+2026/11/20 06:53:41 [error] 23#23: *3 connect() failed (111: Connection refused) while connecting to upstream, client: 172.17.0.1, server: _, request: "POST /api/auth/login HTTP/1.1", upstream: "http://127.0.0.1:8081/api/auth/login", host: "localhost:18443"
+```
+
+Time, level, process and thread, the connection number (`*3`), the message — then, when the line is
+about a request, the client address, the server, the **request line**, the upstream and the host.
+
+**The level** is `PWA_ERROR_LOG_LEVEL` (`.env`). nginx writes a message when it is at the chosen
+level **or more severe**, so the list runs from the most to write to the least:
+
+| Level | Severity | What it adds, on this site |
+|---|---|---|
+| `debug` | lowest | Every internal step of every request. **Refused here**: the image runs the `nginx` binary, built without `--with-debug`, which accepts `debug` and then writes nothing more than `info` — a setting that silently does nothing is worse than one refused. Kept out deliberately |
+| `info` | | Client-side events: a TLS handshake that failed (an old tablet, a wrong certificate), a client closing the connection early. **For chasing a TLS or connectivity problem, briefly** — on a busy site it is the noisy one |
+| `notice` | **default** | Nothing extra from requests in practice; what `notice` adds is process events, which are logged at `notice` whatever this says (below) |
+| `warn` | | **Rate-limit refusals** (`limiting requests, excess: … by zone "pwa_auth", client: …` — logged at `warn` by `limit_req_log_level`), a request body buffered to a temporary file, an upstream that sent an invalid header. **Recommended for production** together with `notice` |
+| `error` | | **Why a request failed**: the backend refused or timed out (`connect() failed`, `upstream timed out` — every 502/504), a body over `PWA_MAX_BODY_SIZE` (`client intended to send too large body` — the 413), a file not found or not readable. **From here up, rate-limit refusals are no longer recorded**; the access log still marks each one (`limit_req_status: REJECTED`), and the container says so at start |
+| `crit` | | Serious faults: out of file descriptors, a socket that cannot be opened, some TLS failures inside nginx |
+| `alert` | | Faults needing action at once, e.g. a worker that could not be started |
+| `emerg` | highest | nginx cannot run: a bad configuration, a certificate it cannot load, a port it cannot bind. These stop the container |
+
+**Two lines, one file.** `nginx.conf` is not a template — it is read before the environment is
+applied — so its own `error_log … notice` stays and carries the process's messages: start, reload,
+`reopening logs` after a rotation, shutdown, a bad configuration. The level you set comes from a
+second `error_log`, at http level in `templates/default.conf.template`, and governs everything a
+**request** causes. So whatever level you choose, start-up and rotation stay visible.
+
+**Changing it** takes effect at the next start (`docker compose up -d` after editing `.env`); no
+image rebuild. Verified on 2026-11-20 against a build of this commit: `warn` recorded the
+rate-limit refusal and both upstream failures; `error` recorded the two upstream failures and not
+the refusal, and printed the note at start; `debug` and `bogus` each stopped the container with
+their `FATAL:` line; the process's `notice` lines were present at every level.
+
+### Nothing sensitive in a URL
+
+**Both logs write the full URL of a request, query string included**: the access log in `uri`,
+for every request; the error log in `request: "…"`, for every request that causes a line. Neither
+writes headers or bodies. Verified on 2026-11-20: a request to
+`/api/lookups/staff/items?q=EXAMPLE-NAME` with `Authorization: Bearer EXAMPLE-TOKEN` put the name
+in both files and the token in neither.
+
+**Why that is a security matter.** A log is not protected like the database. It is readable by
+anyone with access to the host or to `docker/logs/`, who is not necessarily anyone allowed into
+the panel or the database; the application's access rules (unit scope, roles) do not apply to it;
+and it is kept — 30 rotations by default, then whatever Filebeat, Logstash and the backups keep.
+A value that once went into a URL is in all of those places, for that long, and cannot be taken
+back. What would be harmful there:
+
+- a token, key or signed link (`?token=…`) — whoever reads the log can act as that user;
+- the one-time device-enrolment code;
+- personal data — a name, a personnel or national code typed into a search (`?q=…`).
+
+**Today nothing sensitive goes into a URL.** The PWA sends its token in `Authorization`, the
+enrolment code and request number in the body, and no search text in a query string; the panel
+does not pass through this nginx. **The rule for anything new**: send sensitive values in the body
+(a `POST`) or a header, never in the path or the query string. If a URL must carry one — a
+server-side search of a personnel list, say — mask it before it is logged, in both logs.
 
 ### Rotation — `docker/logrotate/mfdcs-pwa`
 

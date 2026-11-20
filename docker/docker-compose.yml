@@ -37,6 +37,9 @@ services:
       # Access log format: `json` (one JSON object per line, for Filebeat → Logstash) or `main`
       # (one line of text). Anything else stops the container at start with a message.
       PWA_LOG_FORMAT: ${PWA_LOG_FORMAT:-json}
+      # How much goes into error.log: info · notice · warn · error · crit · alert · emerg (most to
+      # least). `debug` is refused — this image's nginx is built without it. DEPLOY.md §7a.
+      PWA_ERROR_LOG_LEVEL: ${PWA_ERROR_LOG_LEVEL:-notice}
       # The time zone the log timestamps are written in. They carry their offset either way
       # (2026-11-17T10:15:00+03:30), so this only decides what a person reading them sees.
       TZ: ${PWA_TZ:-Asia/Tehran}
