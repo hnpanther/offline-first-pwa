@@ -226,10 +226,12 @@ reference lists its open rounds need (backend roadmap §31 Phase 2). No existing
 is touched, so the upgrade cannot lose anything already on a tablet.
 
 These two are the **one exception to «reference data survives logout»**: a list may be personal
-data, so it is cleared at sign-out (`clearUserSessionContext`), deleted when its lease ends — online
-or not, at startup and whenever a field reads it — and dropped when no assigned round needs it. Nothing
-an operator recorded goes with it: every lookup answer stores its own `{code, label}`. See
-`services/lookups/` and [sync.md](sync.md) — «Reference lists».
+data, so it is cleared at sign-out (`clearUserSessionContext` → `clearAllLookups`), deleted when its lease ends — online
+or not, at startup and whenever a field reads it — and dropped when no assigned round and no
+FILL-able form needs it. Form personnel lists live in these same stores, not a second table;
+sign-out also deletes the `requiredFormLookups` lease key. Nothing an operator recorded goes
+with it: every lookup answer stores its own `{code, label}`, and form drafts, finals and
+signature bytes are other stores. See `services/lookups/` and [sync.md](sync.md) — «Reference lists».
 
 ### The recovery path in `openDatabase()`
 

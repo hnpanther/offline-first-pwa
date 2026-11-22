@@ -433,7 +433,10 @@ published. The inbox path then **unions** that lease with the assigned rounds'
 `requiredLookups` and passes only that set to `syncRequiredLookups`. The helper set-diffs, so
 calling it with only one source would drop the other's lists, and handing it any wider catalog
 would download lists nobody's open round or fillable form uses. Offline fill of a form stays
-closed until that form's own lists are on the device.
+closed until that form's own lists are on the device. Sign-out deletes those copies with
+`clearAllLookups` — form lists and round lists are the same `lookupLists` / `lookupItems`
+stores — and deletes the `requiredFormLookups` key. Drafts, queued finals and signature bytes
+stay.
 
 **History:** `GET /api/form-submissions` is merged into local rows the operator can already
 see. Submitted, approved and voided filings are listed under سوابق فرم‌ها, separate from open

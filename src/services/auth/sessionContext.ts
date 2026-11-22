@@ -257,7 +257,11 @@ export async function clearUserSessionContext(): Promise<void> {
   await clearInboxSnapshot()
   // Reference lists may be personal data (a personnel list is names), so — unlike every other
   // reference store on a shared tablet — they do not stay for the next user (backend roadmap
-  // §31, «the device lease»). Nothing recorded is lost: each answer carries its own label.
+  // §31, «the device lease»). Form lists and round lists are the same two stores; clearing
+  // one source and leaving the other would keep the next operator's colleague's names.
+  // The bootstrap lease key goes too, or the next sign-in would treat it as already downloaded.
+  // Nothing recorded is lost: each answer carries its own label, and drafts, finals and
+  // signature bytes are not in these stores.
   await clearAllLookups()
   await clearRequiredFormLookups()
 }
