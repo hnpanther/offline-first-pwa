@@ -109,6 +109,24 @@ export const PERM_NFC_FAULT_REPORT = 'POST:/api/nfc-fault-reports/batch'
  */
 export const PERM_LOG_SHEET_PROGRESS = 'POST:/api/log-sheets/progress'
 
+/** List fillable ad-hoc forms (carrier 3). */
+export const PERM_FORMS_LIST = 'GET:/api/forms'
+
+/** Draft upsert for ad-hoc forms. */
+export const PERM_FORMS_DRAFT = 'POST:/api/forms/drafts'
+
+/** Final submit for ad-hoc forms. */
+export const PERM_FORMS_SUBMIT = 'POST:/api/forms/submit'
+
+/** Whether the signed-in user may open the forms UI at all. */
+export function canFillForms(session: AuthSession | null): boolean {
+  return (
+    hasPermission(session, PERM_FORMS_LIST) ||
+    hasPermission(session, PERM_FORMS_DRAFT) ||
+    hasPermission(session, PERM_FORMS_SUBMIT)
+  )
+}
+
 export function hasPermission(session: AuthSession | null, perm: string): boolean {
   return session?.permissions.includes(perm) ?? false
 }

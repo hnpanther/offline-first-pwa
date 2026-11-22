@@ -242,14 +242,18 @@ interface DynamicClassFormProps {
   readOnlyValues?: Record<string, unknown>
   /**
    * Context an attachment field needs to bind captured media to the right place.
-   * Absent for forms outside a log sheet — image/audio fields then render as read-only.
+   * Log-sheet path: `logSheetLocalId`. Form path (carrier 3): `formSubmissionLocalId`.
+   * Absent entirely — image/audio fields render as read-only.
    */
   attachmentContext?: {
-    logSheetLocalId: string
+    logSheetLocalId?: string
     logSheetServerId?: string
+    formSubmissionLocalId?: string
+    formSubmissionId?: string
     /**
      * Absent for the round's own questions — those belong to the sheet rather than to any asset
      * on it, and so does any photo answering one. Present for every per-asset form.
+     * Form submissions never set this — forms are flat.
      */
     assetId?: string
   }
@@ -321,12 +325,16 @@ function SignatureFieldWithVerdict({
         current: fingerprint()
       })
     : undefined
+  // Signatures currently bind to log-sheet attachment storage; form-owned signatures reuse
+  // the form local id as the attachment owner key via AttachmentFieldInput's form props.
+  const sheetLocalId =
+    attachmentContext.logSheetLocalId ?? attachmentContext.formSubmissionLocalId ?? ''
   return (
     <SignatureFieldInput
       label={label}
       value={value}
       readOnly={readOnly}
-      logSheetLocalId={attachmentContext.logSheetLocalId}
+      logSheetLocalId={sheetLocalId}
       logSheetServerId={attachmentContext.logSheetServerId}
       assetId={attachmentContext.assetId}
       fieldKey={def.key}
@@ -337,6 +345,12 @@ function SignatureFieldWithVerdict({
       coveredFingerprint={() => coveredFingerprint(scopeOfField(def), answers, ownKeys, roundEntries)}
     />
   )
+}
+
+function hasAttachmentOwner(
+  ctx: DynamicClassFormProps['attachmentContext']
+): ctx is NonNullable<DynamicClassFormProps['attachmentContext']> {
+  return !!(ctx?.logSheetLocalId || ctx?.formSubmissionLocalId)
 }
 
 export function DynamicClassForm({
@@ -397,7 +411,7 @@ export function DynamicClassForm({
           }
 
           const readOnlyKind = attachmentKindForDataType(def.dataType)
-          if (readOnlyKind && attachmentContext) {
+          if (readOnlyKind && hasAttachmentOwner(attachmentContext)) {
             return (
               <Box key={def.key} sx={{ py: 1.25, px: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}>
                 <AttachmentFieldInput
@@ -407,6 +421,8 @@ export function DynamicClassForm({
                   readOnly
                   logSheetLocalId={attachmentContext.logSheetLocalId}
                   logSheetServerId={attachmentContext.logSheetServerId}
+                  formSubmissionLocalId={attachmentContext.formSubmissionLocalId}
+                  formSubmissionId={attachmentContext.formSubmissionId}
                   assetId={attachmentContext.assetId}
                   fieldKey={def.key}
                   onChange={() => {}}
@@ -583,7 +599,7 @@ export function DynamicClassForm({
         }
 
         const attachmentKind = attachmentKindForDataType(def.dataType)
-        if (attachmentKind && attachmentContext) {
+        if (attachmentKind && hasAttachmentOwner(attachmentContext)) {
           return (
             <Controller
               key={fieldName}
@@ -597,6 +613,8 @@ export function DynamicClassForm({
                   value={field.value}
                   logSheetLocalId={attachmentContext.logSheetLocalId}
                   logSheetServerId={attachmentContext.logSheetServerId}
+                  formSubmissionLocalId={attachmentContext.formSubmissionLocalId}
+                  formSubmissionId={attachmentContext.formSubmissionId}
                   assetId={attachmentContext.assetId}
                   fieldKey={def.key}
                   onChange={field.onChange}

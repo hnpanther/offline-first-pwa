@@ -8,11 +8,13 @@ import { theme } from '@/theme'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute'
 import { PermissionRoute } from '@/components/auth/PermissionRoute'
-import { canManageNfcSerial, hasPlantWideScope } from '@/types/auth'
+import { canFillForms, canManageNfcSerial, hasPlantWideScope } from '@/types/auth'
 import { Dashboard } from '@/pages/Dashboard'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { LogSheetListPage } from '@/pages/LogSheetListPage'
 import { LogSheetFillPage } from '@/pages/LogSheetFillPage'
+import { FormListPage } from '@/pages/FormListPage'
+import { FormFillPage } from '@/pages/FormFillPage'
 import { NfcInspectPage } from '@/pages/NfcInspectPage'
 import { DeviceCheckPage } from '@/pages/DeviceCheckPage'
 import { LoginPage } from '@/pages/LoginPage'
@@ -56,6 +58,32 @@ export function App() {
                   <Route path="active" element={<LogSheetListPage mode="active" />} />
                   <Route path="history" element={<LogSheetListPage mode="history" />} />
                   <Route path=":localId" element={<LogSheetFillPage />} />
+                </Route>
+                <Route path="forms">
+                  <Route
+                    index
+                    element={
+                      <PermissionRoute allow={canFillForms}>
+                        <FormListPage />
+                      </PermissionRoute>
+                    }
+                  />
+                  <Route
+                    path="new/:formId"
+                    element={
+                      <PermissionRoute allow={canFillForms}>
+                        <FormFillPage />
+                      </PermissionRoute>
+                    }
+                  />
+                  <Route
+                    path=":localId"
+                    element={
+                      <PermissionRoute allow={canFillForms}>
+                        <FormFillPage />
+                      </PermissionRoute>
+                    }
+                  />
                 </Route>
                 <Route path="nfc-inspect" element={<PermissionRoute allow={canManageNfcSerial}><NfcInspectPage /></PermissionRoute>} />
                 {/* Device-only: it reads this tablet's own capabilities and talks to no

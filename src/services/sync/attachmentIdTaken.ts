@@ -101,8 +101,41 @@ export async function remintTakenAttachment(
 ): Promise<LocalAttachment | null> {
   if (attachment.idRemintedFrom != null) return null
 
+  // Form-owned media: rewrite the form submission's formData the same way a sheet's entry is.
+  if (attachment.formSubmissionLocalId) {
+    return db.transaction('rw', db.attachments, db.formSubmissions, async () => {
+      const form = await db.formSubmissions
+        .where('localId')
+        .equals(attachment.formSubmissionLocalId!)
+        .first()
+      if (!form || form.status !== 'draft') return null
+
+      const newId = uuidv4()
+      const reminted: LocalAttachment = {
+        ...attachment,
+        id: newId,
+        idRemintedFrom: attachment.id,
+        syncStatus: 'pending',
+        syncError: undefined,
+        permanentFailure: undefined,
+        failedStatus: undefined
+      }
+      const formData = rewriteFormAttachmentRef(form.formData, attachment.fieldKey, attachment.id, newId)
+      await db.formSubmissions.update(form.id, {
+        formData,
+        updatedAt: now,
+        locallyEditedAt: now
+      })
+      await db.attachments.add(reminted)
+      await db.attachments.delete(attachment.id)
+      return reminted
+    })
+  }
+
+  if (!attachment.logSheetLocalId) return null
+
   return db.transaction('rw', db.attachments, db.logSheets, async () => {
-    const sheet = await db.logSheets.where('localId').equals(attachment.logSheetLocalId).first()
+    const sheet = await db.logSheets.where('localId').equals(attachment.logSheetLocalId!).first()
     if (!sheet || !canStillCarryNewReference(sheet)) return null
 
     const newId = uuidv4()
@@ -120,4 +153,24 @@ export async function remintTakenAttachment(
     await db.attachments.delete(attachment.id)
     return reminted
   })
+}
+
+function rewriteFormAttachmentRef(
+  formData: Record<string, unknown> | undefined,
+  fieldKey: string,
+  oldId: string,
+  newId: string
+): Record<string, unknown> {
+  const next = { ...(formData ?? {}) }
+  const value = next[fieldKey]
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const ids = Array.isArray((value as { ids?: unknown }).ids)
+      ? ([...(value as { ids: unknown[] }).ids] as unknown[])
+      : []
+    next[fieldKey] = {
+      ...(value as object),
+      ids: ids.map(id => (String(id) === oldId ? newId : id))
+    }
+  }
+  return next
 }

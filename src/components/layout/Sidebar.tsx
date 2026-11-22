@@ -18,6 +18,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import FactCheckIcon from '@mui/icons-material/FactCheck'
 import AssignmentIcon from '@mui/icons-material/Assignment'
 import HistoryIcon from '@mui/icons-material/History'
+import DescriptionIcon from '@mui/icons-material/Description'
 import NfcIcon from '@mui/icons-material/Nfc'
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart'
 import LogoutIcon from '@mui/icons-material/Logout'
@@ -25,7 +26,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { t } from '@/i18n'
 import { useAuth } from '@/hooks/useAuth'
-import { canManageNfcSerial, hasPlantWideScope } from '@/types/auth'
+import { canFillForms, canManageNfcSerial, hasPlantWideScope } from '@/types/auth'
 
 const DRAWER_WIDTH = 240
 
@@ -49,8 +50,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const showNfcInspect = canManageNfcSerial(authSession)
   const showSettings = hasPlantWideScope(authSession)
   const showAdmin = showNfcInspect || showSettings
+  const showForms = canFillForms(authSession)
 
   const isLogSheetRoute = location.pathname.startsWith('/logsheets')
+  const isFormsRoute = location.pathname.startsWith('/forms')
 
   const [logSheetOpen, setLogSheetOpen] = useState(isLogSheetRoute)
 
@@ -163,6 +166,22 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             ))}
           </List>
         </Collapse>
+
+        {showForms && (
+          <ListItemButton
+            selected={isFormsRoute}
+            onClick={() => handleNav('/forms')}
+            sx={groupItemSx(isFormsRoute)}
+          >
+            <ListItemIcon sx={{ minWidth: 40 }}>
+              <DescriptionIcon color={isFormsRoute ? 'inherit' : 'action'} />
+            </ListItemIcon>
+            <ListItemText
+              primary={t.nav.forms}
+              primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isFormsRoute ? 600 : 400 }}
+            />
+          </ListItemButton>
+        )}
 
         {showAdmin && (
           <>

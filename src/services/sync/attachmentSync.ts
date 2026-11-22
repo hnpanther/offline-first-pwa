@@ -9,15 +9,17 @@ import {
   purgeSyncedAttachmentBlobs
 } from '@/services/storage/attachments'
 import { getLogSheet, getLogSheetByServerId } from '@/services/storage'
+import { getFormSubmission } from '@/services/storage/formSubmissions'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import { isAttachmentUploadableByUser, isVoidedSubmission } from '@/utils/attachmentOwnership'
+import { isFormSubmissionOutboundOwnedByUser } from '@/services/storage/formSubmissions'
 import {
   ATTACHMENT_ID_TAKEN_MESSAGE,
   isAttachmentIdTaken,
   remintTakenAttachment
 } from '@/services/sync/attachmentIdTaken'
 import { toIdString } from '@/utils/ids'
-import type { LocalAttachment, LogSheet } from '@/types'
+import type { LocalAttachment, LocalFormSubmission, LogSheet } from '@/types'
 
 /**
  * Uploading captured media, one file at a time, outside the log-sheet batch.
@@ -88,14 +90,42 @@ async function ownWork(
 ): Promise<LocalAttachment[]> {
   if (rows.length === 0) return []
   const sheets = new Map<string, LogSheet | undefined>()
+  const forms = new Map<string, LocalFormSubmission | undefined>()
   const out: LocalAttachment[] = []
   for (const row of rows) {
+    if (row.formSubmissionLocalId) {
+      if (!forms.has(row.formSubmissionLocalId)) {
+        forms.set(row.formSubmissionLocalId, await getFormSubmission(row.formSubmissionLocalId))
+      }
+      const form = forms.get(row.formSubmissionLocalId)
+      if (isFormAttachmentUploadableByUser(form, userId, row)) out.push(row)
+      continue
+    }
+    if (!row.logSheetLocalId) continue
     if (!sheets.has(row.logSheetLocalId)) {
       sheets.set(row.logSheetLocalId, await getLogSheet(row.logSheetLocalId))
     }
     if (isAttachmentUploadableByUser(sheets.get(row.logSheetLocalId), userId, row)) out.push(row)
   }
   return out
+}
+
+/**
+ * Form-owned media: row owner + form submission owner. Upload still waits for formSubmissionId
+ * (draft upsert), same gate as logSheetServerId for rounds.
+ */
+function isFormAttachmentUploadableByUser(
+  form: LocalFormSubmission | undefined,
+  userId: string | null,
+  attachment: Pick<LocalAttachment, 'createdByUserId'>
+): boolean {
+  if (!userId || !form) return false
+  if (!isFormSubmissionOutboundOwnedByUser(form, userId)) return false
+  // Row-level owner (shared tablet) — same rule as sheet media.
+  if (attachment.createdByUserId && attachment.createdByUserId !== userId) return false
+  // Submitted+synced forms are immutable on the server — still allow queued uploads that
+  // raced the final submit, but never after a permanent local park.
+  return true
 }
 
 /** Files this operator still has to deliver — the number the pending badge is built from. */
@@ -161,6 +191,33 @@ async function drainPendingDeletes(
 
   for (const row of rows) {
     if (signal?.aborted) break
+
+    // Form-owned: only DRAFT submissions accept deletes on the server. A local final keeps
+    // evidence (mirror submitted log sheets) — drop the local row, leave the server copy.
+    if (row.formSubmissionLocalId) {
+      const form = await getFormSubmission(row.formSubmissionLocalId)
+      if (!form || form.status === 'submitted') {
+        await deleteAttachment(row.id)
+        removed++
+        continue
+      }
+      if (!isFormAttachmentUploadableByUser(form, userId, row)) continue
+      try {
+        await deleteRemoteAttachment(row.id, signal)
+        await deleteAttachment(row.id)
+        removed++
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          await deleteAttachment(row.id)
+          removed++
+          continue
+        }
+        if (err instanceof ApiError && err.status === 0) break
+        break
+      }
+      continue
+    }
+
     const sheet = row.logSheetServerId
       ? await getLogSheetByServerId(toIdString(row.logSheetServerId))
       : undefined
@@ -232,6 +289,7 @@ type UploadOutcome = 'uploaded' | 'failed' | 'aborted'
  */
 async function isRefusedVoidEvidence(attachment: LocalAttachment, err: unknown): Promise<boolean> {
   if (!(err instanceof ApiError) || err.status !== 403) return false
+  if (!attachment.logSheetLocalId) return false
   return isVoidedSubmission(await getLogSheet(attachment.logSheetLocalId))
 }
 
@@ -255,15 +313,19 @@ async function uploadOne(
   attachment: LocalAttachment,
   signal?: AbortSignal
 ): Promise<UploadOutcome> {
-  if (!attachment.blob || !attachment.logSheetServerId) {
-    // Not an error: the sheet has not synced yet, so the server has nowhere to put this.
+  const formOwner = attachment.formSubmissionLocalId != null
+  const serverOwnerId = formOwner ? attachment.formSubmissionId : attachment.logSheetServerId
+  if (!attachment.blob || !serverOwnerId) {
+    // Not an error: the sheet/form draft has not synced yet, so the server has nowhere to put this.
     return 'failed'
   }
   try {
     await uploadAttachment({
       id: attachment.id,
-      logSheetServerId: attachment.logSheetServerId,
-      assetId: attachment.assetId,
+      ...(formOwner
+        ? { formSubmissionId: serverOwnerId }
+        : { logSheetServerId: serverOwnerId }),
+      assetId: formOwner ? undefined : attachment.assetId,
       fieldKey: attachment.fieldKey,
       blob: attachment.blob,
       width: attachment.width,

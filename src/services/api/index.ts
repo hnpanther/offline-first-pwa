@@ -411,6 +411,12 @@ export interface BootstrapResponse {
     limitEnabled?: unknown
     limitHours?: unknown
   }
+  /**
+   * Lookup lists every FILL-able form needs (carrier 3). Absent on older servers.
+   * Unioned with round `requiredLookups` before `syncRequiredLookups` so neither path drops
+   * the other's lists.
+   */
+  requiredFormLookups?: RequiredLookup[]
 }
 
 export type MasterDataResponse = BootstrapResponse
@@ -487,8 +493,9 @@ export async function saveAssetNfcSerial(
 
 export interface AttachmentDto {
   id: string
-  logSheetId: number
-  assetId: number
+  logSheetId?: number | null
+  formSubmissionId?: number | null
+  assetId?: number | null
   fieldKey: string
   kind: 'IMAGE' | 'AUDIO' | 'VIDEO'
   mimeType: string
@@ -508,10 +515,13 @@ export interface AttachmentDto {
  * has to stay small and atomic, so a dropped connection costs one photo instead of a whole
  * shift's readings. The `id` is minted on the device, which makes a retry idempotent — the
  * server returns the existing row rather than storing the file twice.
+ *
+ * Owner is XOR: `logSheetServerId` **or** `formSubmissionId` (carrier 3), never both.
  */
 export async function uploadAttachment(params: {
   id: string
-  logSheetServerId: string | number
+  logSheetServerId?: string | number
+  formSubmissionId?: string | number
   /** Omitted for media answering the round's own question — see `LocalAttachment.assetId`. */
   assetId?: string | number
   fieldKey: string
@@ -523,7 +533,13 @@ export async function uploadAttachment(params: {
 }): Promise<AttachmentDto> {
   const form = new FormData()
   form.append('id', params.id)
-  form.append('logSheetId', String(params.logSheetServerId))
+  if (params.formSubmissionId != null) {
+    form.append('formSubmissionId', String(params.formSubmissionId))
+  } else if (params.logSheetServerId != null) {
+    form.append('logSheetId', String(params.logSheetServerId))
+  } else {
+    throw new Error('uploadAttachment requires logSheetServerId or formSubmissionId')
+  }
   // Left out entirely rather than sent as "undefined": the server reads an absent assetId as
   // "this belongs to the round's own form", and a literal string would fail to parse as a Long.
   if (params.assetId != null) form.append('assetId', String(params.assetId))
@@ -765,4 +781,129 @@ export async function submitNfcFaultReportsBatch(
     { reports },
     signal
   )
+}
+
+// ===========================================================================
+// Ad-hoc field forms (carrier 3) — never touches log_sheets
+// ===========================================================================
+
+export interface FormDefinitionDto {
+  id: number | string
+  code: string
+  title: string
+  description?: string | null
+  active: boolean
+  subjectUnitIds: Array<number | string>
+  fields: Array<{
+    id?: number | string
+    classId?: number | string | null
+    key: string
+    label: string
+    dataType: string
+    unit?: string | null
+    required?: boolean
+    validation?: FieldDefinition['validation']
+    order?: number | null
+    version?: number | null
+  }>
+  requiredLookups?: RequiredLookup[]
+}
+
+export interface FormSubmissionDto {
+  id: number | string
+  formDefinitionId: number | string
+  status: string
+  reporterUnitId: number | string
+  subjectUnitId: number | string
+  formData?: Record<string, unknown>
+  fieldDefinitionsSnapshot?: FormDefinitionDto['fields']
+  reportedByUserId?: number | string
+  reportedByName?: string
+  source?: string
+  localId?: string
+  createdAt?: number
+  updatedAt?: number
+  submittedAt?: number
+  syncedAt?: number
+  deviceTimeAt?: number
+}
+
+export interface FormDraftRequest {
+  submissionId?: number | string | null
+  formDefinitionId: number | string
+  reporterUnitId: number | string
+  subjectUnitId: number | string
+  localId: string
+  clientActionId?: string
+  formData?: Record<string, unknown>
+  deviceTimeAt?: number
+}
+
+export interface FormSubmitRequest {
+  submissionId?: number | string | null
+  formDefinitionId: number | string
+  reporterUnitId: number | string
+  subjectUnitId: number | string
+  localId: string
+  clientActionId: string
+  formData?: Record<string, unknown>
+  deviceTimeAt?: number
+}
+
+export type FormSubmitOutcome =
+  | 'OK'
+  | 'DUPLICATE'
+  | 'VALIDATION_ERROR'
+  | 'DENIED'
+  | 'IMMUTABLE'
+  | string
+
+export interface FormSubmitResult {
+  submissionId?: number | string | null
+  localId?: string | null
+  outcome: FormSubmitOutcome
+  status?: string | null
+  message?: string | null
+}
+
+/** GET /api/forms — fillable forms for the signed-in user. */
+export async function fetchFillableForms(signal?: AbortSignal): Promise<FormDefinitionDto[]> {
+  return apiClient.get<FormDefinitionDto[]>('/api/forms', signal)
+}
+
+/** GET /api/forms/{id} */
+export async function fetchFillableForm(
+  id: string | number,
+  signal?: AbortSignal
+): Promise<FormDefinitionDto> {
+  return apiClient.get<FormDefinitionDto>(`/api/forms/${id}`, signal)
+}
+
+/** POST /api/forms/drafts — partial upsert; required fields do not block. */
+export async function upsertFormDraft(
+  body: FormDraftRequest,
+  signal?: AbortSignal
+): Promise<FormSubmitResult> {
+  return apiClient.post<FormSubmitResult>('/api/forms/drafts', body, signal)
+}
+
+/** POST /api/forms/submit — immutable final; clientActionId required. */
+export async function submitFormFinal(
+  body: FormSubmitRequest,
+  signal?: AbortSignal
+): Promise<FormSubmitResult> {
+  return apiClient.post<FormSubmitResult>('/api/forms/submit', body, signal)
+}
+
+/** GET /api/form-submissions — caller's own drafts + submitted. */
+export async function fetchMyFormSubmissions(signal?: AbortSignal): Promise<FormSubmissionDto[]> {
+  return apiClient.get<FormSubmissionDto[]>('/api/form-submissions', signal)
+}
+
+/** GET /api/form-submissions/{id} */
+export async function fetchFormSubmission(
+  id: string | number,
+  signal?: AbortSignal
+): Promise<FormSubmissionDto> {
+  return apiClient.get<FormSubmissionDto>(`/api/form-submissions/${id}`, signal)
 }

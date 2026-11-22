@@ -154,7 +154,7 @@ export async function markAttachmentPendingDelete(id: string): Promise<void> {
  */
 export async function removeAttachment(id: string): Promise<'queued' | 'dropped'> {
   const row = await getAttachment(id)
-  if (row?.logSheetServerId) {
+  if (row?.logSheetServerId || row?.formSubmissionId) {
     await markAttachmentPendingDelete(id)
     return 'queued'
   }
@@ -165,20 +165,20 @@ export async function removeAttachment(id: string): Promise<'queued' | 'dropped'
 /**
  * Deletions waiting to reach the server.
  *
- * Only rows the server can actually be asked about: one with no `logSheetServerId` was never
+ * Only rows the server can actually be asked about: one with no sheet/form server id was never
  * uploaded, so there is nothing there to delete and the row can simply go.
  */
 export async function getPendingAttachmentDeletes(): Promise<LocalAttachment[]> {
   const rows = await db.attachments.filter(r => r.pendingDelete === true).toArray()
-  return rows.filter(r => !!r.logSheetServerId)
+  return rows.filter(r => !!r.logSheetServerId || !!r.formSubmissionId)
 }
 
 /**
  * Attachments still waiting to reach the server.
  *
- * Three kinds of row are skipped, for three different reasons:
- * - **no `logSheetServerId`** — the server keys an attachment to a log sheet, so uploading
- *   before the sheet exists there is impossible. Picked up once the sheet syncs.
+ * Four kinds of row are skipped, for four different reasons:
+ * - **no `logSheetServerId` / `formSubmissionId`** — the server keys an attachment to a sheet
+ *   or form submission, so uploading before that owner exists there is impossible.
  * - **no `blob`** — the bytes were reclaimed after a successful upload; nothing left to send.
  * - **`permanentFailure`** — the server examined this file and refused it. Identical bytes get
  *   an identical refusal, so retrying is pure waste.
@@ -186,7 +186,11 @@ export async function getPendingAttachmentDeletes(): Promise<LocalAttachment[]> 
 export async function getPendingAttachments(): Promise<LocalAttachment[]> {
   const rows = await db.attachments.where('syncStatus').anyOf('pending', 'failed').toArray()
   return rows.filter(
-    r => r.blob != null && !!r.logSheetServerId && !r.permanentFailure && !r.pendingDelete
+    r =>
+      r.blob != null &&
+      (!!r.logSheetServerId || !!r.formSubmissionId) &&
+      !r.permanentFailure &&
+      !r.pendingDelete
   )
 }
 
@@ -313,6 +317,37 @@ export async function bindAttachmentsToServerSheet(
     .where('logSheetLocalId')
     .equals(logSheetLocalId)
     .modify({ logSheetServerId })
+}
+
+/** Stamps the server id onto a form submission's attachments once the draft upsert answered. */
+export async function bindAttachmentsToServerForm(
+  formSubmissionLocalId: string,
+  formSubmissionId: string
+): Promise<void> {
+  await db.attachments
+    .where('formSubmissionLocalId')
+    .equals(formSubmissionLocalId)
+    .modify({ formSubmissionId })
+}
+
+/**
+ * The signed-in operator's captured files for one field of one form submission.
+ * Parallel to `getAttachmentsForEntry` — keyed on form local id, never an asset.
+ */
+export async function getAttachmentsForFormField(
+  formSubmissionLocalId: string,
+  fieldKey: string,
+  ownerUserId: string | null
+): Promise<LocalAttachment[]> {
+  const rows = await db.attachments
+    .where('formSubmissionLocalId')
+    .equals(formSubmissionLocalId)
+    .toArray()
+  return rows
+    .filter(r => !r.pendingDelete)
+    .filter(r => isAttachmentOwnedByUser(r, ownerUserId))
+    .filter(r => r.fieldKey === fieldKey)
+    .sort((a, b) => a.createdAt - b.createdAt)
 }
 
 /** The canonical value stored in `formData` for an attachment field. */

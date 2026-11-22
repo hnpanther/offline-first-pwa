@@ -430,11 +430,18 @@ Path alias: `@/*` → `src/*`.
 | `logSheets` | Local work + entries + sync fields + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots (shared tablet history) |
 | `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields, `createdByUserId` for shared-tablet outbound scoping) |
-| `attachments` | Captured photos / voice notes as native `Blob`s, plus upload state. The row **outlives the blob**: bytes are reclaimed 7 days after upload, metadata stays |
+| `formDefinitions` | Fillable ad-hoc form catalog (carrier 3, Dexie v5) |
+| `formSubmissions` | Ad-hoc form drafts / finals — fourth outbound-owned table (`createdByUserId`); draft lane vs final-submit lane |
+| `attachments` | Captured photos / voice notes as native `Blob`s, plus upload state. Owner XOR: log-sheet keys **or** form-submission keys. The row **outlives the blob**: bytes are reclaimed 7 days after upload, metadata stays |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
+| `lookupLists` / `lookupItems` | Offline reference lists (v4); cleared at sign-out |
 | `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch` |
-| `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, … |
+| `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, `requiredFormLookups`, … |
+
+**Form lookup lease:** bootstrap's `requiredFormLookups` must be **unioned** with inbox
+`requiredLookups` before `syncRequiredLookups` — that helper set-diffs and will drop whichever
+side you omit.
 
 ### Late work (backend V25 — issues P-01, P-02, P-03)
 

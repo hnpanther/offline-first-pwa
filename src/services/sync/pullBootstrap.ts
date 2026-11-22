@@ -11,6 +11,10 @@ import { useAppStore } from '@/store'
 import { toIdString } from '@/utils/ids'
 import { normalizeDeviceRetention } from '@/services/sync/deviceRetention'
 import { normalizeOfflineSessionLimit } from '@/services/auth/offlineSession'
+import {
+  saveBootstrapUnitContext,
+  saveRequiredFormLookups
+} from '@/services/forms/formLookups'
 import type { AppSettings, OperationalUnit } from '@/types'
 import { serverNow } from '@/services/clock/serverClock'
 
@@ -53,6 +57,17 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
     if (units.length > 0) {
       await db.operationalUnits.bulkPut(units)
     }
+
+    // Carrier 3: lease every lookup FILL-able forms need, and remember unit context for
+    // reporter/subject pickers. Older servers omit requiredFormLookups — leave the last lease.
+    if (data.requiredFormLookups) {
+      await saveRequiredFormLookups(data.requiredFormLookups)
+    }
+    await saveBootstrapUnitContext({
+      primaryUnitId:
+        data.primaryUnitId != null ? toIdString(data.primaryUnitId) : null,
+      accessibleUnitIds: (data.accessibleUnitIds ?? []).map(toIdString)
+    })
 
     // Ceilings and policies are server-owned. Refreshing them here is what makes a change in
     // the web panel (or in the deployment's own configuration) take effect on every tablet

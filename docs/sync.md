@@ -5,6 +5,7 @@ step fails.
 
 **Code:** [`src/services/sync/`](../src/services/sync/) — `index.ts` (the manager),
 `pullBootstrap.ts`, `pullInbox.ts`, `logSheetSync.ts`, `attachmentSync.ts`,
+`formDraftSync.ts`, `formSubmitSync.ts`, `formCatalogSync.ts`,
 `mergeLogSheetBundle.ts`, `cleanupLogSheets.ts`
 
 ---
@@ -15,12 +16,14 @@ step fails.
         PULL (server → device)                PUSH (device → server)
 
   GET /api/bootstrap    ── master data      POST /api/log-sheets/progress ── what a round
-  GET /api/log-sheets/inbox ── my sheets                                     has recorded
-  GET /api/log-sheets/{id}/bundle ── one                                     so far
-        sheet, everything needed offline    POST /api/log-sheets/batch    ── completions
-                                            POST /api/attachments         ── one file
-                                                                             at a time
+                     (+ requiredFormLookups)                                  has recorded
+  GET /api/log-sheets/inbox ── my sheets                                     so far
+  GET /api/log-sheets/{id}/bundle ── one    POST /api/log-sheets/batch    ── completions
+        sheet, everything needed offline    POST /api/attachments         ── one file
+  GET /api/forms        ── fillable forms                                      at a time
                                             POST /api/nfc-fault-reports/batch
+                                            POST /api/forms/drafts        ── form drafts
+                                            POST /api/forms/submit        ── form finals
 ```
 
 Two rules hold the whole design together:
@@ -391,6 +394,31 @@ if (hasPermission(session, PERM_LOG_SHEET_PROGRESS)) {
   await this.pushProgress()
 }
 ```
+
+### 3c. Ad-hoc form draft upserts (carrier 3)
+
+```ts
+if (hasPermission(session, PERM_FORMS_DRAFT)) {
+  await this.pushFormDrafts()
+}
+```
+
+**Separate carrier from log sheets.** `POST /api/forms/drafts` upserts open form drafts
+(`formSubmissions` with `status: 'draft'`). Like progress:
+
+- Never writes `syncStatus` / `syncError` / final `status` — those belong to the final-submit lane.
+- Not counted in the pending badge (a draft being filled always has work in flight).
+- Ownership is `createdByUserId` (shared tablet).
+- Once the server answers `OK` with a `submissionId`, `bindAttachmentsToServerForm` stamps
+  form-owned media so the attachment queue can upload.
+
+Final submit (`POST /api/forms/submit`) runs later in the same pass with fault reports / sheet
+batch — idempotent via `clientActionId` (`DUPLICATE` = accepted). Schema freeze is server-side on
+first draft save; the device keeps `fieldDefinitionsSnapshot` on the local row from create time.
+
+**Lookup lease:** bootstrap's `requiredFormLookups` is stored and **unioned** with inbox
+`requiredLookups` before `syncRequiredLookups` — that helper set-diffs, so calling it with only
+one source would drop the other's lists.
 
 **An expired draft with edits is reported too, once (backend V25, issue P-01).** It used to be
 excluded — «a progress report is about a round still being walked» — and an operator who walked

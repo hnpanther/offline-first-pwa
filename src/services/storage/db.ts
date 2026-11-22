@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment } from '@/types'
+import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment, CachedFormDefinition, LocalFormSubmission } from '@/types'
 import type { FieldDefinition, SyncMeta } from '@/types/sync'
 import type { LookupItemRow, LookupListMeta } from '@/services/lookups/lookupTypes'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
@@ -31,6 +31,10 @@ class AppDatabase extends Dexie {
   /** Reference lists held for offline lookup fields (V4) — see services/lookups/lookupStore.ts. */
   lookupLists!: Table<LookupListMeta>
   lookupItems!: Table<LookupItemRow>
+  /** Fillable form definitions cached for offline create (V5 — carrier 3). */
+  formDefinitions!: Table<CachedFormDefinition>
+  /** Ad-hoc form drafts / submissions — separate carrier from log sheets (V5). */
+  formSubmissions!: Table<LocalFormSubmission>
 
   constructor() {
     super(DB_NAME)
@@ -228,6 +232,38 @@ class AppDatabase extends Dexie {
       lookupLists: 'id',
       lookupItems: 'id, listId'
     })
+
+    /**
+     * Version 5 — ad-hoc field forms (carrier 3).
+     *
+     * <p>Two new stores for form definitions and submissions, plus attachment indexes for the
+     * form-owned media key. Log-sheet stores and indexes are unchanged. Purely additive: no
+     * `.upgrade()` — existing attachment rows keep `logSheetLocalId` and simply have no form
+     * keys. Form-owned media uses `formSubmissionLocalId` / `formSubmissionId` instead
+     * (XOR with the log-sheet keys on the server).
+     */
+    this.version(5).stores({
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
+      attachments:
+        'id, logSheetLocalId, logSheetServerId, formSubmissionLocalId, formSubmissionId, assetId, fieldKey, syncStatus, createdAt',
+      lookupLists: 'id',
+      lookupItems: 'id, listId',
+      formDefinitions: 'id, code',
+      formSubmissions: 'id, localId, serverId, formDefinitionId, status, syncStatus, createdByUserId, createdAt'
+    })
   }
 }
 
@@ -319,7 +355,9 @@ const UNSYNCED_WORK_STORES: readonly UnsyncedWorkProbe[] = [
     isUnsynced: row => (row?.sheet as { syncStatus?: string } | undefined)?.syncStatus !== 'synced'
   },
   { store: 'nfcFaultReports', isUnsynced: row => row?.syncStatus !== 'synced' },
-  { store: 'attachments', isUnsynced: row => row?.syncStatus !== 'synced' }
+  { store: 'attachments', isUnsynced: row => row?.syncStatus !== 'synced' },
+  // Form drafts / finals — never wipe undelivered carrier-3 work on a schema mismatch.
+  { store: 'formSubmissions', isUnsynced: row => row?.syncStatus !== 'synced' || row?.status === 'draft' }
 ]
 
 /**

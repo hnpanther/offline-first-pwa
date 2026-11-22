@@ -21,6 +21,8 @@ const EXPECTED_STORES = [
   'assetEntries',
   'attachments',
   'fieldDefinitions',
+  'formDefinitions',
+  'formSubmissions',
   'locations',
   'logSheetTemplates',
   'logSheetUserArchives',
@@ -39,12 +41,15 @@ const EXPECTED_STORES = [
 /** Indexes something selects on in a loop. Losing one is a silent full-table scan on a tablet. */
 const REQUIRED_INDEXES: ReadonlyArray<readonly [string, readonly string[]]> = [
   // The upload queues run on every sync tick and filter by status.
-  ['attachments', ['syncStatus', 'logSheetLocalId', 'logSheetServerId']],
+  ['attachments', ['syncStatus', 'logSheetLocalId', 'logSheetServerId', 'formSubmissionLocalId', 'formSubmissionId']],
   ['nfcFaultReports', ['syncStatus', 'logSheetServerId']],
   // The merge looks a sheet up by both of its identities, once per bundle.
   ['logSheets', ['localId', 'serverId', 'status']],
   // Archived work is found by the pair that identifies whose it is.
   ['logSheetUserArchives', ['serverId', 'userId']],
+  // Form drafts / finals — outbound queues filter by status and owner.
+  ['formSubmissions', ['localId', 'serverId', 'status', 'syncStatus', 'createdByUserId']],
+  ['formDefinitions', ['code']],
   // NFC lookup is the one thing that must be instant with a tag held to the device.
   ['assetEntries', ['nfcTagId', 'nfcSerial']],
   ['subFunctions', ['tag']],
@@ -80,11 +85,15 @@ describe('IndexedDB schema', () => {
     // store, index or row, so the upgrade cannot lose anything already on a tablet. Both are
     // cleared at sign-out and when a list's lease ends: they may hold personal data.
     //
+    // Version 5 adds ad-hoc form stores (`formDefinitions`, `formSubmissions`) and attachment
+    // indexes for form-owned media (`formSubmissionLocalId`, `formSubmissionId`). Purely
+    // additive — no upgrade callback, no change to log-sheet stores.
+    //
     // This assertion is deliberately a hard-coded number rather than a range. Adding a version
     // block is a decision with consequences on every tablet — a forced upgrade that cannot be
     // rolled back — so it should take a deliberate edit here, in a file whose whole subject is
     // the schema, rather than passing silently because the check said "1 or more".
-    expect(db.verno).toBe(4)
+    expect(db.verno).toBe(5)
   })
 
   it('declares exactly the stores the app uses', () => {

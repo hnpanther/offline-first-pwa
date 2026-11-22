@@ -24,6 +24,7 @@ import {
   buildAttachmentRef,
   getAttachmentsByIds,
   getAttachmentsForEntry,
+  getAttachmentsForFormField,
   removeAttachment,
   retryFailedAttachment,
   saveAttachment
@@ -158,8 +159,12 @@ interface Props {
   label: string
   value: unknown
   readOnly?: boolean
-  logSheetLocalId: string
+  /** Log-sheet owner — XOR with `formSubmissionLocalId`. */
+  logSheetLocalId?: string
   logSheetServerId?: string
+  /** Form-submission owner (carrier 3) — XOR with `logSheetLocalId`. */
+  formSubmissionLocalId?: string
+  formSubmissionId?: string
   /** Absent for a round-level question: the media then belongs to the sheet, not to an asset. */
   assetId?: string
   fieldKey: string
@@ -185,10 +190,34 @@ export function AttachmentFieldInput({
   readOnly,
   logSheetLocalId,
   logSheetServerId,
+  formSubmissionLocalId,
+  formSubmissionId,
   assetId,
   fieldKey,
   onChange
 }: Props) {
+  const isFormOwner = !!formSubmissionLocalId
+  const listForField = async (ownerUserId: string | null) =>
+    isFormOwner
+      ? getAttachmentsForFormField(formSubmissionLocalId!, fieldKey, ownerUserId)
+      : getAttachmentsForEntry(logSheetLocalId ?? '', assetId, fieldKey, ownerUserId)
+
+  const ownerKeys = (): Pick<
+    LocalAttachment,
+    'logSheetLocalId' | 'logSheetServerId' | 'formSubmissionLocalId' | 'formSubmissionId' | 'assetId'
+  > =>
+    isFormOwner
+      ? {
+          formSubmissionLocalId,
+          formSubmissionId,
+          assetId: undefined
+        }
+      : {
+          logSheetLocalId,
+          logSheetServerId,
+          assetId
+        }
+
   const [items, setItems] = useState<LocalAttachment[]>([])
   /** Everything the device knows this field holds — the number the ceiling is judged against. */
   const [fieldCount, setFieldCount] = useState(0)
@@ -239,7 +268,7 @@ export function AttachmentFieldInput({
     // or the web panel added, which this form value has never heard of. Counting the displayed
     // rows is what let the device believe a slot was free while the server refused it.
     const owner = await getSessionUserId()
-    const forField = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, owner)
+    const forField = await listForField(owner)
     const counted = new Set(rows.map(r => r.id))
     forField.forEach(r => counted.add(r.id))
     setFieldCount(counted.size)
@@ -267,7 +296,7 @@ export function AttachmentFieldInput({
     // rather than shown as a gap. `null` means a newer refresh owns the URLs now.
     const urls = await mediaUrls.current!.update(shown)
     if (urls) setMediaSrc(urls)
-  }, [ids.join(','), logSheetLocalId, assetId, fieldKey, boundUserId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ids.join(','), logSheetLocalId, formSubmissionLocalId, assetId, fieldKey, boundUserId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void refresh()
@@ -374,7 +403,7 @@ export function AttachmentFieldInput({
     // unowned row is handled by `isAttachmentOwnedByUser`'s legacy fallback.
     const capturedBy = await getSessionUserId()
     await saveAttachment(capturedBy ? { ...attachment, createdByUserId: capturedBy } : attachment)
-    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, capturedBy)
+    const onDevice = await listForField(capturedBy)
     onChange(buildAttachmentRef(
       fieldReferenceForOwner(capturedBy, onDevice, ids, { add: attachment.id }).ids))
   }
@@ -396,9 +425,7 @@ export function AttachmentFieldInput({
   const persistImage = async (blob: Blob, width: number, height: number) => {
     await persist({
       id: uuidv4(),
-      logSheetLocalId,
-      logSheetServerId,
-      assetId,
+      ...ownerKeys(),
       fieldKey,
       kind: 'IMAGE',
       mimeType: blob.type,
@@ -494,9 +521,7 @@ export function AttachmentFieldInput({
       const { blob, mimeType, durationMs, endedBy } = await recorder.stop()
       await persist({
         id: uuidv4(),
-        logSheetLocalId,
-        logSheetServerId,
-        assetId,
+        ...ownerKeys(),
         fieldKey,
         kind: 'AUDIO',
         mimeType,
@@ -542,9 +567,7 @@ export function AttachmentFieldInput({
       const { blob, mimeType, durationMs, width, height, endedBy } = await videoRecorder.stop()
       await persist({
         id: uuidv4(),
-        logSheetLocalId,
-        logSheetServerId,
-        assetId,
+        ...ownerKeys(),
         fieldKey,
         kind: 'VIDEO',
         mimeType,
@@ -587,7 +610,7 @@ export function AttachmentFieldInput({
     // list this render closed over means two deletes in quick succession disagree, and
     // the loser's list resurrects a reference to a row that is already gone.
     const owner = await getSessionUserId()
-    const onDevice = await getAttachmentsForEntry(logSheetLocalId, assetId, fieldKey, owner)
+    const onDevice = await listForField(owner)
     onChange(buildAttachmentRef(fieldReferenceForOwner(owner, onDevice, ids, { remove: id }).ids))
     await refresh()
   }

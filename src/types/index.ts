@@ -431,9 +431,23 @@ export interface LocalAttachment {
    * backfill could not attribute.
    */
   createdByUserId?: string
-  logSheetLocalId: string
+  /**
+   * Local id of the log sheet this media belongs to — **XOR with `formSubmissionLocalId`**.
+   * Absent on form-owned rows (carrier 3). Still required for every log-sheet capture.
+   */
+  logSheetLocalId?: string
   /** Server id of the sheet — null until the sheet itself has one, which gates upload. */
   logSheetServerId?: string
+  /**
+   * Local id of the ad-hoc form submission this media belongs to — **XOR with `logSheetLocalId`**.
+   * The server's attachment row carries `formSubmissionId` and a null `logSheetId`.
+   */
+  formSubmissionLocalId?: string
+  /**
+   * Server id of the form submission — null until the draft upsert lands, which gates upload
+   * the same way `logSheetServerId` does for rounds.
+   */
+  formSubmissionId?: string
   /**
    * The asset this media belongs to, or **absent** when it answers the round's own question —
    * a question asked once for the whole sheet rather than once per asset.
@@ -445,6 +459,8 @@ export interface LocalAttachment {
    * It stays a plain Dexie index. An index simply does not list a row whose property is
    * undefined, and nothing queries `where('assetId')` — every read starts from the sheet and
    * filters in memory — so this needed no schema version bump.
+   *
+   * Form-owned media never has an asset — forms are flat, not per-asset.
    */
   assetId?: string
   fieldKey: string
@@ -749,4 +765,77 @@ export interface NfcFaultReport {
    * this field existed; treated as owned by whoever is currently logged in.
    */
   createdByUserId?: string
+}
+
+// ---------------------------------------------------------------------------
+// Ad-hoc field forms (carrier 3) — separate from log sheets
+// ---------------------------------------------------------------------------
+
+/** Server statuses for a form submission. Do not overload log-sheet IN_PROGRESS. */
+export type FormSubmissionServerStatus = 'DRAFT' | 'SUBMITTED'
+
+/**
+ * A fillable form definition cached on the device so offline create still has a schema.
+ *
+ * Live fields apply only to a *new* draft; once a local draft exists its frozen
+ * `fieldDefinitionsSnapshot` wins (server freezes on first draft save).
+ */
+export interface CachedFormDefinition {
+  id: string
+  code: string
+  title: string
+  description?: string | null
+  active: boolean
+  subjectUnitIds: string[]
+  fields: FieldDefinition[]
+  requiredLookups: Array<{ code: string; name: string; revision: number }>
+  fetchedAt: number
+}
+
+/**
+ * Local draft / final form submission — fourth outbound-owned table on a shared tablet.
+ *
+ * Two sync lanes (mirroring progress vs batch):
+ * - `draftSyncStatus` — best-effort upsert; never writes `syncStatus` / `syncError`
+ * - `syncStatus` — delivery of a final submit; counted in the pending badge
+ */
+export interface LocalFormSubmission {
+  id: string
+  /** Device-minted id; matches the server's `localId` for draft upsert / submit. */
+  localId: string
+  /** Server submission id once a draft upsert or submit has answered. */
+  serverId?: string
+  formDefinitionId: string
+  formCode?: string
+  formTitle?: string
+  reporterUnitId: string
+  subjectUnitId: string
+  /** Local workflow: draft until the operator finalises; then submitted awaiting sync. */
+  status: 'draft' | 'submitted'
+  serverStatus?: FormSubmissionServerStatus
+  formData: Record<string, unknown>
+  /** Frozen on first local draft create / first server draft answer. */
+  fieldDefinitionsSnapshot: FieldDefinition[]
+  createdByUserId?: string
+  /** Idempotency key for final submit — required by the server. */
+  clientActionId?: string
+  /** Optional key for draft upsert retries. */
+  draftClientActionId?: string
+  /** Final-submit queue (like log-sheet batch). */
+  syncStatus: SyncStatus
+  syncError?: string
+  lastSubmitOutcome?: string
+  /**
+   * Draft-upsert queue (like progress). Never write final-submit fields from that lane.
+   */
+  draftSyncStatus?: SyncStatus
+  draftSyncError?: string
+  draftSyncedAt?: number
+  /** Stamped on every local save so the draft lane knows the row is dirty. */
+  locallyEditedAt?: number
+  createdAt: number
+  updatedAt: number
+  submittedAt?: number
+  syncedAt?: number
+  deviceTimeAt?: number
 }

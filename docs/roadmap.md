@@ -1181,3 +1181,14 @@ tablet is still retried (the case `isPermanentFailure` was written for); nothing
 
 Already worth doing on its own: it is one predicate and a parked reason, and the badge is the one
 signal an operator has that work has not reached the server.
+
+---
+
+# 17. Ad-hoc field forms on the tablet (carrier 3) — **built (infra)**
+
+*Backend V29 + PWA Dexie v5.* Separate submission carrier from log sheets: `formDefinitions` /
+`formSubmissions`, draft upsert lane (`POST /api/forms/drafts`) vs final submit
+(`POST /api/forms/submit`), attachment XOR via `formSubmissionId`, bootstrap
+`requiredFormLookups` unioned with round lookup leases. UI at `/forms`. Still deferred:
+void/reopen, review triage, fixed CBM/HSE templates, Kafka handoff. Contract:
+project store `docs/form-mobile-api.md`.

@@ -5,6 +5,8 @@ import { ensureSessionUserId } from '@/services/auth/sessionContext'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
 import { syncManager } from '@/services/sync'
 import { pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
+import { pullFillableForms } from '@/services/sync/formCatalogSync'
+import { loadRequiredFormLookups, mergeRequiredLookups } from '@/services/forms/formLookups'
 import { saveInboxSnapshot, loadInboxSnapshot } from '@/services/storage/inboxCache'
 import { useAppStore } from '@/store'
 import { isTransientNetworkError } from '@/utils/networkError'
@@ -38,9 +40,14 @@ export async function pullAndMergeInbox(setInbox: SetInbox): Promise<void> {
   const sessionUserId = await ensureSessionUserId()
   if (sessionUserId) {
     await mergeInboxIntoLocalSheets(assigned)
-    // The reference lists the assigned rounds need, and only those (backend roadmap §31). Never
-    // throws: a lookup field without its list falls back to entering a code.
-    await syncRequiredLookups(requiredFromBundles(assigned))
+    // Fillable form catalog (carrier 3) — best-effort; offline create uses the cached copy.
+    await pullFillableForms()
+    // Union of round + form lookup leases. syncRequiredLookups set-diffs: calling it with only
+    // one source would drop the other's lists (and break offline form fill).
+    const formLookups = await loadRequiredFormLookups()
+    await syncRequiredLookups(
+      mergeRequiredLookups(requiredFromBundles(assigned), formLookups)
+    )
   }
   const syncAt = Date.now()
   await saveInboxSnapshot({

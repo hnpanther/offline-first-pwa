@@ -20,7 +20,10 @@ import {
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getOwnPendingAttachments, syncPendingAttachments } from '@/services/sync/attachmentSync'
 import { pushPendingLogSheetProgress } from '@/services/sync/progressSync'
+import { pushPendingFormDrafts } from '@/services/sync/formDraftSync'
+import { pushPendingFormFinals } from '@/services/sync/formSubmitSync'
 import { bindAttachmentsToServerSheet } from '@/services/storage/attachments'
+import { getPendingFormFinals } from '@/services/storage/formSubmissions'
 import { getAuthSession } from '@/services/auth'
 import {
   ensureSessionUserId,
@@ -33,7 +36,13 @@ import {
   updateArchivedLogSheetSnapshot,
   parseArchivedLogSheetViewId
 } from '@/services/storage/logSheetArchive'
-import { hasPermission, PERM_LOG_SHEET_PROGRESS, PERM_NFC_FAULT_REPORT } from '@/types/auth'
+import {
+  hasPermission,
+  PERM_FORMS_DRAFT,
+  PERM_FORMS_SUBMIT,
+  PERM_LOG_SHEET_PROGRESS,
+  PERM_NFC_FAULT_REPORT
+} from '@/types/auth'
 import {
   isOwnershipReassignError,
   normalizeLogSheetSyncError,
@@ -206,15 +215,22 @@ class SyncManager {
     if (hasPermission(session, PERM_LOG_SHEET_PROGRESS)) {
       await this.pushProgress()
     }
+    // Carrier 3 draft upsert — best-effort, isolated like progress; never fails submit lanes.
+    if (hasPermission(session, PERM_FORMS_DRAFT)) {
+      await this.pushFormDrafts()
+    }
 
     const canSyncFaultReports = hasPermission(session, PERM_NFC_FAULT_REPORT)
+    const canSyncFormFinals = hasPermission(session, PERM_FORMS_SUBMIT)
 
-    const [pendingLogSheets, pendingFaultReports] = await Promise.all([
+    const [pendingLogSheets, pendingFaultReports, pendingFormFinals] = await Promise.all([
       this.getPendingLogSheets(),
       canSyncFaultReports ? this.getPendingFaultReports() : Promise.resolve([]),
+      canSyncFormFinals ? getPendingFormFinals(sessionUserId) : Promise.resolve([]),
     ])
 
-    const totalPending = pendingLogSheets.length + pendingFaultReports.length
+    const totalPending =
+      pendingLogSheets.length + pendingFaultReports.length + pendingFormFinals.length
     if (totalPending === 0) {
       // Nothing to submit — but attachments queue independently of sheets, and a sheet that
       // synced on an earlier pass can still be waiting on its photos.
@@ -237,7 +253,15 @@ class SyncManager {
         ? {}
         : await this.submitFaultReports(pendingFaultReports, tally)
 
-      const transientError = sheetsOutcome.transientError ?? reportsOutcome.transientError
+      const formsOutcome =
+        sheetsOutcome.transientError || reportsOutcome.transientError
+          ? {}
+          : await this.submitFormFinals(pendingFormFinals, tally)
+
+      const transientError =
+        sheetsOutcome.transientError ??
+        reportsOutcome.transientError ??
+        formsOutcome.transientError
       if (transientError) {
         await this.emitTransientFailure(transientError, tally)
         return
@@ -247,7 +271,11 @@ class SyncManager {
       // The pass's one read of the whole table (issue P-08): purged, and the survivors handed on.
       const survivors = await purgeLocalLogSheets(await getAllLogSheets())
       this.emit({ type: 'complete', syncedCount: tally.synced, failedCount: tally.failed, pendingCount: remaining })
-      this.noteRefusals(sheetsOutcome.refusedError ?? reportsOutcome.refusedError, tally, remaining)
+      this.noteRefusals(
+        sheetsOutcome.refusedError ?? reportsOutcome.refusedError,
+        tally,
+        remaining
+      )
       await this.reportBacklog(survivors)
       await this.syncAttachments()
     } catch (err) {
@@ -489,6 +517,56 @@ class SyncManager {
   }
 
   /**
+   * Form draft upserts — own lane, never writes final-submit fields, never fails the pass.
+   * Runs after log-sheet progress so a tablet walking a round and filing a form still reports
+   * both; order between the two best-effort lanes is not load-bearing.
+   */
+  private formDraftLane: Promise<void> = Promise.resolve()
+
+  private async pushFormDrafts(): Promise<void> {
+    const pass = this.formDraftLane.then(async () => {
+      try {
+        await pushPendingFormDrafts(this.abortController?.signal)
+      } catch (err) {
+        console.warn('Form draft pass failed', err)
+      }
+    })
+    this.formDraftLane = pass
+    return pass
+  }
+
+  /** Immediate draft push after a deliberate save — mirrors `pushProgressNow`. */
+  async pushFormDraftsNow(): Promise<void> {
+    if (!navigator.onLine) return
+    try {
+      const session = await getAuthSession()
+      if (!session || !hasPermission(session, PERM_FORMS_DRAFT)) return
+      if (!(await ensureSessionUserId())) return
+      await this.pushFormDrafts()
+    } catch (err) {
+      console.warn('Immediate form draft push failed', err)
+    }
+  }
+
+  private async submitFormFinals(
+    pending: Awaited<ReturnType<typeof getPendingFormFinals>>,
+    tally: PassTally
+  ): Promise<{ transientError?: string }> {
+    if (pending.length === 0) return {}
+    try {
+      const result = await pushPendingFormFinals(this.abortController?.signal)
+      tally.synced += result.synced
+      tally.failed += result.failed
+      if (result.transientError) return { transientError: result.transientError }
+      return {}
+    } catch (err) {
+      return {
+        transientError: err instanceof Error ? err.message : 'خطا در ارسال فرم'
+      }
+    }
+  }
+
+  /**
    * Delivers pending progress now rather than at the next tick — for a save the operator makes
    * deliberately, with a button, and expects the supervisor to see.
    *
@@ -552,9 +630,13 @@ class SyncManager {
     const canSyncFaultReports = session
       ? hasPermission(session, PERM_NFC_FAULT_REPORT)
       : false
-    const [logSheets, faultReports, attachments] = await Promise.all([
+    const canSyncFormFinals = session ? hasPermission(session, PERM_FORMS_SUBMIT) : false
+    const sessionUserId = await getSessionUserId()
+    const [logSheets, faultReports, formFinals, attachments] = await Promise.all([
       this.getPendingLogSheets(),
       canSyncFaultReports ? this.getPendingFaultReports() : Promise.resolve([]),
+      // Final submits only — draft upserts are progress-like and stay out of the badge.
+      canSyncFormFinals ? getPendingFormFinals(sessionUserId) : Promise.resolve([]),
       // Counted too: the badge means "work not yet on the server", and a submitted sheet
       // whose photos are still queued is exactly that. Only uploadable rows count — an
       // attachment whose sheet has not synced yet is represented by that sheet instead, and
@@ -562,7 +644,7 @@ class SyncManager {
       // deliver, so counting it would show a badge that never drains.
       getOwnPendingAttachments(),
     ])
-    return logSheets.length + faultReports.length + attachments.length
+    return logSheets.length + faultReports.length + formFinals.length + attachments.length
   }
 
   private async getPendingLogSheets(): Promise<LogSheet[]> {

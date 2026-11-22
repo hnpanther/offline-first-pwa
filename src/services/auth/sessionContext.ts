@@ -182,6 +182,13 @@ async function reviveOwnedParkedAttachmentsOnLogin(userId: string): Promise<void
   const sheets = new Map<string, LogSheet | undefined>()
   for (const row of parked) {
     if (!shouldReviveParkedAttachment(row.failedStatus)) continue
+    // Form-owned: revive when the row names this operator (or has no owner — legacy).
+    if (row.formSubmissionLocalId) {
+      if (row.createdByUserId && row.createdByUserId !== userId) continue
+      await retryFailedAttachment(row.id)
+      continue
+    }
+    if (!row.logSheetLocalId) continue
     if (!sheets.has(row.logSheetLocalId)) {
       sheets.set(row.logSheetLocalId, await getLogSheet(row.logSheetLocalId))
     }
