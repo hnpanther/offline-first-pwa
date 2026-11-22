@@ -4,13 +4,19 @@
 
 import {
   getAllLogSheets,
+  getLogSheetsByStatus,
   updateLogSheet,
 } from '@/services/storage'
 import {
   getPendingNfcFaultReports,
   updateNfcFaultReportSyncStatus
 } from '@/services/storage/nfcFaultReports'
-import { submitLogSheetsBatch, submitNfcFaultReportsBatch } from '@/services/api'
+import {
+  submitLogSheetsBatch,
+  submitNfcFaultReportsBatch,
+  type LogSheetSubmitResult,
+  type NfcFaultReportSubmitResult
+} from '@/services/api'
 import { toBatchPayload } from '@/services/sync/logSheetSync'
 import { getOwnPendingAttachments, syncPendingAttachments } from '@/services/sync/attachmentSync'
 import { pushPendingLogSheetProgress } from '@/services/sync/progressSync'
@@ -29,7 +35,6 @@ import {
 } from '@/services/storage/logSheetArchive'
 import { hasPermission, PERM_LOG_SHEET_PROGRESS, PERM_NFC_FAULT_REPORT } from '@/types/auth'
 import {
-  isLogSheetExpiredForSync,
   isOwnershipReassignError,
   normalizeLogSheetSyncError,
   SYNC_OUTCOME_MESSAGES
@@ -37,7 +42,14 @@ import {
 import type { LogSheet, NfcFaultReport } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { clearLocalEditMarkers } from '@/utils/logSheetLocalData'
-import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { purgeLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { reportUndeliveredBacklogIfChanged } from '@/services/sync/backlogReport'
+import {
+  payloadBytes,
+  submitInChunks,
+  type ChunkedSubmitOutcome
+} from '@/services/sync/submitChunks'
+import { v4 as uuidv4 } from 'uuid'
 
 export type SyncEventType = 'start' | 'progress' | 'complete' | 'error'
 
@@ -53,6 +65,59 @@ export interface SyncEvent {
 
 type SyncListener = (event: SyncEvent) => void
 
+/**
+ * Passes in a row whose submit the server refused outright before the sync indicator says so
+ * (issue P-04). One refusal can be a deploy in progress; three in a row — a minute and a half — is
+ * a tablet whose work is stuck, which the operator and their supervisor need to see.
+ */
+export const REFUSED_PASSES_BEFORE_SHOWING = 3
+
+/** What one pass delivered and what it could not, across both queues. */
+interface PassTally {
+  synced: number
+  failed: number
+}
+
+/** The NFC fault report as the batch endpoint takes it. */
+function toFaultReportPayload(report: NfcFaultReport) {
+  return {
+    logSheetId: Number(report.logSheetServerId),
+    assetId: Number(report.assetId),
+    reason: report.reason,
+    createdAt: report.createdAt,
+    clientActionId: report.clientActionId,
+    localId: report.id
+  }
+}
+
+/**
+ * What the device records about whether the server holds a refused round's readings: `kept: true`
+ * and `kept: false` (backend V25/V26) each replace the other; an answer saying neither changes
+ * nothing, so an older server never erases what a newer one said.
+ */
+function keptFieldsOf(result: LogSheetSubmitResult): Partial<LogSheet> {
+  if (result.kept === true) return { serverKeptAt: Date.now(), serverKeepRefusedAt: undefined }
+  if (result.kept === false) return { serverKeepRefusedAt: Date.now(), serverKeptAt: undefined }
+  return {}
+}
+
+/** The server status a refusal implies — what the round's card shows afterwards. */
+function serverStatusAfterRefusal(
+  outcome: LogSheetSubmitResult['outcome'],
+  current: LogSheet['serverStatus']
+): LogSheet['serverStatus'] {
+  switch (outcome) {
+    case 'EXPIRED':
+      return 'EXPIRED'
+    case 'CANCELLED':
+      return 'CANCELLED'
+    case 'SUPERSEDED':
+      return 'SUBMITTED'
+    default:
+      return current
+  }
+}
+
 class SyncManager {
   private listeners: Set<SyncListener> = new Set()
   private isSyncing = false
@@ -60,6 +125,15 @@ class SyncManager {
   private intervalId: ReturnType<typeof setInterval> | null = null
   private intervalMs = 30_000
   private abortController: AbortController | null = null
+  /**
+   * Progress pushes, one after another. The timer's pass and an immediate request
+   * (`pushProgressNow`) both join this lane, so two passes never build payloads from the same
+   * markers at once — which would be harmless on the server (it is idempotent by value) but
+   * would send the same answers twice.
+   */
+  private progressLane: Promise<void> = Promise.resolve()
+  /** Consecutive passes with a refused request — see {@link REFUSED_PASSES_BEFORE_SHOWING}. */
+  private refusedPasses = 0
 
   start(intervalMs?: number): void {
     if (intervalMs) this.intervalMs = intervalMs
@@ -115,7 +189,11 @@ class SyncManager {
     const sessionUserId = await ensureSessionUserId()
     if (!sessionUserId) return
 
-    await this.markExpiredSheets()
+    // No local expiry of queued completions any more (issue P-02). `markExpiredSheets` used to
+    // turn a round finished after its deadline into `failed`/EXPIRED here, before anything was
+    // sent, "so it does not queue work the server is certain to refuse" — which removed the one
+    // chance that work had of being kept, since the server's answer to it is to keep it (backend
+    // V25, B-01). The server decides now; the device sends once and records what it was told.
 
     // Before the submit batch, and outside its try/catch. A round being walked reports its
     // progress so a supervisor can see how far it has got; that report is best-effort by
@@ -142,6 +220,7 @@ class SyncManager {
       // synced on an earlier pass can still be waiting on its photos.
       await this.syncAttachments()
       await this.refreshPendingCount()
+      await this.reportBacklog()
       return
     }
 
@@ -149,178 +228,245 @@ class SyncManager {
     this.abortController = new AbortController()
     this.emit({ type: 'start', pendingCount: totalPending })
 
-    let syncedCount = 0
-    let failedCount = 0
+    const tally: PassTally = { synced: 0, failed: 0 }
 
     try {
-      if (pendingLogSheets.length > 0) {
-        const payloads = pendingLogSheets.map(ls => toBatchPayload(ls))
-        const lsResults = await submitLogSheetsBatch(
-          payloads,
-          this.abortController.signal
-        )
+      const sheetsOutcome = await this.submitLogSheets(pendingLogSheets, tally)
+      // A dead link stops the pass: the fault reports would only meet the same dead link.
+      const reportsOutcome = sheetsOutcome.transientError
+        ? {}
+        : await this.submitFaultReports(pendingFaultReports, tally)
 
-        // Indexed once rather than scanned per result: the batch cap is 500
-        // (app.sync.batch-max-items), so a linear find inside the loop is 250,000 comparisons
-        // in the worst case, on the main thread of a tablet that is also rendering. Cheap to
-        // do correctly and it removes the cap as something anyone has to think about.
-        const pendingByLocalId = new Map(pendingLogSheets.map(l => [l.localId, l]))
-
-        for (const result of lsResults) {
-          const ls = pendingByLocalId.get(result.localId)
-          if (!ls) continue
-
-          const archivedRef = parseArchivedLogSheetViewId(ls.localId)
-          if (archivedRef) {
-            const accepted = result.outcome === 'SUBMITTED' || result.outcome === 'DUPLICATE'
-            await this.applyArchivedLogSheetOutcome(
-              archivedRef,
-              result.outcome,
-              accepted ? undefined : normalizeLogSheetSyncError(result.outcome, result.error)
-            )
-            if (accepted) syncedCount++
-            else failedCount++
-            continue
-          }
-
-          if (result.outcome === 'SUBMITTED') {
-            await updateLogSheet(ls.localId, {
-              syncStatus: 'synced',
-              syncedAt: Date.now(),
-              serverId: toIdString(result.serverId ?? ls.serverId),
-              serverStatus: 'SUBMITTED',
-              syncError: undefined,
-              lastSubmitOutcome: undefined,
-              // The work is the server's now, so this device stops claiming an opinion of its
-              // own about these entries. Leaving the markers would make it win every later
-              // merge for them — including after a supervisor reopens the sheet and edits it.
-              entries: clearLocalEditMarkers(ls.entries),
-              // Delivered work needs no progress report. The queue would skip this row anyway
-              // (it only takes drafts, and the markers above are gone), so this is tidiness
-              // rather than a guard — but a stale «pending» on a completed round reads as
-              // something still outstanding.
-              progressSyncStatus: undefined,
-              progressError: undefined
-            })
-            const ownerId = await getSessionUserId()
-            const serverId = toIdString(result.serverId ?? ls.serverId)
-            // The sheet now exists on the server, so its attachments finally have somewhere
-            // to go. Until this stamp lands the upload queue skips them by design.
-            if (serverId) {
-              await bindAttachmentsToServerSheet(ls.localId, serverId)
-            }
-            if (ownerId && serverId) {
-              await removeArchivedLogSheet(serverId, ownerId)
-            }
-            syncedCount++
-            continue
-          }
-
-          if (result.outcome === 'DUPLICATE' && result.serverId) {
-            await updateLogSheet(ls.localId, {
-              syncStatus: 'synced',
-              syncedAt: Date.now(),
-              // Same as SUBMITTED: the server already holds this work.
-              entries: clearLocalEditMarkers(ls.entries),
-              serverId: toIdString(result.serverId),
-              serverStatus: 'SUBMITTED',
-              syncError: undefined,
-              lastSubmitOutcome: undefined
-            })
-            await bindAttachmentsToServerSheet(ls.localId, toIdString(result.serverId))
-            const ownerId = await getSessionUserId()
-            if (ownerId) {
-              await removeArchivedLogSheet(toIdString(result.serverId), ownerId)
-            }
-            syncedCount++
-            continue
-          }
-
-          const syncError = normalizeLogSheetSyncError(result.outcome, result.error)
-
-          if (isOwnershipReassignError(syncError)) {
-            await updateLogSheet(ls.localId, {
-              syncStatus: 'failed',
-              syncError,
-              lastSubmitOutcome: result.outcome,
-            })
-            failedCount++
-            continue
-          }
-
-          await updateLogSheet(ls.localId, {
-            syncStatus: 'failed',
-            syncError,
-            // Kept so the UI can tell the one operator-fixable rejection (bad field values)
-            // from the three that are not. Only VALIDATION_ERROR unlocks correct-and-resubmit.
-            lastSubmitOutcome: result.outcome,
-            serverStatus:
-              result.outcome === 'EXPIRED'
-                ? 'EXPIRED'
-                : result.outcome === 'CANCELLED'
-                ? 'CANCELLED'
-                : result.outcome === 'SUPERSEDED'
-                ? 'SUBMITTED'
-                : ls.serverStatus
-          })
-          failedCount++
-        }
-      }
-
-      if (pendingFaultReports.length > 0) {
-        const payloads = pendingFaultReports.map(r => ({
-          logSheetId: Number(r.logSheetServerId),
-          assetId: Number(r.assetId),
-          reason: r.reason,
-          createdAt: r.createdAt,
-          clientActionId: r.clientActionId,
-          localId: r.id
-        }))
-        const reportResults = await submitNfcFaultReportsBatch(
-          payloads,
-          this.abortController.signal
-        )
-
-        // Same reasoning as the log-sheet batch above.
-        const pendingReportsById = new Map(pendingFaultReports.map(r => [r.id, r]))
-
-        for (const result of reportResults) {
-          const report = pendingReportsById.get(result.localId)
-          if (!report) continue
-
-          if (result.outcome === 'CREATED' || result.outcome === 'DUPLICATE') {
-            await updateNfcFaultReportSyncStatus(report.id, 'synced', {
-              serverId: result.serverId != null ? toIdString(result.serverId) : undefined,
-              syncedAt: Date.now()
-            })
-            syncedCount++
-          } else {
-            await updateNfcFaultReportSyncStatus(report.id, 'failed', {
-              syncError: result.error ?? 'خطای ناشناخته'
-            })
-            failedCount++
-          }
-        }
+      const transientError = sheetsOutcome.transientError ?? reportsOutcome.transientError
+      if (transientError) {
+        await this.emitTransientFailure(transientError, tally)
+        return
       }
 
       const remaining = await this.refreshPendingCount()
-      await cleanupLocalLogSheets()
-      this.emit({ type: 'complete', syncedCount, failedCount, pendingCount: remaining })
+      // The pass's one read of the whole table (issue P-08): purged, and the survivors handed on.
+      const survivors = await purgeLocalLogSheets(await getAllLogSheets())
+      this.emit({ type: 'complete', syncedCount: tally.synced, failedCount: tally.failed, pendingCount: remaining })
+      this.noteRefusals(sheetsOutcome.refusedError ?? reportsOutcome.refusedError, tally, remaining)
+      await this.reportBacklog(survivors)
       await this.syncAttachments()
     } catch (err) {
-      // Transient network error — keep items pending, avoid UI flash
-      this.emit({
-        type: 'error',
-        failedCount: 0,
-        transient: true,
-        error: err instanceof Error ? err.message : 'خطا در ارتباط با سرور',
-      })
-      await this.refreshPendingCount()
+      await this.emitTransientFailure(
+        err instanceof Error ? err.message : 'خطا در ارتباط با سرور',
+        tally
+      )
     } finally {
       this.isSyncing = false
       this.abortController = null
     }
   }
+
+  /**
+   * A pass that stopped because the link did — keep everything pending, and do not flash an error
+   * at the operator for what is usually a weak signal.
+   */
+  private async emitTransientFailure(error: string, tally: PassTally): Promise<void> {
+    this.emit({ type: 'error', failedCount: tally.failed, transient: true, error })
+    await this.refreshPendingCount()
+  }
+
+  /**
+   * Counts passes in which the server refused a whole request (issue P-04), and says so once it
+   * has happened {@link REFUSED_PASSES_BEFORE_SHOWING} times in a row. The refused items are still
+   * queued and still retried every pass — this only stops it being silent.
+   */
+  private noteRefusals(refusedError: string | undefined, tally: PassTally, remaining: number): void {
+    if (!refusedError) {
+      this.refusedPasses = 0
+      return
+    }
+    this.refusedPasses++
+    if (this.refusedPasses < REFUSED_PASSES_BEFORE_SHOWING) return
+    this.emit({
+      type: 'error',
+      transient: false,
+      error: refusedError,
+      failedCount: tally.failed,
+      pendingCount: remaining
+    })
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Completed rounds
+  // ---------------------------------------------------------------------------------------------
+
+  private async submitLogSheets(sheets: LogSheet[], tally: PassTally): Promise<ChunkedSubmitOutcome> {
+    if (sheets.length === 0) return {}
+    const items = sheets.map(sheet => ({ sheet, payload: toBatchPayload(sheet) }))
+    const byLocalId = new Map(sheets.map(sheet => [sheet.localId, sheet]))
+    const signal = this.abortController?.signal
+
+    return submitInChunks(items, {
+      send: chunk => submitLogSheetsBatch(chunk.map(item => item.payload), signal),
+      sizeOf: item => payloadBytes(item.payload),
+      onResults: async results => {
+        for (const result of results) {
+          const sheet = byLocalId.get(result.localId)
+          if (!sheet) continue
+          if (await this.applyLogSheetResult(sheet, result)) tally.synced++
+          else tally.failed++
+        }
+      },
+      onOversized: async item => {
+        await this.markLogSheetTooLarge(item.sheet)
+        tally.failed++
+      }
+    })
+  }
+
+  /** Records the server's answer for one round. @returns whether the round is now delivered. */
+  private async applyLogSheetResult(sheet: LogSheet, result: LogSheetSubmitResult): Promise<boolean> {
+    const archivedRef = parseArchivedLogSheetViewId(sheet.localId)
+    if (archivedRef) {
+      const accepted = result.outcome === 'SUBMITTED' || result.outcome === 'DUPLICATE'
+      await this.applyArchivedLogSheetOutcome(
+        archivedRef,
+        result.outcome,
+        accepted ? undefined : normalizeLogSheetSyncError(result.outcome, result.error)
+      )
+      return accepted
+    }
+
+    // DUPLICATE is delivery only with a server id: the server already holds this work.
+    const delivered =
+      result.outcome === 'SUBMITTED' || (result.outcome === 'DUPLICATE' && result.serverId != null)
+    if (delivered) {
+      await this.markLogSheetDelivered(sheet, toIdString(result.serverId ?? sheet.serverId))
+      return true
+    }
+    await this.markLogSheetRefused(sheet, result)
+    return false
+  }
+
+  private async markLogSheetDelivered(sheet: LogSheet, serverId: string): Promise<void> {
+    await updateLogSheet(sheet.localId, {
+      syncStatus: 'synced',
+      syncedAt: Date.now(),
+      serverId,
+      serverStatus: 'SUBMITTED',
+      syncError: undefined,
+      lastSubmitOutcome: undefined,
+      // The work is the server's now, so this device stops claiming an opinion of its own about
+      // these entries. Leaving the markers would make it win every later merge for them —
+      // including after a supervisor reopens the sheet and edits it.
+      entries: clearLocalEditMarkers(sheet.entries),
+      // Delivered work needs no progress report. The queue would skip this row anyway (it only
+      // takes drafts, and the markers above are gone), so this is tidiness rather than a guard —
+      // but a stale «pending» on a completed round reads as something still outstanding.
+      progressSyncStatus: undefined,
+      progressError: undefined
+    })
+    if (!serverId) return
+    // The sheet now exists on the server, so its attachments finally have somewhere to go. Until
+    // this stamp lands the upload queue skips them by design.
+    await bindAttachmentsToServerSheet(sheet.localId, serverId)
+    const ownerId = await getSessionUserId()
+    if (ownerId) {
+      await removeArchivedLogSheet(serverId, ownerId)
+    }
+  }
+
+  private async markLogSheetRefused(sheet: LogSheet, result: LogSheetSubmitResult): Promise<void> {
+    const syncError = normalizeLogSheetSyncError(result.outcome, result.error)
+    // Backend V25/V26 (issues P-02, B-01, P-05): whether the server KEPT the refused round. The
+    // row stays failed either way — it was not applied — but the device now knows whether its
+    // readings are only here, which is what the «ارسال‌نشده» count and the local purge read.
+    const kept = keptFieldsOf(result)
+
+    if (isOwnershipReassignError(syncError)) {
+      await updateLogSheet(sheet.localId, {
+        syncStatus: 'failed',
+        syncError,
+        lastSubmitOutcome: result.outcome,
+        ...kept
+      })
+      return
+    }
+
+    await updateLogSheet(sheet.localId, {
+      syncStatus: 'failed',
+      syncError,
+      ...kept,
+      // Kept so the UI can tell the one operator-fixable rejection (bad field values) from the
+      // three that are not. Only VALIDATION_ERROR unlocks correct-and-resubmit.
+      lastSubmitOutcome: result.outcome,
+      serverStatus: serverStatusAfterRefusal(result.outcome, sheet.serverStatus)
+    })
+  }
+
+  /**
+   * A round the server refuses as too large even in a request of its own (issue P-04). Marked
+   * failed with a message that says so — it is kept on the device, and the «ارسال‌نشده» count
+   * shows it — rather than re-sent into the same refusal every thirty seconds.
+   */
+  private async markLogSheetTooLarge(sheet: LogSheet): Promise<void> {
+    const syncError = SYNC_OUTCOME_MESSAGES.TOO_LARGE
+    const archivedRef = parseArchivedLogSheetViewId(sheet.localId)
+    if (archivedRef) {
+      await this.applyArchivedLogSheetOutcome(archivedRef, 'ERROR', syncError)
+      return
+    }
+    await updateLogSheet(sheet.localId, { syncStatus: 'failed', syncError, lastSubmitOutcome: 'ERROR' })
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // NFC fault reports
+  // ---------------------------------------------------------------------------------------------
+
+  private async submitFaultReports(
+    reports: NfcFaultReport[],
+    tally: PassTally
+  ): Promise<ChunkedSubmitOutcome> {
+    if (reports.length === 0) return {}
+    const byId = new Map(reports.map(report => [report.id, report]))
+    const signal = this.abortController?.signal
+
+    return submitInChunks(reports, {
+      send: chunk => submitNfcFaultReportsBatch(chunk.map(toFaultReportPayload), signal),
+      sizeOf: report => payloadBytes(toFaultReportPayload(report)),
+      onResults: async results => {
+        for (const result of results) {
+          const report = byId.get(result.localId)
+          if (!report) continue
+          if (await this.applyFaultReportResult(report, result)) tally.synced++
+          else tally.failed++
+        }
+      },
+      onOversized: async report => {
+        await updateNfcFaultReportSyncStatus(report.id, 'failed', {
+          syncError: SYNC_OUTCOME_MESSAGES.TOO_LARGE
+        })
+        tally.failed++
+      }
+    })
+  }
+
+  /** @returns whether the server now holds the report. */
+  private async applyFaultReportResult(
+    report: NfcFaultReport,
+    result: NfcFaultReportSubmitResult
+  ): Promise<boolean> {
+    if (result.outcome === 'CREATED' || result.outcome === 'DUPLICATE') {
+      await updateNfcFaultReportSyncStatus(report.id, 'synced', {
+        serverId: result.serverId != null ? toIdString(result.serverId) : undefined,
+        syncedAt: Date.now()
+      })
+      return true
+    }
+    await updateNfcFaultReportSyncStatus(report.id, 'failed', {
+      syncError: result.error ?? 'خطای ناشناخته'
+    })
+    return false
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The lanes beside the submit
+  // ---------------------------------------------------------------------------------------------
 
   /**
    * Drains the progress queue.
@@ -331,10 +477,38 @@ class SyncManager {
    * undelivered work.
    */
   private async pushProgress(): Promise<void> {
+    const pass = this.progressLane.then(async () => {
+      try {
+        await pushPendingLogSheetProgress(this.abortController?.signal)
+      } catch (err) {
+        console.warn('Log sheet progress pass failed', err)
+      }
+    })
+    this.progressLane = pass
+    return pass
+  }
+
+  /**
+   * Delivers pending progress now rather than at the next tick — for a save the operator makes
+   * deliberately, with a button, and expects the supervisor to see.
+   *
+   * Only the progress lane: no inbox pull and no submit batch, so it costs one small request.
+   * Used for the round's own questions, which are saved once or a few times per round; an asset
+   * save stays on the timer, because a round of forty assets would otherwise be forty requests
+   * (backend roadmap §3 — the inbox tick is already the fleet's cost driver).
+   *
+   * Never throws. Offline, signed out, or without the progress permission it does nothing, and
+   * the next tick delivers the same answers.
+   */
+  async pushProgressNow(): Promise<void> {
+    if (!navigator.onLine) return
     try {
-      await pushPendingLogSheetProgress(this.abortController?.signal)
+      const session = await getAuthSession()
+      if (!session || !hasPermission(session, PERM_LOG_SHEET_PROGRESS)) return
+      if (!(await ensureSessionUserId())) return
+      await this.pushProgress()
     } catch (err) {
-      console.warn('Log sheet progress pass failed', err)
+      console.warn('Immediate progress push failed', err)
     }
   }
 
@@ -353,21 +527,25 @@ class SyncManager {
     }
   }
 
-  private async markExpiredSheets(): Promise<void> {
-    const userId = await getSessionUserId()
-    const all = await getAllLogSheets()
-    for (const ls of all) {
-      if (ls.status !== 'submitted' || ls.syncStatus === 'synced') continue
-      // Shared tablet: never expire another assignee's queued submission.
-      if (ls.assigneeUserId && userId && ls.assigneeUserId !== userId) continue
-      if (!isLogSheetExpiredForSync(ls)) continue
-      await updateLogSheet(ls.localId, {
-        syncStatus: 'failed',
-        syncError: SYNC_OUTCOME_MESSAGES.EXPIRED,
-        serverStatus: 'EXPIRED'
-      })
+  /**
+   * Tells the panel how many rounds on this tablet hold readings the server has received in no
+   * form (backend V25), when that number has changed or an hour has passed. Best-effort and
+   * isolated like the attachment pass: it is information for a supervisor, and nothing about it
+   * may fail or delay a delivery. An older server answers 403/404, which is swallowed.
+   *
+   * @param sheets every local round, when this pass has just read them (issue P-08)
+   */
+  private async reportBacklog(sheets?: LogSheet[]): Promise<void> {
+    try {
+      await reportUndeliveredBacklogIfChanged(this.abortController?.signal, Date.now(), sheets)
+    } catch (err) {
+      console.warn('Backlog report failed', err)
     }
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // The queue
+  // ---------------------------------------------------------------------------------------------
 
   async getPendingCount(): Promise<number> {
     const session = await getAuthSession()
@@ -395,13 +573,27 @@ class SyncManager {
   }
 
   private async getPendingLiveLogSheets(userId: string | null): Promise<LogSheet[]> {
-    const all = await getAllLogSheets()
-    return all.filter(
-      ls =>
-        isLogSheetOutboundOwnedByUser(ls, userId) &&
-        ls.serverId &&
-        !isLogSheetExpiredForSync(ls)
-    )
+    // Only `submitted` rows can be queued (`isLogSheetOutboundOwnedByUser`), so only those are
+    // read — through the status index, on every tick and every badge refresh (issue P-08).
+    const submitted = await getLogSheetsByStatus('submitted')
+    // No deadline filter any more (issue P-02). A completion finished after its deadline goes out
+    // once like any other; the server answers EXPIRED and — from backend V25 — keeps it, and the
+    // row then leaves this queue as `failed` (`isLogSheetOutboundOwnedByUser` never takes a failed
+    // row back). An on-time completion the scheduler expired meanwhile is accepted by the server
+    // on its `completedAt`, as it always was.
+    const pending = submitted.filter(ls => isLogSheetOutboundOwnedByUser(ls, userId) && ls.serverId)
+    // Issue P-07: a queued completion must carry ONE idempotency key for every attempt. The fill
+    // page stamps it at completion, but a row without one used to get a fresh key per pass from
+    // `toBatchPayload`'s fallback — so the server's replay check could never match, and a retry
+    // after a lost response to a refused round was kept as a second void row. Persisted here,
+    // before the first send, so every retry carries the same key.
+    for (const ls of pending) {
+      if (ls.clientActionId) continue
+      const clientActionId = uuidv4()
+      await updateLogSheet(ls.localId, { clientActionId })
+      ls.clientActionId = clientActionId
+    }
+    return pending
   }
 
   /**

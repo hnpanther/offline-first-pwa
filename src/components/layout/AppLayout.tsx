@@ -9,6 +9,9 @@ import { useMasterDataSync } from '@/hooks/useMasterDataSync'
 import { useInboxSync } from '@/hooks/useInboxSync'
 import { InstallPwaPrompt } from '@/components/common/InstallPwaPrompt'
 import { SessionBindingNotice } from '@/components/common/SessionBindingNotice'
+import { OfflineSessionNotice } from '@/components/common/OfflineSessionNotice'
+import { useOfflineSessionGuard } from '@/hooks/useOfflineSessionGuard'
+import { useDeviceStatusWatch } from '@/hooks/useDeviceStatusWatch'
 
 const DRAWER_WIDTH = 240
 
@@ -20,6 +23,11 @@ export function AppLayout() {
   useSyncManager()
   useMasterDataSync()
   useInboxSync()
+  // Backend V28: lock a session that has gone too long without the server, never mid-form.
+  const offlineSession = useOfflineSessionGuard()
+  // Backend V28: a revoke or wipe order reaches a signed-in tablet within 30 minutes online, even
+  // when its session is not tied to the device (opened while enrolment was off).
+  useDeviceStatusWatch()
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -47,6 +55,7 @@ export function AppLayout() {
         <Box sx={{ flexGrow: 1, p: { xs: 1.5, sm: 2, md: 3 } }}>
           <InstallPwaPrompt />
           <SessionBindingNotice />
+          <OfflineSessionNotice verdict={offlineSession} />
           <Outlet />
         </Box>
       </Box>

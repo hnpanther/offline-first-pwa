@@ -1,0 +1,18 @@
+# Strict-Transport-Security, rendered at container start into /etc/nginx/conf.d/hsts.inc and
+# pulled in by snippets/security-headers.conf. The name ends in .inc, not .conf, on purpose:
+# nginx.conf includes conf.d/*.conf at http level, and this line belongs only inside the HTTPS
+# server.
+#
+#   PWA_HSTS_MAX_AGE   seconds a browser remembers "HTTPS only" for this name. Default one year.
+#                      0 sends max-age=0, which tells a browser that already remembers it to
+#                      forget — the way to switch HSTS off for a fleet that has seen it.
+#
+# What it does: after one HTTPS visit the browser rewrites every http:// address of this name to
+# https:// before sending anything, and a certificate error stops having a "proceed anyway"
+# button. What it does NOT do: anything for an address that is an IP literal — browsers ignore
+# the header there (RFC 6797 §8.1.1) — or for the APK, which never loads a page from nginx and
+# already refuses cleartext.
+#
+# The one way this hurts: an EXPIRED certificate becomes a hard stop for every browser tablet
+# until it is renewed. Watch the expiry date (docker/DEPLOY.md).
+add_header Strict-Transport-Security "max-age=${PWA_HSTS_MAX_AGE}" always;

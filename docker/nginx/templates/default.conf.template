@@ -5,16 +5,51 @@
 #   PWA_SERVER_NAME       the name or IP tablets type (default: _ = any)
 #   PWA_BACKEND_UPSTREAM  where Spring Boot listens, scheme + host + port, no path
 #                         (default: http://host.docker.internal:8081)
-#   PWA_MAX_BODY_SIZE     largest request body nginx forwards (default: 32m)
+#   PWA_MAX_BODY_SIZE     largest request body nginx forwards (default: 64m — paired with the
+#                         backend's app.http.max-json-body-bytes, 64 MB; change both together)
+#   PWA_LOGIN_RATE         sustained rate one client address may call the sign-in and enrolment
+#                         endpoints, nginx syntax (default: 60r/m)
+#   PWA_LOGIN_BURST        how many such requests may arrive at once before the rate applies
+#                         (default: 30)
+#   PWA_LOG_FORMAT        access log format: `main` (text) or `json` (default: json). The two
+#                         formats are defined in nginx.conf; entrypoint.d/05-pwa-logs.sh refuses
+#                         any other value before nginx starts.
+#   (PWA_HSTS_MAX_AGE is used by hsts.inc.template, beside this file.)
 #
 # To change more than these, mount your own copy of this file over
 # /etc/nginx/templates/default.conf.template (see docker/DEPLOY.md).
 #
 # Mirrors docs/deployment.md § "nginx as a service"; the reasoning for each block is there.
 
+# How often one address may ask to sign in.
+#
+# This file is included at http level (nginx.conf: conf.d/*.conf), which is where a zone has to
+# be declared. The limit is applied further down, on four endpoints and nothing else — the ones
+# reachable WITHOUT a session: login, the device challenge, and the two enrolment calls. The
+# backend locks a username after five wrong passwords, which stops guessing but not asking; this
+# proxy is the only place that can bound how fast anybody asks (backend docs/issue.md B-06).
+#
+# Keyed by client address. On a site where every tablet reaches this server through one NAT
+# address they all share one bucket: read the access log before deciding the default is right,
+# and raise PWA_LOGIN_RATE / PWA_LOGIN_BURST if a shift change does not fit — docker/DEPLOY.md.
+# 10m of shared memory holds about 160,000 addresses.
+limit_req_zone $binary_remote_addr zone=pwa_auth:10m rate=${PWA_LOGIN_RATE};
+
+# The access log, at http level so both servers below inherit it (/healthz switches it off). The
+# format name comes from the environment; the formats are in nginx.conf.
+access_log /var/log/nginx/access.log ${PWA_LOG_FORMAT};
+
+# The error log's level for everything a request can cause — upstream failures, rate-limit
+# refusals, oversized bodies, TLS — set at http level so both servers inherit it. nginx.conf keeps
+# its own process-level line (start, reload, shutdown), because that one is read before any
+# template exists. Same file; nginx opens it once. Checked at start by 05-pwa-logs.sh.
+error_log /var/log/nginx/error.log ${PWA_ERROR_LOG_LEVEL};
+
 server {
     # IPv4 only: a host booted with IPv6 disabled would make [::] fail nginx at start.
-    listen 80;
+    # 8080, not 80: nginx runs as uid 101, which cannot bind below 1024. Compose publishes it as
+    # the host's port 80 (PWA_HTTP_PORT), so clients never see 8080.
+    listen 8080;
     server_name ${PWA_SERVER_NAME};
 
     # Liveness for the container healthcheck. Plain HTTP so the check needs no certificate.
@@ -30,17 +65,25 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    # 8443 for the same reason; published as the host's 443 (PWA_HTTPS_PORT).
+    listen 8443 ssl;
     http2 on;
     server_name ${PWA_SERVER_NAME};
 
     # Mounted from the host (docker/ssl → /etc/nginx/ssl, read-only). The certificate must be
     # issued by the plant's CA — the one bundled into the APK and installed on browser tablets.
     # A certificate from any other CA is valid and trusted by nothing in the fleet.
+    # key.pem must be readable by uid 101, which is what nginx runs as: docker/DEPLOY.md.
     ssl_certificate     /etc/nginx/ssl/cert.pem;
     ssl_certificate_key /etc/nginx/ssl/key.pem;
 
     ssl_protocols       TLSv1.2 TLSv1.3;
+    # TLS 1.2 with forward secrecy and an AEAD cipher only (Mozilla's "intermediate" list, less
+    # the DHE suites, which would need a dhparam file). Without this line nginx's default
+    # (HIGH:!aNULL:!MD5) still offers CBC-mode and static-RSA suites on 1.2. TLS 1.3's suites are
+    # not governed by this directive and need no pruning. Every WebView and browser this app
+    # supports negotiates one of these.
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
     ssl_prefer_server_ciphers off;
     ssl_session_cache   shared:SSL:10m;
     ssl_session_timeout 1d;
@@ -66,7 +109,9 @@ server {
                       image/svg+xml application/manifest+json application/wasm;
 
     # A single attachment may be up to 25 MB (app.attachments.max-file-size-bytes). nginx's
-    # default is 1 MB and its 413 reads to an operator as "upload failed".
+    # default is 1 MB and its 413 reads to an operator as "upload failed". The value is PAIRED
+    # with the backend's app.http.max-json-body-bytes (64 MB): lower here and nginx refuses a
+    # body the backend would accept (backend issue B-16). Change both together.
     client_max_body_size ${PWA_MAX_BODY_SIZE};
 
     location / {
@@ -103,31 +148,59 @@ server {
         add_header Cache-Control "no-cache";
     }
 
+    # ---- The API ---------------------------------------------------------------------------
+    #
+    # Everything shared by the /api locations — the forwarded headers, the timeouts, streaming —
+    # is in snippets/api-proxy.conf. Only `proxy_pass` differs, and it differs for a reason:
+    #
+    #   location /api/ { proxy_pass UPSTREAM/api/; }       a URI part: the matched prefix is
+    #                                                       replaced by it (same path, as it happens)
+    #   location = /api/auth/login { proxy_pass UPSTREAM; } NO URI part: the request path is sent
+    #                                                       unchanged
+    #
+    # In an exact-match location the first form would replace the WHOLE path with "/api/", and
+    # every login would arrive at the backend as a request for /api/. So the four below never
+    # carry a URI.
+
+    limit_req_status    429;
+    limit_req_log_level warn;
+
+    # The endpoints that can be called before signing in — see the zone at the top of this file.
+    location = /api/auth/login {
+        limit_req zone=pwa_auth burst=${PWA_LOGIN_BURST} nodelay;
+        error_page 429 @pwa_rate_limited;
+        proxy_pass ${PWA_BACKEND_UPSTREAM};
+        include /etc/nginx/snippets/api-proxy.conf;
+    }
+
+    location = /api/auth/challenge {
+        limit_req zone=pwa_auth burst=${PWA_LOGIN_BURST} nodelay;
+        error_page 429 @pwa_rate_limited;
+        proxy_pass ${PWA_BACKEND_UPSTREAM};
+        include /etc/nginx/snippets/api-proxy.conf;
+    }
+
+    # Both enrolment calls: the request itself and …/confirm.
+    location ^~ /api/devices/enrollment-requests {
+        limit_req zone=pwa_auth burst=${PWA_LOGIN_BURST} nodelay;
+        error_page 429 @pwa_rate_limited;
+        proxy_pass ${PWA_BACKEND_UPSTREAM};
+        include /etc/nginx/snippets/api-proxy.conf;
+    }
+
+    # What a limited caller is told. JSON in the backend's own error shape ({"message": …}), so
+    # the app shows the sentence instead of failing to parse nginx's HTML error page and
+    # reporting a dead network. Retry-After is advisory; the bucket refills continuously.
+    location @pwa_rate_limited {
+        default_type application/json;
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Retry-After   "30" always;
+        add_header Cache-Control "no-store" always;
+        return 429 '{"message":"تعداد درخواست‌های ورود از این دستگاه بیش از حد مجاز است. کمی صبر کنید و دوباره تلاش کنید."}';
+    }
+
     location /api/ {
         proxy_pass ${PWA_BACKEND_UPSTREAM}/api/;
-
-        proxy_http_version 1.1;
-        proxy_set_header Connection        "";
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        # Overwritten, never appended: nginx is the first hop, and the backend records the FIRST
-        # entry of X-Forwarded-For as the client address (sessions, audit, request logs).
-        # $proxy_add_x_forwarded_for would keep whatever the client sent in front, letting any
-        # caller choose the address the audit trail records.
-        proxy_set_header X-Forwarded-For   $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # A large attachment on plant Wi-Fi must not be cut off mid-request. The client gives
-        # an upload 120 s (UPLOAD_TIMEOUT_MS); nginx must not give up first.
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-
-        # Stream uploads straight through instead of spooling a 25 MB video to the container's
-        # disk first — the root filesystem is read-only, and buffering adds nothing here.
-        proxy_request_buffering off;
-
-        # Likewise for responses: a downloaded attachment is streamed to the tablet rather than
-        # written to a temp file first (there is no writable disk for one, by design).
-        proxy_max_temp_file_size 0;
+        include /etc/nginx/snippets/api-proxy.conf;
     }
 }

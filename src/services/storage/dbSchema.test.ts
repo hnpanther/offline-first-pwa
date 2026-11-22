@@ -25,6 +25,8 @@ const EXPECTED_STORES = [
   'logSheetTemplates',
   'logSheetUserArchives',
   'logSheets',
+  'lookupItems',
+  'lookupLists',
   'mainFunctions',
   'nfcFaultReports',
   'operationalUnits',
@@ -45,7 +47,9 @@ const REQUIRED_INDEXES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['logSheetUserArchives', ['serverId', 'userId']],
   // NFC lookup is the one thing that must be instant with a tag held to the device.
   ['assetEntries', ['nfcTagId', 'nfcSerial']],
-  ['subFunctions', ['tag']]
+  ['subFunctions', ['tag']],
+  // A list is read whole for search, and dropped whole when its lease ends.
+  ['lookupItems', ['listId']]
 ]
 
 beforeAll(async () => {
@@ -71,11 +75,16 @@ describe('IndexedDB schema', () => {
     // the current user's", which is exactly wrong for a colleague's photographs already sitting
     // on the device when the app updates.
     //
+    // Version 4 adds two stores — `lookupLists` and `lookupItems`, the device's copy of the
+    // reference lists its open rounds need (backend roadmap §31 Phase 2) — and changes no existing
+    // store, index or row, so the upgrade cannot lose anything already on a tablet. Both are
+    // cleared at sign-out and when a list's lease ends: they may hold personal data.
+    //
     // This assertion is deliberately a hard-coded number rather than a range. Adding a version
     // block is a decision with consequences on every tablet — a forced upgrade that cannot be
     // rolled back — so it should take a deliberate edit here, in a file whose whole subject is
     // the schema, rather than passing silently because the check said "1 or more".
-    expect(db.verno).toBe(3)
+    expect(db.verno).toBe(4)
   })
 
   it('declares exactly the stores the app uses', () => {

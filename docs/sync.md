@@ -262,11 +262,45 @@ everywhere, because a value the schema cannot describe is a client bug either wa
 
 ## When sync runs
 
+Two different things run, on different triggers, and confusing them is how this page once claimed
+something the code never did.
+
+**The push pass** (`syncManager.sync()` — progress, submissions, attachments, fault reports):
+
 | Trigger | Where |
 |---|---|
 | On an interval | `settings.syncIntervalMs` (default 30 s, clamped 10 s–1 h) |
 | When the browser comes back online | `handleOnline` — the `online` event |
 | On demand | The sync button |
+
+**The inbox pull** (`pullAndMergeInbox` — `GET /api/log-sheets/inbox`, the bundle merge, and the
+reference lists right after it) does **not** run on that interval. It runs only:
+
+| Trigger | Where |
+|---|---|
+| Signing in, or opening the app already signed in | `useInboxSync` — its effect on `isAuthenticated` |
+| The connection coming back (and the server becoming reachable again) | the same effect, on `isOnline` / `serverReachable` |
+| The refresh button, and claim / release / assign on the list page | `LogSheetListPage` → `refreshInbox` |
+| After the operator submits a round from the fill page | `LogSheetFillPage` → `refreshInbox` |
+| After a push pass that **delivered something** (`syncedCount > 0`) | `useSync` — the `complete` event |
+
+**Everything else that runs on its own** — none of it on the push timer:
+
+| What | When |
+|---|---|
+| Bootstrap (units, ceilings, policies, `deviceRetention`, `offlineSession`, the clock) | at sign-in (forced), with the inbox pull, and when the app comes online — each time only if the last one is an hour old (`pullBootstrapIfStale`, on the server's clock) |
+| The «ارسال‌نشده» report to the panel | at the end of a push pass that reached the server — only when the count changed, an hour passed, or the session is another one |
+| The local round purge, the file-bytes purge | at the end of a push pass, and when the app comes online with a session («How long a round stays on this device») |
+| Reference-list expiry | at start-up with a session and at sign-in, online or not |
+| The wipe-order check (backend V28) | when the login page finds the server reachable; inside every sign-in; before the device key would be discarded; and its signed confirmation at every start until it lands |
+| The device-status check while signed in (backend V28) | at start, on reconnection, on returning to the foreground and on a 5-minute tick — each time only if the last check is 30 minutes old; one at a time (`useDeviceStatusWatch`) |
+| The offline-session check (backend V28) | at start, on every navigation, every 60 s, and when the app returns to the foreground — never interrupting the asset form |
+
+So a tablet left open and online, delivering nothing, does **not** learn of a newly assigned round,
+a cancellation or a change to a reference list until one of these happens. That is the behaviour
+today, not a guarantee anybody chose: `git log` shows the push timer never pulled the inbox, and
+the post-sync pull was added in `5953a36`. A periodic pull would be a decision with a server-side
+cost — see the backend's `docs/roadmap.md` §3 before adding one.
 
 ```ts
 private intervalMs = 30_000
@@ -283,18 +317,16 @@ twice, and idempotency should be the safety net, not the mechanism.
 
 > **A round in progress is visible to a supervisor within one interval.** The progress push runs
 > on this same timer, so «N از M دارایی» on the panel lags by at most `syncIntervalMs`. Saving an
-> asset deliberately does *not* fire an immediate sync: the inbox tick is already the fleet's cost
-> driver (see below), and one request per asset save would multiply it by the size of a round.
+> asset deliberately does *not* fire an immediate sync: one request per asset save would multiply
+> the push traffic by the size of a round.
 
-> **Lowering the interval costs the server, not the tablet.** Every tick calls
-> `GET /api/log-sheets/inbox`, and the server rebuilds a **full bundle per assigned sheet** on
-> each call — roughly a dozen queries each, with no conditional GET, because the inbox is what
-> pre-provisions a tablet to work offline rather than a listing. So the load is
-> `tablets × assigned sheets × ~12 queries ÷ interval`, and halving the interval doubles it
-> across the whole fleet. Comfortable at this deployment's size; the arithmetic and the three
-> ways out are written down in the backend's
-> [`docs/roadmap.md`](../../../JavaProject/backend-offline-first/docs/roadmap.md) § 3. Check it
-> before making the app "feel more responsive" this way.
+> **What an inbox pull costs the server.** Each pull rebuilds a **full bundle per assigned sheet**
+> — roughly a dozen queries each, with no conditional GET, because the inbox is what
+> pre-provisions a tablet to work offline rather than a listing. It is **not** paid on every push
+> tick (above), only on the triggers listed — most often after a pass that delivered something.
+> Making the pull periodic, or tying it to the push interval, would make the load
+> `tablets × assigned sheets × ~12 queries ÷ interval`; the arithmetic and the three ways to cheapen
+> a pull are in the backend's `docs/roadmap.md` § 3. Read it before adding a timer.
 
 ### Where a pass sends its requests
 
@@ -341,14 +373,16 @@ reconnect. Without an id nothing below can be attributed — the outbound queue 
 empty anyway, so returning here is the same outcome stated honestly. Continuing would show a
 zero pending badge, which reads as "everything is sent."
 
-### 3. Expire what has visibly lapsed
+### 3. No local expiry of queued work (backend V25, issue P-02)
 
-```ts
-await this.markExpiredSheets()
-```
-
-A sheet whose deadline passed while the device was offline is marked locally, so the operator
-sees the truth before a round trip rather than after.
+This step used to be `markExpiredSheets()`: a queued completion finished after its deadline was
+marked `failed`/EXPIRED here, **before it was sent**, "so the device does not queue work the
+server is certain to refuse". But the server's answer to such work is to **keep** it as a void
+submission (backend B-01), so not sending it removed the one chance it had. The step is gone; the
+inbox merge no longer does the same thing by a second route either (it re-labels only a row the
+server has already answered). A late completion goes out once, and the device records the answer
+— see «Submission outcomes» and «Deadlines, offline». Drafts are still marked EXPIRED for display
+by `expireStaleLocalDrafts`; that changes nothing about what is sent.
 
 ### 3b. Report how far the open rounds have got
 
@@ -357,6 +391,15 @@ if (hasPermission(session, PERM_LOG_SHEET_PROGRESS)) {
   await this.pushProgress()
 }
 ```
+
+**An expired draft with edits is reported too, once (backend V25, issue P-01).** It used to be
+excluded — «a progress report is about a round still being walked» — and an operator who walked
+most of a round offline and reconnected after the deadline then had no route left: no progress,
+no completion, readings only on the tablet. Now the push goes out; the server answers `EXPIRED`
+with `kept: true` and stores the readings without applying them. The device records
+`lateProgressSentMarker` (the newest marker the push covered, kept or not) and, when kept,
+`lateProgressKeptMarker` / `lateProgressKeptAt`; the row is not pushed again until something newer
+is edited or the round is reopened. **The edit markers stay** — see «Deadlines, offline» for why.
 
 **A separate queue from the submissions, and the separation is the whole design.** A submit
 delivers work the operator has finished and must never be lost; a progress report is a live
@@ -403,6 +446,35 @@ Outcomes: `SAVED` / `NO_CHANGE` are accepted; `SUPERSEDED`, `CANCELLED`, `EXPIRE
 
 Regression: [`progressSync.test.ts`](../src/services/sync/progressSync.test.ts).
 
+#### The round's own answers are pushed when they are saved
+
+Reported from the field: online, the first «ذخیره پرسش‌ها» reached the panel and the second and
+third did not, until the final submit. Three causes, each enough on its own, all fixed:
+
+1. **They waited for the timer.** An asset save is reported on the next tick on purpose — one
+   request per asset save would multiply the fleet's cost by the size of a round (backend roadmap
+   §3). The round-level answers are saved with a button, once or a few times a round, and the
+   supervisor reads them live; waiting up to the sync interval (30 s by default, up to an hour on
+   a tablet whose interval was raised) looked exactly like «not sent». **«ذخیره پرسش‌ها» now calls
+   `syncManager.pushProgressNow()`**: the progress pass only — no inbox pull, no submit — gated on
+   the same permission and session as the timer's, never throwing, and the next tick retries it if
+   it fails. Both passes run in one serial lane (`progressLane`), so they never build payloads from
+   the same markers at once.
+2. **A bundle merge could overwrite a save that landed during it** — see «Decided inside the write»
+   under the bundle merge.
+3. **A bundle older than what the device had delivered put the previous answers back.** A bundle
+   fetched a moment before a push landed and merged a moment after it — the push having already
+   cleared the marker — carried the server's previous answers, and the merge let the server win.
+   Now an accepted push that carried the answers records the server's `savedAt` as
+   `sheetFormDeliveredAt`, and the merge keeps the device's answers while the bundle's
+   `sheetFormUpdatedAt` is **older** than that. Server clock on both sides; a supervisor's later
+   correction in the panel is newer and still wins.
+
+The card says where the saved answers are — «روی دستگاه ذخیره شد؛ در صف ارسال», «به سرور رسیده‌اند»
+or the server's refusal — from `sheetFormDelivery` (`utils/sheetFormDelivery.ts`), so «ذخیره شد»
+is never read as «the supervisor can see it». Regression:
+[`sheetFormDelivery.test.ts`](../src/services/sync/sheetFormDelivery.test.ts).
+
 ### 4. Collect what is pending
 
 Log sheets and fault reports in parallel. Fault reports are collected **only if the session
@@ -443,6 +515,35 @@ if (result.outcome === 'SUBMITTED') {
 that stamp lands the upload queue skips them by design — an attachment referencing a sheet the
 server has never seen would be rejected, and retried forever.
 
+### 6b. In requests of twenty, and a refusal is not a blip (issue P-04)
+
+The queue used to go out as **one** request under one `catch` that called every failure a network
+blip: a body over nginx's 32 MB (`413`), more than 500 items (`400`) or any server fault that repeats
+for this payload was re-sent every thirty seconds for ever, nothing marked, nothing shown — and one
+oversized round held back every round behind it. `submitChunks.ts` now:
+
+| | |
+|---|---|
+| **Chunks** | at most **20 items and ~8 MB of UTF-8 JSON** per request (`DEFAULT_SUBMIT_LIMITS`), in queue order; an item over the byte budget gets a request of its own |
+| **Applies each answer as it arrives** | so a later failure can never lose an earlier request's outcomes |
+| `0`, `408`, `429`, `502`–`504`, or not an API answer | **transient** — the pass stops; everything unsent stays exactly as it was; no error is flashed |
+| `413` | the request is **halved** and both halves go next; a single item still too large is marked `failed` with `SYNC_OUTCOME_MESSAGES.TOO_LARGE` (kept on the device, counted «ارسال‌نشده», never purged) |
+| any other status | **refused** — the items stay `pending`, the *other* requests still go; after `REFUSED_PASSES_BEFORE_SHOWING` (**3**) such passes in a row the sync indicator shows the server's message (`error` event with `transient: false`). One clean pass resets the count |
+
+Fault reports go through the same function. Results are keyed by `localId`, so nothing else in the
+result handling had to change; it now lives in named steps (`applyLogSheetResult`,
+`markLogSheetDelivered`, `markLogSheetRefused`, `markLogSheetTooLarge`). Tests:
+`submitChunks.test.ts` (pure), `submitBatchFailures.test.ts` (through `SyncManager`).
+
+### 6c. One read of the table per pass (issue P-08)
+
+The queue reads `getLogSheetsByStatus('submitted')` and the progress lane
+`getLogSheetsByStatus('draft')` — the existing `status` index, no Dexie version bump — instead of
+deserialising every round (each with up to 300 entries) several times every thirty seconds. The
+pass reads the whole table **once**, after the submit, for the purge (`purgeLocalLogSheets`) and
+hands the survivors to the backlog report; that read must be fresh, because deciding to delete from a
+stale copy could remove a round re-opened meanwhile.
+
 ---
 
 ## Submission outcomes
@@ -453,10 +554,33 @@ device:
 | Outcome | Meaning | Device does |
 |---|---|---|
 | `SUBMITTED` | Accepted | Mark synced, stamp `serverId`, release attachments. (The *outcome* name; the sheet's later `APPROVED` status is a separate thing — see below) |
-| `DUPLICATE` | Already had it (a retry) | Treat as success — this is idempotency working |
+| `DUPLICATE` | Already delivered (a retry of a **delivered** submission) | Treat as success — this is idempotency working. Since backend V25 a retry of a *refused* submission is never `DUPLICATE` (B-03 / P-03): it is answered with the refusal again |
 | `EXPIRED` | Deadline passed server-side | Keep the data, surface the state; **not** an error |
 | `CANCELLED` | The round was called off | Same |
-| `VOIDED` / other | Server refused | Keep the data, show why |
+| `SUPERSEDED` | Somebody else completed it, or it is no longer assigned to you | Same |
+| `VALIDATION_ERROR` / `ERROR` | Server refused | Keep the data, show why |
+| *(none — the request itself failed)* | the network, a 5xx, 408 or 429 | Nothing changes; the round stays `pending` for the next pass (§6b) |
+| *(none — the request was too large)* | `413` | Halved and re-sent; a round still too large on its own is marked `failed` with «بیش از حد بزرگ» and kept (§6b) |
+| *(none — refused as a whole)* | any other status on the batch request | The rounds stay `pending`; the server's message is shown after three such passes in a row (§6b) |
+| *(none — the session ended)* | `401` | The session is dropped and the login page opens («نشست شما به پایان رسیده است»); the round stays `pending` and is sent after the next sign-in. On a revoked device this is also where a **wipe order** is found (below) |
+
+**The server may store a different completion time than the device sent (backend V28, B-17).** A
+`completedAt` more than five minutes in the server's future is stored as the server's receipt time.
+The answer does not say so and the device keeps its own copy as it was; the round's page in the panel
+shows what happened. With this app's server clock the case only arises when the device has never
+measured since its clock went wrong.
+
+**`kept: true` (backend V25).** On `EXPIRED`, `CANCELLED` and `SUPERSEDED` the server says
+whether it stored the submission as a void row for a supervisor. The device records it as
+`serverKeptAt`; the row stays `failed` either way (the round was not applied), but a kept row is
+no longer «ارسال‌نشده» — the server holds its readings. A server older than V25 never says it,
+and an `EXPIRED` from one is counted as undelivered (it really is).
+
+**`kept: false` (backend V26).** The one case where the server answers `SUPERSEDED` or `CANCELLED`
+*without* keeping the submission: this operator already has five different refused submissions
+on the round. Recorded as `serverKeepRefusedAt`, which overrides the outcome's usual meaning — the
+round is «ارسال‌نشده» and is never purged. `kept: true` and `kept: false` each clear the other; an
+answer saying neither leaves both as they were (`keptFieldsOf`, `isRefusalHeldByServer`).
 
 > **A refused submission is never discarded.** The operator did the work. The server stores the
 > payload in `log_sheet_void_submissions` — the per-asset readings and, since backend V14, the
@@ -484,11 +608,159 @@ server, and both sides have to agree or offline work is lost to the clock:
 | | Device (`isLogSheetExpiredForSync`) | Server (`submitIfStillCompletable`) |
 |---|---|---|
 | Submitted locally, `completedAt ≤ dueAt` | Still queued, however late the link returns | Accepted — **even if the sheet is already `EXPIRED`** |
-| Submitted locally, `completedAt > dueAt` | Refused before it is queued | Refused → void submission |
-| Still a draft | Judged on the wall clock — there is no completion to date it by | n/a |
+| Submitted locally, `completedAt > dueAt` | **Sent once** (since V25; it used to be refused before it was queued) | Refused **and kept** → void submission, `kept: true` (B-01) |
+| Still a draft, with edits, deadline passed | **Sent once as late progress** (P-01) | Not applied, **kept** as the round's late-progress row (B-02), `kept: true` |
+| Still a draft, no edits | Judged on the wall clock — there is no completion to date it by | n/a |
+
+**After `kept`, what makes the work stand is the supervisor extending the deadline.** The inbox
+merge sees the round open again and: re-queues a refused completion with a **new**
+`clientActionId` (the server accepts it on its own `completedAt`); and clears a draft's
+`lateProgressSentMarker`, so its readings go out again as ordinary progress and are applied. Their
+edit markers were deliberately never cleared on `kept` — kept is not applied, and the markers are
+what make this device's values win the merge against the server's older ones. If the supervisor
+hands the round to somebody else instead, the first operator's readings stay in the server's kept
+row and, on a shared tablet, in their local archive; the new holder starts from what the round
+holds. All of this was walked live on 2026-11-17 (backend issue.md B-02).
 
 A `serverStatus` of `EXPIRED` overrides the stamps in both directions: the server said so, and
 the device does not argue with it except through the completion time above.
+
+## The server's clock, on this device (roadmap §7, backend B-17)
+
+**Every deadline above is the server's time, and so is `completedAt`.** Since 2026-11-18 neither is
+read from `Date.now()`. `services/clock/serverClock.ts` keeps one offset, `server − device`,
+measured on every answer that carries the server's time — `POST /api/auth/login` (from backend V28),
+`GET /api/bootstrap` and the inbox — as `serverTime − (sentAt + receivedAt) / 2`; a sample whose
+round trip exceeds 30 s, or that has no plausible server time, is refused. The newest accepted sample
+wins (after a clock change the old offset is the wrong one), and it is persisted in `syncMeta`
+(`serverClock`) and read back before the first render, so it holds offline and across a restart.
+
+`serverNow()` is the device clock plus the offset, **never earlier than the server time last
+seen**: time does not run backwards, so a clock set back after the last sync — a flat battery, or
+somebody hiding a late round — cannot take the app before it. `rawServerNow()` is the same without
+that floor, for the one check that must *notice* a clock set back (the offline-session ceiling,
+below). Before the first measurement the offset is 0 and there is no floor: exactly the old
+behaviour.
+
+| On the server's clock (`serverNow()`) | On the device's clock (`Date.now()`) |
+|---|---|
+| `completedAt` / `submittedAt` stamped at submit, and the fallback in `toBatchPayload` | durations: a recording's length, a timer, the request timeouts |
+| every deadline helper in `utils/logSheetStatus.ts`, `canContinueReopenedLogSheet`, `isUndeliveredRound` | the retention **ages** in `cleanupLogSheets.ts` — `syncedAt` and `submittedAt` are device stamps |
+| `mergeInboxIntoLocalSheets` («extended»), `expireStaleLocalDrafts` | `locallyEditedAt`, `sheetFormLocallyEditedAt`, an entry's `createdAt`/`updatedAt` — the server echoes the last two back as a concurrency base, and moving them would make it refuse the very clear they protect |
+| `isSessionValid` (a token's `expiresAt` is server time — a fast clock caused a sign-out loop) | the backlog report's resend throttle |
+| `pullBootstrapIfStale` (`lastBootstrapAt` is the server's `serverTime`) | the reference-list lease, which was already offset-free (`leaseUntil − serverTime` from the page) |
+
+The purge takes a device `now` and converts it for its deadline guards (`serverNow(now)` for
+«reopened», «undelivered», an expired draft's age from `dueAt`) while its retention ages stay on the
+device clock — never compare a device stamp with a server time.
+
+**The correction travels with the round.** `completionClockOffsetMs` is stamped with `completedAt`
+and sent as `clientClockOffsetMs`; the server keeps it beside the round as evidence and recomputes
+nothing from it. The server also refuses a `completedAt` more than 5 minutes in its own future and
+stores its receipt time instead (backend B-17) — the backstop for a tablet that has not measured
+since its clock went wrong. Settings shows the measured difference («اختلاف ساعت این دستگاه با
+سرور»).
+
+**What it does not settle:** a clock set back by less than the time since the last sync is still
+believed (the floor stops it at the last server time seen, not at the truth).
+
+## Wipe on revoke (backend V28)
+
+**The one place this app deletes readings that exist nowhere else — on purpose, and never on its own
+decision.** An administrator who revokes this device on `/devices` may also order it to delete
+everything the app holds, on a page that showed how many rounds the tablet last reported it had not
+delivered. `services/device/deviceWipe.ts` is the device half.
+
+**How the order arrives.** In the answer to `POST /api/auth/challenge` — `{wipe: true,
+wipeOrderedAt}`, given even with enrolment switched off (`enforced: false`) — which this device asks:
+when the login page finds the server reachable (a revoked device lands there: its session answers
+401); inside every sign-in (`deviceAuth.prepareProof`, which looks for an order **before** routing on
+`enforced`, or `enforced: false` would walk past it into a plain login); and before it would ever throw
+its key away (`startEnrollment` on `DEVICE_REVOKED`, `restartEnrollment`), because a discarded key can
+no longer be told anything; **and, while a session is open, on its own** — `useDeviceStatusWatch`
+(mounted in `AppLayout`) asks at start, on reconnection, on returning to the foreground and on a
+five-minute tick, each time only if the last check is 30 minutes old (`deviceStatusWatch.ts`,
+`syncMeta.deviceStatusCheckedAt`, device clock — a clock set back reads as due). That last one exists
+because a revoke reaches a tablet through 401 only when its session is **tied to the device**, which
+a session opened while enrolment was off is not. Without an enrolled identity nothing is asked. Only
+`wipe === true` with a numeric `wipeOrderedAt` counts.
+
+**A revoke without a wipe, found by the same check** (`checkDeviceStatus` answering `revoked` —
+enrolment enforced, device revoked, no order): the operator is signed out with «مجوز این دستگاه لغو
+شده است و از حساب خارج شدید…», every round kept, and the next sign-in shows the enrolment card. Never
+over the asset form on the timer or a return to the app — like the offline lock it waits for the next
+navigation. With enrolment **off**, a plain revoke stops no login, so the check deliberately does
+nothing (the server answers `{enforced: false}` and says nothing about the device). The wipe itself
+proceeds even over an open form: everything on the device was ordered destroyed, typed values
+included.
+
+**How it is carried out.**
+
+1. The order is written to `localStorage` (`mfdcs.deviceWipe`, stage `wiping`), other open copies of
+   the app are told (`BroadcastChannel('mfdcs-device-wipe')`, they reload), and the app reloads.
+2. `main.tsx` runs `resumeDeviceWipe()` **before `openDatabase()` and before anything renders** — so
+   no screen, sync tick or live query holds the database or writes into it halfway. It moves the
+   device key aside (identity row `wipe-ack`), reads the server address out of the old database, and
+   deletes `offline-pwa-db` whole — rounds, readings, the archive of other users' rounds, photos,
+   audio, video, signatures, NFC fault reports, reference lists, the inbox snapshot, the session —
+   then every `localStorage` and `sessionStorage` key but the marker. The marker becomes
+   `confirming`. A database another copy will not let go of within 15 s stops the start with a
+   plain-DOM message («… در پنجرهٔ دیگری باز است …»), the marker still `wiping`, and the next start
+   finishes. Killed halfway, the next start finishes too.
+3. The fresh database is opened and given the server address back, and the login page says what
+   happened («به دستور مدیر سامانه، همهٔ داده‌های این برنامه … پاک شد»).
+4. `confirmPendingWipe()` signs `mfdcs-wipe\n<deviceId>\n<wipeOrderedAt>` with the set-aside key and
+   posts it to `/api/devices/enrollment-requests/wipe-confirm`; at every start and whenever the login
+   page finds the server, until it lands. The key and the marker are let go when the server records
+   it **or** refuses it for good (any 4xx but 408 and 429); a network failure, a 5xx, a 408 or a 429
+   keeps them for the next try.
+
+**One order is carried out once.** An order the marker says was already carried out only has its
+confirmation retried — by then the tablet may have been enrolled again and hold new work. And since
+the live key was moved aside, the tablet is unenrolled at once: a new enrolment makes a new key while
+the old one still owes its confirmation, and nothing is asked with an identity that is not enrolled.
+
+**Without `localStorage`** (none survives a reload) the deletion runs at once instead, with the
+database closed by the deletion itself; the confirmation is then not sent.
+
+**What it cannot reach:** a tablet that never connects to the server again, and a tablet that was
+never enrolled (no device row to order). **With enrolment switched off on the server** a session
+opened while it was off is not tied to the device, so the revoke does not end it and no 401 sends the
+tablet to the login page; the signed-in check above finds the order instead — **within 30 minutes of
+the tablet being online**. Walked live on 2026-11-18 with the switch off: the revoke left the
+session running, and the tablet's next check delivered, carried out and confirmed the wipe in about a
+second. A second walk, with the session opened while off and the switch then turned on, confirmed
+the plain-revoke sign-out is held back while the form is open and lands on the next navigation, with
+both local rounds kept. Walked live on 2026-11-18: enrolled, a failed round, a
+pending photo and an NFC fault report planted, revoked with wipe in the panel; the tablet's next
+request answered 401, the login page asked the challenge, the order was delivered and confirmed a
+second later, and every store but the settings row was empty, with no key left.
+
+## The offline-session ceiling (backend V28)
+
+**Offline, a session never expires on this device** — `isSessionValid` keeps it while the server is
+unreachable, so an operator in a dead zone is not thrown out mid-round. From backend V28 the plant
+can bound that (Settings in the panel, «قفل نشست آفلاین روی تبلت», off by default, 8–720 hours),
+delivered on bootstrap as `offlineSession` and stored as `settings.offlineSessionLimit`
+(`normalizeOfflineSessionLimit`: absent keeps what the device has — a device never told never locks;
+a switch that is not exactly `true` is off; hours clamped, nonsense is 72).
+
+`services/auth/offlineSession.ts` records the **last authenticated answer** — every 2xx to a request
+that carried the token, and the sign-in itself — on the server's clock (`syncMeta`
+`sessionLastContactAt`, written at most once a minute; cleared at sign-out and on a 401). The session
+**locks** once `rawServerNow()` is `hours` past it, or reads more than 5 minutes **before** it (a clock
+set back). A session from an older build with nothing recorded starts its count at the first check.
+
+`useOfflineSessionGuard` (mounted in `AppLayout`) checks at start, on every navigation, every 60 s and
+when the app returns to the foreground. **The timer and the return-to-foreground checks never
+interrupt the asset form** (`/logsheets/:localId`), whose typed-but-unsaved values exist only in
+memory: there the lock waits for the next navigation or start. A lock is the ordinary sign-out
+(`signOut({ offlineLocked })`) — the session, the inbox snapshot and the reference lists go, **every
+round, reading and unsent submission stays** and is sent after the next sign-in, which needs the
+network. The login page says why («برنامه قفل شد: …»). Within 12 hours of the lock — or a quarter of
+the ceiling, if less — `OfflineSessionNotice` says when it will happen. Walked live on 2026-11-18 with
+the backend stopped: 62 h without contact showed the warning, 73 h locked with the unsent round kept,
+and a clock 2 h behind the last contact locked with the clock message.
 
 ## What an inbox pull does to offline work
 
@@ -571,11 +843,181 @@ the `APPROVED` cases in [`logSheetWorkflow.test.ts`](../src/utils/logSheetWorkfl
 
 ---
 
+## How long a round stays on this device
+
+This section is the whole answer to «how long does X stay on this tablet», for every kind of thing
+the app stores and every state it can be in. Nothing is deleted anywhere else; if a case is not in
+these tables, it is kept.
+
+`cleanupLocalLogSheets` (`cleanupLogSheets.ts`) deletes local rounds the device no longer needs —
+from `logSheets` only, never anything on the server. **How long each kind stays is the server's
+decision** (backend roadmap §41, V24): three settings in the panel's «تنظیمات», delivered on
+bootstrap as `deviceRetention`, stored in `settings.deviceRetention`, and turned into windows by
+`resolveRetentionWindows` (`deviceRetention.ts`). The decision for one row is
+`isEligibleForLocalPurge`, which is pure.
+
+### When the purge runs — and when it does not
+
+| Trigger | What runs |
+|---|---|
+| The end of every sync pass that reached the server | the round purge (`purgeLocalLogSheets`, over the one read of the table the pass makes), then the attachment queue, which ends by dropping the bytes of files uploaded more than 7 days ago (`purgeSyncedAttachmentBlobs`) |
+| The app comes online (or starts online) **with a session** | the round purge (`useSyncManager` → `cleanupLocalLogSheets`) |
+| Start-up with a session, and sign-in — **online or not** | reference lists whose lease ended (`expireLookups`) — the only expiry that runs offline |
+| Opening a lookup field | that one list, if its lease ended |
+
+**So offline, and without a session, nothing about rounds or files is ever deleted by time.** A
+window that passed while the tablet was offline is acted on at its next sync. The settings arrive
+on bootstrap — always at sign-in; otherwise when the app opens, comes back online or pulls the inbox,
+and only if the last bootstrap is an hour old (there is no timer of its own) — and an offline tablet
+runs on the last values it saw.
+
+**Which clock.** A retention **age** is measured on this device's clock against this device's own
+stamps (`syncedAt`, `submittedAt`, `uploadedAt` are written with `Date.now()`), so a wrong clock
+shifts it but cannot mix two clocks. Anything compared with a **server** time — the deadline guards
+(«reopened», «undelivered») and an expired draft's age, which counts from `dueAt` — is converted to
+the server's clock first (`serverNow(now)`, see «The server's clock, on this device»).
+
+**Which settings.** Below, «synced window» is `syncedRetentionHours` (1–720, default **24**), «the
+switch» is `unsyncedPurgeEnabled` (default **off**) and «unsynced window» is
+`unsyncedRetentionHours` (72–8760, default **168**). A tablet that has never received the block runs
+on the constants it shipped with (24 h / 7 days / 24 h — last column).
+
+### Rounds (`logSheets`), state by state
+
+| Local round | With the server's settings | Never received any (an older server) |
+|---|---|---|
+| **Draft, being worked on** (deadline not passed, not cancelled or taken away) | never | never |
+| **Draft whose deadline passed, with edits the server has not kept** — undelivered | **never, whatever the settings** (issue P-05) | never |
+| Draft whose deadline passed, **with no edits** of its own, or whose edits the server kept as late progress (`lateProgressKeptMarker`) | never — or, with the switch on, the unsynced window after `dueAt` | 24 h after `dueAt` |
+| Draft **cancelled** by a supervisor, or **taken away** (released, reassigned, taken over — `REVOKED`) | never **while its deadline stands** — it is still a draft. Once the deadline has passed the device marks it expired (`expireStaleLocalDrafts`) and the two rows above apply: kept for ever if it holds unkept edits | the same, with 24 h for the case without edits |
+| **Submitted, waiting to sync** (`pending` / `syncing`) | never | never |
+| **Synced** — accepted (`SUBMITTED`, `DUPLICATE`) | the synced window after `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` | 24 h |
+| Synced, then **reopened** by a supervisor (`isReopenedAfterSync`) | never while the new deadline stands; then the synced window | the same |
+| **Refused but held by the server** — `SUPERSEDED`, `CANCELLED`, or `EXPIRED` answered `kept: true` (late work, backend V25) | never — or, with the switch on, the unsynced window after `submittedAt` → `updatedAt` → `createdAt` | 7 days |
+| **Refused and held nowhere else** — `VALIDATION_ERROR` (waiting for the operator's correction), `ERROR`, too large to send, an `EXPIRED` an older server did not keep, any answer with `kept: false` | **never, whatever the settings** (issue P-05) | never |
+
+«Undelivered» is one definition, `isUndeliveredRound` (`undelivered.ts`) — the same one the
+dashboard's «ارسال‌نشده» card and the report to the panel count — and the purge asks it **before**
+any window, so no setting, legacy constant or clock can delete the only copy of a reading. Such a
+round leaves the tablet only by being delivered, or by a wipe an administrator ordered (below).
+
+**Archived snapshots** (`logSheetUserArchives` — another operator's round, kept when a shared tablet
+changed hands) are **never removed by time**. One goes when its owner's live copy of that round is
+delivered (synced) — on that owner's next sync or sign-in on this tablet — or when the owner restores
+it into the live round. Until the owner comes back, it stays.
+
+### Everything else the app keeps
+
+| What | When it goes |
+|---|---|
+| **A file waiting to upload** (`pending`, or `failed` and still retried) | never by time; it carries its own server sheet id, so it is delivered even after its round's row is purged |
+| A file **uploaded** (`synced`) | its **bytes** are dropped 7 days after upload, at the end of a sync pass; the row stays, so the form still shows it and fetches it from the server when online. The row goes with its round |
+| A file **parked** (refused for good, not retried) | with its round, when that round is purged — **except** one parked by a 403 (a voided round's evidence the server would not take): kept even then, being the only copy |
+| A file the operator removed | at once if it never reached the server; otherwise kept as «to delete» until the server confirms the delete |
+| **NFC fault reports** | **never** — sent ones stay too; only a wipe or clearing the app's data removes them |
+| **Reference lists** (lookup, backend §31) | when the lease runs out — per list, `device_lease_hours` (default 24) counted from the last sync that refreshed it, checked at every start and sign-in **even offline**; when the device clock reads earlier than the server time it last saw for that list; when no assigned round needs the list any more (next sync); when the server answers 403/404 for it; and at sign-out, the offline-session lock and a wipe — personal data |
+| Plant reference data from round bundles (assets, classes, field definitions, locations, templates, units) | never removed; each bundle overwrites what it carries |
+| The inbox snapshot | replaced by every inbox pull; cleared at sign-out, the offline-session lock, a user switch and a wipe |
+| The session (`authSession`) | online: when the server says it ended (401), when its expiry passes on the server's clock, or when the device-status check finds this device revoked with enrolment on; offline: kept — until the offline-session lock, if the plant switched it on; sign-out and a wipe |
+| The last server contact (`sessionLastContactAt`) | at sign-out, the lock, a 401 and a wipe |
+| The measured server clock (`serverClock`) | never; each new measurement replaces it. A wipe removes it |
+| Settings (server address, sync interval, orientation, the server-owned policies) | never — a wipe keeps only the server address |
+| The device key (`mfdcs-device-identity`) | when its device is revoked and this device asks to enrol again («درخواست ثبت تازه»), or once a wipe's confirmation has reached the server; never at sign-out |
+
+### What removes everything at once
+
+| Event | What goes | What stays |
+|---|---|---|
+| Sign-out | the session, the bound user id, the inbox snapshot, reference lists, the last server contact | every round, file, report, archive and setting — a shared tablet's next operator must not destroy the last one's unsent work |
+| **The offline-session lock** (backend V28) | the same as sign-out | the same as sign-out |
+| **A revoke found by the device-status check** (backend V28, enrolment on) | the same as sign-out | the same as sign-out — and the device key, which a new enrolment replaces |
+| **A wipe ordered by the server** (backend V28) | everything above, **unsent rounds included** | the server address; the device key only until the confirmation lands |
+| Clearing the app's data, uninstalling, a factory reset | everything, the key included | nothing |
+| A database from a **newer** build (a rollback) | if it holds anything unsent: nothing — the app refuses to start and says why; otherwise the whole database is deleted and recreated, which loses only what the server already has (synced rounds, reference data) and the settings row | the device key (its own database) |
+
+### Three examples, on the default settings
+
+- A round synced at 10:00 Monday is in History until the first sync after 10:00 Tuesday. Its photos'
+  bytes went a week after their upload at the latest — or with the round, whichever comes first.
+- A round refused as `VALIDATION_ERROR` stays until the operator corrects and sends it, however long
+  that takes and whatever the switch says. Refused as `SUPERSEDED` (kept on the server), it stays for
+  ever with the switch off; with the switch on and 168 h, until the first sync a week after it was
+  submitted.
+- A draft whose deadline passed with three readings in it stays for ever (undelivered) — unless the
+  server keeps those readings as late progress, after which it is an expired draft whose readings the
+  server holds: kept for ever with the switch off, a week after `dueAt` with it on.
+
+**Before V24 these windows were constants** — 24 h synced, **7 days refused, 24 h past the
+deadline** — and the last two deleted rounds whose readings had never reached the server
+([issue P-01](issue.md#p-01)). The server default now keeps them.
+
+**And the switch on never deletes the only copy ([issue P-05](issue.md#p-05), 2026-11-18).** The
+first version of §41 purged every failed row and expired draft alike once `unsyncedRetentionHours`
+had passed. `isEligibleForLocalPurge` now asks `isUndeliveredRound` first — the same question the
+«ارسال‌نشده» count asks — and keeps everything it covers: a `VALIDATION_ERROR` waiting for the
+operator's correction, an `ERROR`, an `EXPIRED` an older server did not keep, a refusal answered
+`kept: false`, a draft with unkept edits. Such a round leaves the tablet only by being delivered —
+or by a **wipe an administrator ordered** (backend V28, «Wipe on revoke» above). Clearing one by hand,
+or a ceiling that removes even the only copy after N days, is **backend roadmap §42 — weighed there,
+undecided**. Note for whoever builds either: this purge runs only online with a session
+(`useSyncManager`, and after a sync pass), so a time limit means nothing on a tablet opened offline
+until it also runs at app start.
+
+Four rules, all in `deviceRetention.ts`, that make sure a value nobody chose never deletes work:
+
+1. **Never received → the shipped constants.** `settings.deviceRetention` is optional and has no
+   entry in `DEFAULT_SETTINGS`; its absence is the signal. A tablet talking to an older server
+   therefore behaves exactly as before. Do not add a default object: it would be
+   indistinguishable from a value the server chose.
+2. **Received but unreadable → server defaults, purge off.** A block that is not an object, an
+   hour that is not a positive finite number (zero included — it would mean «now»), a switch that
+   is anything but exactly `true`. Each field is read on its own, so one bad value costs nothing
+   else.
+3. **Clamped twice** — when `pullBootstrap` stores the block and again when the purge reads it, so
+   a record corrupted in IndexedDB is held to the same bounds as one corrupted on the wire.
+4. **A settings row that cannot be read purges nothing that pass.** The pass runs again after the
+   next sync; guessing a window could delete what an administrator chose to keep.
+
+A server that sends no block (or `null`) leaves the stored values alone, like `attachmentLimits`
+and `mobilePolicy`; an offline tablet keeps the last values it saw. Regression tests:
+[`deviceRetention.test.ts`](../src/services/sync/deviceRetention.test.ts),
+[`cleanupRetention.test.ts`](../src/services/sync/cleanupRetention.test.ts),
+[`retentionRoundTrip.test.ts`](../src/services/sync/retentionRoundTrip.test.ts) and the
+«device retention» block of [`bootstrapLimits.test.ts`](../src/services/sync/bootstrapLimits.test.ts).
+
+---
+
+## Rounds the server has received in no form — «ارسال‌نشده» (backend V25)
+
+`services/sync/undelivered.ts` is the **one** definition, read by the dashboard card
+«ارسال‌نشده», the device-check page and the report to the panel:
+
+| Counted | Not counted |
+|---|---|
+| A submitted round refused with nothing kept: `failed` with no `serverKeptAt` and an outcome other than `SUPERSEDED` / `CANCELLED` (`EXPIRED` from an older server, `VALIDATION_ERROR`, `ERROR`, too large to send, or a row an older app failed locally) — **or any outcome answered `kept: false`** (`serverKeepRefusedAt`, backend V26) | `synced`; still queued (`pending` / `syncing` — that is «در انتظار ارسال»); refused but kept (`serverKeptAt`, or `SUPERSEDED` / `CANCELLED` without `kept: false`, kept since backend V14) |
+| A draft with edits of its own that can no longer travel as progress — expired, cancelled, revoked — unless the server kept those edits (`lateProgressKeptMarker` ≥ the newest marker) | An open draft (ordinary progress); a draft with no edits; an archived snapshot (its own store) |
+
+The dashboard counts over the viewer's own rows, like its other cards; the device-check page and the
+report count the **whole device**, because they answer "what would be lost if this tablet were
+wiped".
+
+**The report** (`services/sync/backlogReport.ts`) is `POST /api/sync/backlog` with the count and
+the oldest, sent after a sync pass **only when** the number changed, an hour has passed, or the
+signed-in session is a different one (the server keeps it on the session's row — found live: a
+second operator signing in with the count unchanged was otherwise never reported). The last report
+is `syncMeta.lastBacklogReport`. Best-effort: its own try/catch, and a 403/404 from an older server
+is swallowed. It is what lets a supervisor see a tablet holding work nobody has seen — and,
+since issue P-05, exactly the rounds the local purge will never touch, whatever the switch says.
+
+---
+
 ## Pull
 
 ### `pullBootstrap`
 
-Master data plus server-owned settings (the attachment ceilings). Staleness-gated:
+Master data plus server-owned settings (the attachment ceilings, the scanning policies and, since
+backend V24, `deviceRetention` — see «How long a round stays on this device» above). All three
+blocks land in one settings write. Staleness-gated:
 
 ```ts
 pullBootstrapIfStale(maxAgeMs)
@@ -591,6 +1033,30 @@ the operator records it rather than after.
 ### `pullInbox`
 
 The operator's sheets: assigned plus claimable pool.
+
+### Reference lists (backend roadmap §31 Phase 2)
+
+Right after the inbox merge, `syncRequiredLookups(requiredFromBundles(assigned))` brings the
+device's lists in line with what the **assigned** rounds declared in `context.requiredLookups` —
+which is exactly the server's grant. It never throws: a list problem must not stop the inbox, and a
+lookup field always has code-only entry to fall back on.
+
+| Situation | What it does |
+|---|---|
+| A list no assigned round needs | dropped (set difference) |
+| Never fetched, a pass unfinished, a revision behind the round's, or past half its lease | fetched page by page (500) from the stored `(updatedAt, id)` cursor — so an interrupted pass resumes and a held list fetches only what changed. The revision recorded is the **first** page's (backend AGENTS.md #217) |
+| Current and within half its lease | nothing — each page is a row in the server's download log |
+| 403 / 404 | the grant is gone: dropped |
+| Network failure | kept as it is; tried again at the next pull |
+
+A copy is searched only while **usable** — a full pass reached the end, the lease runs, and the
+device clock is not behind the last server time seen (`lookupStore.isUsable`). Otherwise the field
+says why («not on this device», «still syncing», «lease ended») and takes a code.
+
+Because the inbox is not pulled on the push tick, a list can lag behind the server while the
+operator works. The field's **«به‌روزرسانی فهرست»** button (`refreshLookup`) fetches that one list
+now: from its cursor, renewing its lease, dropped on 403 / 404, no other list touched. A field whose
+definition sets `lookupAcceptsUnlistedCode` also offers «use this code» when a search finds nothing.
 
 ### The local-work archive, and the round trip that broke it
 
@@ -824,6 +1290,30 @@ from the server, so a marker still standing describes an opinion that no longer 
 are also cleared outright when the server accepts the work. Both, not one — the reopen-and-continue
 path turns a delivered row back into a draft, which re-arms the gate for anything left behind.
 
+#### Decided inside the write
+
+The ordinary refresh of a round being walked reads the stored row, then awaits — the context
+merge, the session user — and only then writes. An operator can save an asset or the round's
+questions in that gap, and a write built from the earlier read put back the values the save had
+just replaced **and cleared its marker**, so the save vanished without ever being pushed. The
+ordinary branch now writes through `updateLogSheetFrom(localId, current => …)`: the row is re-read
+**inside one `rw` transaction**, and `mergeValuesFromRow` — the pure half of the merge that decides
+entries, round answers and signature baselines — runs against it there. A save is either before
+the transaction, and seen by the decision, or after it, and untouched. The builder must be
+synchronous: an IndexedDB transaction commits as soon as nothing is pending on it. The
+reset-draft and mark-synced branches hand the row to the server's version on purpose (with an
+archive first when work would be lost) and keep their single read.
+
+#### Signature verdicts (backend roadmap §32)
+
+The bundle carries `signatureStates` — the server's verdict (`VALID`, `STALE`, `NOT_BOUND`) for
+every signature on the round, keyed by owner and field — and the merge stores it with
+`signatureBaselines`: for each `VALID` signature, this device's fingerprint of the answers it
+covers **as this merge delivered them**. The field then shows «امضا پیش از تغییر …» when the
+answers on screen no longer match that baseline, before anything is saved; a drawing not yet
+delivered is judged against the `localFingerprint` taken when it was drawn. A device fingerprint
+is only ever compared with another device fingerprint, never with the server's hash.
+
 #### Why nothing about `formData` can answer this
 
 Three predicates have stood here, and the two that read the data both lost real readings.
@@ -915,6 +1405,29 @@ fail. That is the merge being right, not the test.
 - **Deleted after confirmation**, and only then — the device's copy is the only copy until the
   server has it.
 - **Deletions drain first**, before any upload in the same pass.
+
+### An id somebody else already used (issue P-06, backend B-10)
+
+The id is minted here and reaches the server inside the round's answers **before** the bytes do,
+and anyone who may read the round may read it — so a colleague could upload their own file under it
+first. The server now answers that `409` with `code: ATTACHMENT_ID_TAKEN` (`ApiError.code`), and
+[`attachmentIdTaken.ts`](../src/services/sync/attachmentIdTaken.ts) re-mints:
+
+1. **Only while the round can still carry a changed answer to the server** — a draft (its next
+   progress or late-progress push carries it) or a completion not yet sent (its submit carries
+   it). A delivered or refused round's answers are final on the server, so a re-mint there would
+   upload a file nothing names: the row is **parked** instead, bytes kept, with
+   `ATTACHMENT_ID_TAKEN_MESSAGE` and status 409 (never revived by sign-in).
+2. **In one Dexie transaction**: the attachment row moves to a fresh UUID (`idRemintedFrom` = the
+   old id), and the reference in the entry's `formData` — or the round's own `sheetFormData` for
+   media with no asset — is rewritten in place, order kept, and marked edited (`locallyEditedAt` /
+   `sheetFormLocallyEditedAt`) so the next push carries it and later merges keep it. A crash can
+   never leave an answer naming an id no row holds.
+3. **Uploaded again at once** — the one retry. `idRemintedFrom` is also the rule: a second
+   collision parks the row.
+
+A plain `409` (the field is full) is unchanged: retried, never re-minted. Tests:
+`attachmentIdTaken.test.ts`.
 
 ### Deleting is sync work too
 
@@ -1059,8 +1572,9 @@ from the server *moments before* this device's own submission landed, which woul
 just-completed sheet look reopened. A fetch issued while the row is already `synced` cannot see
 that state, because the `synced` stamp is only written after the server committed the completion.
 
-`cleanupLogSheets` holds a reopened row back from the 24-hour synced purge while its new
-deadline stands — it is live work, and it is also the only place `filledVia` survives.
+`cleanupLogSheets` holds a reopened row back from the synced purge (24 hours by default, the
+server's `device.synced_retention_hours`) while its new deadline stands — it is live work, and it
+is also the only place `filledVia` survives.
 
 **An approved round cannot be reopened at all** until the supervisor withdraws the approval:
 `reopen`, `void` and `extend` all refuse `APPROVED` on the server. The device does not need to

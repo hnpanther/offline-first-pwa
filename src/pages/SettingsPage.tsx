@@ -28,6 +28,12 @@ import { resolveBaseUrl } from '@/services/api/client'
 import { clearAuthSession } from '@/services/auth'
 import { syncManager } from '@/services/sync'
 import { useScreenOrientation } from '@/hooks/useScreenOrientation'
+import {
+  DEFAULT_SYNCED_RETENTION_HOURS,
+  normalizeDeviceRetention
+} from '@/services/sync/deviceRetention'
+import { normalizeOfflineSessionLimit } from '@/services/auth/offlineSession'
+import { currentServerClock } from '@/services/clock/serverClock'
 import type { AppSettings } from '@/types'
 
 export function SettingsPage() {
@@ -50,6 +56,11 @@ export function SettingsPage() {
   // (services/settings/deliveryServerUrl.ts), so the field is shown but cannot be edited.
   const serverFixedByPage = deviceServerFollowsPage()
   const limits = settings.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits
+  // `undefined` until a server has sent one — the purge then runs on the shipped constants.
+  const retention = normalizeDeviceRetention(settings.deviceRetention)
+  // Backend V28 — shown as this device runs it: absent means it never locks.
+  const offlineLimit = normalizeOfflineSessionLimit(settings.offlineSessionLimit)
+  const measuredClock = currentServerClock()
   const orientationLockSupported = isOrientationLockSupported()
   // Calling the hook here re-applies the lock and reports back, so the alert below reflects
   // the choice that was just saved rather than the one in force when the app launched.
@@ -122,7 +133,14 @@ export function SettingsPage() {
           // None of these are written from this screen; the device is not their owner.
           attachmentLimits: stored.attachmentLimits ?? DEFAULT_SETTINGS.attachmentLimits,
           nfcStrictSerialMatch: stored.nfcStrictSerialMatch,
-          imageAnnotationEnabled: stored.imageAnnotationEnabled
+          imageAnnotationEnabled: stored.imageAnnotationEnabled,
+          // Was missing from this list, so a form opened before a bootstrap could write the
+          // manual-entry policy it remembered back over the one the server had since sent.
+          nfcManualEntryEnabled: stored.nfcManualEntryEnabled,
+          // Backend roadmap §41. Taken from the stored row for the same reason — a stale form
+          // writing back an old retention would bring back a purge an administrator turned off.
+          // `undefined` is kept as `undefined`: it means "never received", not a value to invent.
+          deviceRetention: stored.deviceRetention
         }),
         reload: () => window.location.reload()
       })
@@ -281,6 +299,88 @@ export function SettingsPage() {
                 <Typography component="dd" variant="body2" fontWeight={700} sx={{ m: 0 }}>
                   {settings.imageAnnotationEnabled ? t.settings.policyOn : t.settings.policyOff}
                 </Typography>
+              </Box>
+              {/* Backend roadmap §41. Read through the same normalisation the purge uses, so the
+                  numbers shown are the ones this device actually runs under. */}
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.syncedRetention}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.syncedRetentionHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {t.settings.retentionHours(
+                      retention?.syncedRetentionHours ?? DEFAULT_SYNCED_RETENTION_HOURS
+                    )}
+                  </Typography>
+                  {!retention && (
+                    <Typography variant="caption" color="text.disabled" component="div">
+                      {t.settings.retentionNotReceived}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.unsyncedPurge}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.unsyncedPurgeHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {!retention
+                      ? t.settings.unsyncedPurgeLegacy
+                      : retention.unsyncedPurgeEnabled
+                        ? t.settings.unsyncedPurgeAfter(retention.unsyncedRetentionHours)
+                        : t.settings.unsyncedPurgeNever}
+                  </Typography>
+                  {!retention && (
+                    <Typography variant="caption" color="text.disabled" component="div">
+                      {t.settings.retentionNotReceived}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.offlineSessionLimit}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.offlineSessionLimitHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {offlineLimit?.enabled
+                      ? t.settings.offlineSessionLimitAfter(offlineLimit.hours)
+                      : t.settings.offlineSessionLimitOff}
+                  </Typography>
+                </Box>
+              </Box>
+              <Box sx={{ display: 'contents' }}>
+                <Box component="dt">
+                  <Typography variant="body2" color="text.secondary">
+                    {t.settings.serverClockOffset}
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" component="div">
+                    {t.settings.serverClockOffsetHint}
+                  </Typography>
+                </Box>
+                <Box component="dd" sx={{ m: 0, textAlign: 'start' }}>
+                  <Typography variant="body2" fontWeight={700}>
+                    {measuredClock
+                      ? t.settings.serverClockOffsetValue(Math.trunc(measuredClock.offsetMs / 60_000))
+                      : t.settings.serverClockUnmeasured}
+                  </Typography>
+                </Box>
               </Box>
             </Box>
           </CardContent>

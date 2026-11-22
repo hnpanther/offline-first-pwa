@@ -4,7 +4,7 @@ The PWA is static files. Everything hard about deploying it is around them: ngin
 those files **and** proxy `/api/` to the backend from the same origin, over TLS that Android will
 accept, started by the machine rather than by a person.
 
-The backend half is in [the backend's `docs/deployment.md`](../../../JavaProject/backend-offline-first/docs/deployment.md).
+The backend half is in [the backend's `docs/deployment.md`](../../backend-offline-first/docs/deployment.md).
 The two must agree on one thing above all: **the origin the tablet loads the app from is the
 origin its API calls go to.** Get that wrong and every request is cross-origin, which means CORS,
 which means the tablets work until they do not.
@@ -14,6 +14,9 @@ which means the tablets work until they do not.
 > Procedure: [docker/DEPLOY.md](../docker/DEPLOY.md). The reasoning for each nginx block below
 > applies to both. The Docker config is the only one that sends security headers today; the
 > systemd and WinSW configs in this file still send none ([roadmap.md §1](roadmap.md)).
+> One difference is deliberate: the container's nginx runs as uid 101, never as root, so it
+> listens on 8080/8443 inside the container (published as 80/443) and sets
+> `absolute_redirect off`. The configs below run a root master process and keep 80/443.
 
 ---
 
@@ -348,7 +351,8 @@ server {
     # default is 1 MB, and it rejects the rest with a 413 that the operator reads as "upload
     # failed" and nobody reads as a proxy limit. Only /api/ passes through here — the admin
     # panel's Excel import talks to 8081 directly and is bounded by its own multipart limit.
-    client_max_body_size 32m;
+    # Paired with the backend's app.http.max-json-body-bytes (64 MB): change both together.
+    client_max_body_size 64m;
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -597,8 +601,9 @@ http {
         gzip_types        text/plain text/css application/javascript application/json
                           image/svg+xml application/manifest+json;
 
-        # See the Linux block above: 25 MB attachments against nginx's 1 MB default.
-        client_max_body_size 32m;
+        # See the Linux block above: 25 MB attachments against nginx's 1 MB default, and the
+        # pairing with the backend's app.http.max-json-body-bytes (64 MB).
+        client_max_body_size 64m;
 
         location / {
             try_files $uri $uri/ /index.html;
@@ -846,7 +851,7 @@ curl -s http://127.0.0.1:8081/actuator/health/readiness
 
 ## Related
 
-- [Backend deployment — the Java service, database, backups](../../../JavaProject/backend-offline-first/docs/deployment.md)
+- [Backend deployment — the Java service, database, backups](../../backend-offline-first/docs/deployment.md)
 - [README § Production Deployment](../README.md#production-deployment)
 - [docs/storage.md § Changing the schema](storage.md#changing-the-schema)
 - [docs/device-features.md](device-features.md) — what each device capability needs

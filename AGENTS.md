@@ -27,7 +27,7 @@ This file is conventions and traps. The references below are kept current with t
 | License | GPL-3.0-or-later — Copyright (C) 2026 hadi_hnp |
 | UI language | Persian (RTL); agent docs in English |
 | Backend (separate repo) | `backend-offline-first` — Spring Boot, default **8081** |
-| Typical backend path (local) | `D:\LocalStorage\Project\JavaProject\backend-offline-first` |
+| Typical backend path (local) | `H:\Project\offline-first-project\backend-offline-first` (the sibling `../backend-offline-first`) |
 | Primary user journey | Log sheets (inbox → fill → local submit → batch sync) — the only journey; the legacy DataRecord stack was deleted |
 
 ---
@@ -285,6 +285,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
   overwrite a ceiling a bootstrap just refreshed. A missing/failed bootstrap keeps the last
   known values — offline capture has to work against *some* rules.
 - **`settings.nfcStrictSerialMatch` and `settings.imageAnnotationEnabled` are server-owned too, and arrive together in `mobilePolicy`.** Same rules as the ceilings: applied in the *same* `saveSettings` write as `attachmentLimits` (two read-modify-write passes would race and the second would win with its own stale snapshot), never written from `SettingsPage`, and left untouched when a server sends no `mobilePolicy` — resetting to defaults there would silently re-enable a step an admin switched off, or hand a device a scan rule nobody chose. Both are `app_settings` rows edited in the web panel's Settings page (`nfc.strict_serial_match`, `attachments.image_annotation_enabled`), **not properties** — a scan rule that needs a redeploy to change is useless to a site whose serials are not recorded yet and whose every scan is being rejected right now. Their **defaults are ON and the fallback on an unreadable row is ON**, deliberately: a garbled or missing value must never be the thing that quietly downgrades an integrity rule. `bootstrapLimits.test.ts` pins the client half, `AppSettingsServiceTest` the server half.
+- **`settings.deviceRetention` (backend V24, roadmap §41) is the third server-owned block, and `SettingsPage` must re-send it from the stored row like the others.** That list in `onSubmit` is the whole defence against a form opened before a bootstrap writing an old value back — and it had silently lost one member: `nfcManualEntryEnabled` was never on it, so a Settings save from a stale form could restore a manual-entry policy the server had since changed. Both are on it now. Any new server-owned field must be added there in the same change, or the next admin who presses «ذخیره» on that screen undoes the server. The block itself is read in `pullBootstrap` through `normalizeDeviceRetention` and written in the same single `saveSettings` as the other two; see «Local retention» below for what it controls.
 - **Manual tag entry is `canEnterTagManually(session)` — permission only, no second argument.** The `allowManualEntry` device switch that used to sit beside it granted the ability to *every* caller, so anyone who could open the tablet's Settings screen could let a whole shift type tags instead of scanning them. Do not reintroduce an override parameter; `auth.test.ts` has a regression case that calls it with a legacy truthy second argument and asserts it changes nothing. **A tablet provisioned before this change still has `allowManualEntry: true` sitting in its stored settings row** — `getSettings()` spreads the saved row over the defaults, so the dead key survives. It is inert because nothing reads it, and it is deliberately not migrated away (no Dexie version bump for a value with no readers) — but never reintroduce a read of that key, or those devices would silently come back with manual entry granted to everyone. Confirmed present on a real device during the live run of this change.
 - **The annotation step runs on the output of `compressImage`, never on the camera's `File`.** This is the whole reason marks land where the operator drew them: the compressed bitmap is what gets stored either way, so preview and bake share one source. `createImageBitmap(file)` is called without `imageOrientation`, so EXIF handling can differ between what a preview shows and what a later decode produces — annotate the raw file and every mark is rotated off its target on exactly the devices whose cameras set the EXIF flag. Related invariants in `ImageAnnotationDialog`: the canvas needs `touch-action: none` or the first stroke of every session scrolls the dialog instead of drawing; `setPointerCapture` keeps a stroke alive when a finger leaves the canvas, which is routine on a phone; `ctx.direction = 'rtl'` is required before `fillText` or a mixed Persian/English label comes out reordered; and `await document.fonts.ready` before baking, because unlike the live preview the baked pixels cannot be repainted once the real font loads. Confirming with no marks must return the **original blob** — re-encoding an untouched photo costs a second lossy generation for nothing. Nothing is written to IndexedDB until the operator confirms, so cancelling leaves no orphan row and no orphan blob. Regression tests: `imageAnnotation.test.ts`.
 - **Propagation is not instant, by design.** `useMasterDataSync` throttles bootstrap to once an
@@ -435,16 +436,27 @@ Path alias: `@/*` → `src/*`.
 | `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch` |
 | `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, … |
 
+### Late work (backend V25 — issues P-01, P-02, P-03)
+
+- **The device never decides that the server will refuse.** `markExpiredSheets` and the deadline filter in `getPendingLiveLogSheets` are gone, and the inbox merge re-labels as EXPIRED only a row the server has already answered: each of them used to take a late completion out of the queue before it was sent, and the server's answer to late work is to keep it. Re-adding any "do not queue what the server will refuse" check reintroduces P-02.
+- **`kept` is not applied — so on `kept` the edit markers stay.** A late-progress answer records `lateProgressSentMarker` (and, when kept, `lateProgressKeptMarker` / `lateProgressKeptAt`) and leaves `locallyEditedAt` / `sheetFormLocallyEditedAt` alone. Clearing them, as issue P-01 first proposed, loses the readings on the next merge after an extension: the bundle carries the server's values, which do not include the kept ones, and only the markers make the device win. The extension (the `extended` branch of `mergeInboxIntoLocalSheets`) clears `lateProgressSentMarker` instead, and the readings then go as ordinary progress. Verified live.
+- **Each state of the markers is sent once, expired or not.** `isLogSheetProgressOwnedByUser` refuses a row whose newest marker the last late push already covered. Without it a tablet whose clock runs behind the server's re-sends the same kept readings every 30 s.
+- **«ارسال‌نشده» has one definition** — `services/sync/undelivered.ts` — and the dashboard, the device-check page and the panel report all read it. The report (`backlogReport.ts`) remembers the **session** it last reported to: the server keeps the number on the session's row, and a memory per device left a second operator's session unreported (found live).
+
 ### Local retention (`services/sync/cleanupLogSheets.ts`)
 
 Runs after every successful sync pass; deletes from `logSheets` only, never from the
-server. Constants live at the top of that file — check them there before quoting numbers.
+server. **The windows are the server's** (backend roadmap §41, V24): `settings.deviceRetention`,
+mirrored from bootstrap and turned into windows by `resolveRetentionWindows` in
+`services/sync/deviceRetention.ts`; the per-row decision is the pure `isEligibleForLocalPurge`.
+The numbers below are the server's defaults — check the panel before quoting them for a site.
 
 | Local state | Retention | Anchor (first non-null) |
 |---|---|---|
-| Synced | **24h** (`SYNCED_RETENTION_MS`) | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
-| Failed | **7d** (`FAILED_RETENTION_MS`) | `submittedAt` → `updatedAt` → `createdAt` |
-| Expired draft | **24h** (`EXPIRED_DRAFT_RETENTION_MS`) | `dueAt` → `updatedAt` → `createdAt` |
+| Synced | `syncedRetentionHours` — **24h** default (1–720) | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
+| Failed | **never** unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` (168h default, 72–8760) | `submittedAt` → `updatedAt` → `createdAt` |
+| Expired draft | **never** unless `unsyncedPurgeEnabled`; then `unsyncedRetentionHours` | `dueAt` → `updatedAt` → `createdAt` |
+| — any of the three, on a device that never received `deviceRetention` | the shipped constants: **24h / 7d / 24h** (`LEGACY_RETENTION_WINDOWS`) | as above |
 | Active draft | never | — |
 | Submitted + pending sync | never (waits for a server outcome) | — |
 | Synced, then reopened by a supervisor (`isReopenedAfterSync`) | never while `dueAt` is still ahead; the ordinary rules resume once it passes | — |
@@ -452,8 +464,19 @@ server. Constants live at the top of that file — check them there before quoti
 | `attachments` (bytes) | **7d after upload** (`ATTACHMENT_RETENTION_MS`, in `storage/attachments.ts`); the row survives and the file re-fetches on demand | `uploadedAt` → `createdAt` |
 | `attachments` (rows) | dropped with their sheet — but **only the synced ones** (`deleteSyncedAttachmentsForLogSheet`); anything still queued keeps its own `logSheetServerId` and is still delivered | — |
 
+Three traps in the §41 code, each of which a tidy-up would reintroduce:
+**(a)** `deviceRetention` is optional with **no default in `DEFAULT_SETTINGS`** — its absence is
+how the purge knows no server has spoken, and keeps today's constants for a tablet on an older
+server; a default object would be indistinguishable from a value the server chose.
+**(b)** «Present but unreadable» is not «absent»: a garbled block (or a stored non-object) reads as
+the server defaults with the undelivered purge **off**, never as the legacy constants; an hour
+that is not a positive finite number is the default, never zero; the switch is on only for
+exactly `true`. **(c)** `cleanupLocalLogSheets` returns 0 when the settings row cannot be read —
+purging nothing is always safe, a guessed window is not. Regression: `deviceRetention.test.ts`,
+`cleanupRetention.test.ts`, `retentionRoundTrip.test.ts`.
+
 Two consequences worth internalizing before changing any of this: (1) flipping a row to
-`synced` silently shortens its life to 24h, which is why the `mark-synced` gotcha above
+`synced` silently shortens its life to the synced window (24h by default), which is why the `mark-synced` gotcha above
 had to take an archive copy — the archive is the only storage exempt from retention;
 (2) an archive is removed **only** by `removeArchivedLogSheet` (when that user's own work
 for the sheet is confirmed synced), so anything parked there is effectively permanent —
@@ -515,7 +538,7 @@ By role, the resulting UI is unchanged:
 
 > These are UI gates only; the server is authoritative. Hiding a control the server would allow
 > misleads the operator just as much as showing one it would refuse — which is why the sets must
-> match. Backend model: [backend `docs/security.md`](../../JavaProject/backend-offline-first/docs/security.md).
+> match. Backend model: [backend `docs/security.md`](../backend-offline-first/docs/security.md).
 
 ---
 
@@ -544,6 +567,14 @@ By role, the resulting UI is unchanged:
 | Putting a sign-out reason in router location state | `ProtectedRoute`'s own `<Navigate>` overwrites it; use the `sessionEnded` store flag |
 | Declaring one PNG `purpose: "any maskable"` | Android crops it to its own mask — ship a separate maskable file, see README **App Icon** |
 | Gating what may be **typed** on a field's warning/danger range | Ranges decide severity, nothing else. Tying the minus sign to "does some range have a negative minimum" made sub-zero readings unrecordable unless a threshold happened to be configured. Every `type === 'number'` field is signed, full stop |
+| Keeping a reference list past sign-out, past its lease, or after no assigned round needs it | It may be personal data (backend roadmap §31). `clearUserSessionContext` clears it; `lookupStore` deletes an expired copy the moment anything reads it and at startup; `lookupSync` drops what the inbox no longer needs. The one reference store that does **not** survive logout |
+| Showing a lookup field with an empty list and no explanation | Silence is the bug (backend AGENTS.md #177). Absent, syncing or expired → the field says so and takes a code, which the server resolves |
+| Offering «use this code» beside search results, or on Enter | Only as an explicit row, only when the search found nothing, only on a field with `lookupAcceptsUnlistedCode` (`unlistedCodeFor`). A name that matched somebody is a choice from the list; a code recorded by accident is an `UNKNOWN` someone must review |
+| Calling `syncRequiredLookups` to refresh one list | It drops every list not in the set it is given. The field's button uses `refreshLookup`, which touches only the one list |
+| Re-reading a recorded lookup answer's label from the list | The record shows the label it was given; the item may since be renamed, retired, or gone from the device. Display `lookupChoiceText(value)`, never a fresh lookup |
+| Recording the LAST page's revision for a list pass | Record the first page's: a change made during the pass must leave the device one fetch behind, never ahead (backend AGENTS.md #217) |
+| Refusing a typed value on anything but `entryRange` / `integerOnly` | What can be typed is the entry limit (backend roadmap §40), and only it; bands judge, they never refuse. Its readers (`entryRange`, `entryLimitError`) must stay no stricter than the server's `FieldValidationSupport` — every unreadable shape is «no limit» — or the device strands a round the server would accept |
+| Stripping the separator on an `integerOnly` field | `12.5` would become `125`, a different reading that may pass the limit and be saved. Leave it typeable; `entryLimitError` refuses it by name and `inputMode: 'numeric'` keeps it off the keypad |
 | Reintroducing `validation.allowNegative` | It cannot survive: `FieldValidationSupport.build(...)` rebuilds the validation object from scratch on every field save with only `options`, `warning` and `danger`, and the backend has no such concept. A field that must not go negative gets a danger range with `min: 0` |
 | Widening a numeric field's `inputMode` to get a minus key | `decimal` is what keeps the on-screen keyboard numeric. The `±` adornment exists precisely because that layout has no minus |
 | Writing `fontFamily: 'monospace'` (or any bare generic) | That keyword resolves to whatever the **browser** names as its fixed-width font — a per-device setting, not a constant. Use `FONT_MONO` from `@/theme`; a generic is legal only as the last entry behind a font we ship |
@@ -570,7 +601,7 @@ By role, the resulting UI is unchanged:
 | Attachment behaviour | `storage/attachments.ts`, `sync/attachmentSync.ts`, `utils/mediaCapture.ts`, and the mirror-image rules in the backend’s `AttachmentService` |
 | Recording ceilings | `utils/mediaCapture.ts` (`beginRecording`), `AttachmentFieldInput`'s auto-save effect, `recordingLimits.test.ts`, and the server's `AttachmentService.enforceDuration` — the two must agree or a capped clip is refused |
 | Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
-| Production deploy | `.env.mobile.example`, README nginx section, and `docker/` (`DEPLOY.md`, the nginx template and snippets). The Docker nginx config and `docs/deployment.md`'s configs describe the same site and must not drift |
+| Production deploy | `.env.mobile.example`, README nginx section, and `docker/` (`DEPLOY.md`, the nginx template and snippets). The Docker nginx config and `docs/deployment.md`'s configs describe the same site and must not drift — except the container's listen ports (8080/8443) and `absolute_redirect off`, which differ on purpose because it runs as uid 101 |
 | A device capability (NFC, camera, mic, GPS) | `docs/device-features.md`, **and** whether the packaged app can do it at all — a browser API is not automatically in a WebView, and a permission not in `AndroidManifest.xml` fails with no prompt. See `docs/apk.md` |
 | The server address | **Browser:** nothing in the app — it follows its own origin; nginx, the certificate's subjectAltName and DNS are what change. **APK:** an administrator changes it on each tablet in Settings while the old address still answers; `.env.mobile` (then `npm run build:apk`, which rebuilds `dist/` too) only decides what a **fresh** install starts with. README **Moving the server to a new address** |
 | Anything under `android/` | `docs/apk.md`, and rebuild — Gradle picks it up, no `cap add` needed |
@@ -882,7 +913,9 @@ pass and counted in the badge for ever. `isVoidedSubmission` reads the outcome t
 Its files go up as the void's evidence (backend V15); a 403 on one is final and parks it with its
 bytes kept — while every *other* 403 stays retryable, because on a shared tablet it usually means
 the wrong person is signed in. **And a 403-parked row is never deleted**: the cleanup that retires
-a week-old failed sheet drops its other parked files, but not these — the refusal is about the
+a failed sheet (after a week on a tablet that never received backend V24's retention, otherwise
+only if an administrator switched the purge of undelivered rounds on) drops its other parked
+files, but not these — the refusal is about the
 server (an old one, or the wrong deploy order), and the bytes are the only copy.
 
 ### "Is there work here?" means answered assets OR answered round questions
@@ -1048,6 +1081,175 @@ added — because a `Map` key is compared by `SameValueZero`, so keying on anyth
 speed-up into a silently wrong match. `app.sync.batch-max-items` is 500, so the worst case was
 250,000 comparisons on the main thread of a tablet that is also rendering.
 
+### A bundle merge decides inside its write — never from a row read before its awaits
+
+`applyLogSheetBundle` read the stored row, awaited the context merge and the session, and then wrote
+a patch decided from that earlier read. A save made in the gap — an asset or the round's questions
+— was overwritten and its marker cleared, so it vanished without ever being pushed. The ordinary
+branch now writes through `updateLogSheetFrom(localId, current => …)` with `mergeValuesFromRow`,
+inside one `rw` transaction. **Any writer that decides what to write from what the row holds must
+do the same**; the builder must be synchronous, or the IndexedDB transaction commits early.
+
+### Delivered round answers are not taken back by an older bundle
+
+A progress push that carried the round's answers records the server's `savedAt` as
+`sheetFormDeliveredAt`; a bundle whose `sheetFormUpdatedAt` is older keeps the device's answers.
+Without it, a bundle fetched before the push landed and merged after it put the previous answers
+back — and the next save sent them to the server again. Compare server time with server time only.
+
+### Round-level answers are pushed at once; asset saves are not
+
+`syncManager.pushProgressNow()` after «ذخیره پرسش‌ها» — a deliberate, rare save the supervisor reads
+live. Do not add it to the per-asset save: one request per asset multiplies the fleet's cost by the
+size of a round (backend roadmap §3). Both paths share `progressLane`, so they never push the same
+markers twice at once.
+
+### No comment between two `case` labels
+
+`no-fallthrough` reads a comment between `case 'image':` and `case 'signature':` as an intended
+fall-through without the marker, and fails the lint. Put the comment above the first label.
+
+### The submit queue goes in requests of twenty; answers are applied per request (issue P-04)
+
+`submitInChunks` (`submitChunks.ts`) is the only way a queue goes out. Do not go back to one request
+for the whole queue, and do not move the result handling after the loop: each request's answers are
+recorded as they arrive, so a dead link on the third request keeps what the first two delivered.
+`classifySubmitFailure` decides everything about a failure — `0`/`408`/`429`/`502`–`504` stop the pass
+silently, `413` splits, anything else leaves the rounds `pending` and is shown after three refused
+passes in a row. Never mark a round `failed` for a refused *request*: `failed` means the server judged
+*that round* (Rejected submissions, rule 2) — the one exception is a round `413` on its own.
+
+### A purge never deletes what `isUndeliveredRound` covers (issue P-05)
+
+`isEligibleForLocalPurge` asks `isUndeliveredRound` before any window, for failed rows and expired
+drafts alike, and whatever the server's switch says. The two must keep sharing that one definition:
+a purge rule written separately is exactly how a refused round was deleted while the dashboard still
+counted it. And `SUPERSEDED`/`CANCELLED` mean «held by the server» only through
+`isRefusalHeldByServer`, which lets `serverKeepRefusedAt` (an answer of `kept: false`, backend V26)
+override them — never read the outcome on its own.
+
+### Re-minting an attachment id is a move inside one transaction, and only once (issue P-06)
+
+The id is the `attachments` primary key, so `remintTakenAttachment` adds the row under the new id
+and deletes the old one in the same `rw` transaction that rewrites the round's reference — split
+them and a crash leaves an answer naming an id no row holds, which the server then treats as a
+reference that never resolves. Re-mint only while `canStillCarryNewReference` (a draft, or a
+completion not yet sent); otherwise park. Match the refusal by `ApiError.code ===
+'ATTACHMENT_ID_TAKEN'`, never by status alone: a plain `409` means the field is full and must stay
+retryable.
+
+### The sync tick reads by status, and reads the whole table once (issue P-08)
+
+The queue and the pending badge read `getLogSheetsByStatus('submitted')`, the progress lane
+`getLogSheetsByStatus('draft')`. A new per-tick reader should do the same rather than call
+`getAllLogSheets()`. The one full read of a pass is the purge's, after the submit, and it hands its
+survivors on (`purgeLocalLogSheets` → `reportUndeliveredBacklogIfChanged(…, sheets)`); never pass a
+purge rows read *before* awaited work, or it can delete a round that changed meanwhile.
+
+### A time compared with a server time is `serverNow()`; a time compared with a device stamp is `Date.now()` (roadmap §7)
+
+`dueAt`, a token's `expiresAt` and `lastBootstrapAt` are the server's; `syncedAt`, `submittedAt` as a
+retention anchor, `locallyEditedAt` and an entry's `createdAt`/`updatedAt` are this device's. Every
+deadline helper in `utils/logSheetStatus.ts` (and `isUndeliveredRound`, `canContinueReopenedLogSheet`,
+`isSessionValid`) now **defaults** to `serverNow()`, so a caller passing `Date.now()` explicitly
+silently goes back to the old behaviour — pass nothing, or convert (`serverNow(deviceNow)`), as the
+purge does for its guards while its retention ages stay on the device clock. Do **not** move the
+entry timestamps: the server echoes them back as the base it compares against, and a corrected value
+would make it refuse the clear that `locallyEditedAt` exists to protect. And `serverClock.ts` must
+not import the database: the deadline helpers read it, the database module reads those, and the
+cycle is why persistence is injected from `serverClockStore.ts`.
+
+### A wipe order is looked for before anything routes on the challenge, and before any key is thrown away (backend V28)
+
+`prepareProof` checks `wipeOrderOf(challenge)` **before** `routeFromChallenge`: with enrolment off the
+server answers `{enforced: false, wipe: true}`, and routing first takes the plain-login branch past
+the order. `startEnrollment` (on `DEVICE_REVOKED`) and `restartEnrollment` call `checkWipe` **before**
+`discardIdentity`, because a discarded key can never be told. The deletion runs only in
+`resumeDeviceWipe`, before `openDatabase()` — never from inside the running app, where a live query or
+a sync tick would reopen the database between the deletion and the reload. One order is carried out
+once: a repeat of an order the marker says is `confirming` only retries the confirmation, since the
+tablet may hold new work by then.
+
+### The offline-session lock never interrupts the asset form, and a re-run effect is not a navigation (backend V28)
+
+`useOfflineSessionGuard` decides its trigger from the path actually changing (`lastPathRef`), not from
+its effect re-running: if `signOut`'s identity ever changes, the effect re-runs with the same path,
+and treating that as a navigation would lock a form mid-entry. `timer` and `visible` never interrupt
+`/logsheets/:localId`; `start` and `route` may, because nothing typed exists yet or the form was left.
+The verdict uses `rawServerNow()` — **without** the floor, which would hide exactly the clock set back
+that the `clock` reason exists for.
+
+### A reason for an app-initiated sign-out lives in the store, and a late 401 must not overwrite it (backend V28)
+
+Two navigations land on `/login` when the app signs someone out: `signOut`'s own
+`navigate('/login', { state })` and `ProtectedRoute`'s `<Navigate to="/login" state={{ from }} />`,
+which fires the moment the session is cleared and **replaces** the router state. A reason carried
+only in router state therefore vanishes on some runs — found live: the «device revoked» notice
+disappeared when the sign-out followed a navigation away from a form. So `signOut` sets
+`store.signOutNotice` **before** clearing anything, and the login page reads the store first, like
+`sessionEnded`. Second half of the same race: while `signOut` is clearing the session, a request
+already in flight finds it gone (`sessionSilentlyExpired`) or answers 401 and raises the generic
+`sessionEnded` — found live as the offline lock's notice replaced by «نشست شما به پایان رسیده است».
+The login page clears `sessionEnded` when it shows a specific reason, and the unauthorized handler
+does nothing once the store holds no session. Keep both.
+
+### A check that may fire from several triggers claims its in-flight flag before its first await
+
+`useDeviceStatusWatch` reads its throttle from IndexedDB; set `inFlight` after that `await` and a
+reconnection plus a return to the foreground both read «due» and both ask the server — found live as
+two challenges a few milliseconds apart. Claim first, then read. The same applies to any hook whose
+triggers can coincide.
+
+### The device-status watch acts on a plain revoke only while enrolment is enforced (backend V28)
+
+`checkDeviceStatus` answers `revoked` only for `{enforced: true, deviceStatus: 'REVOKED'}`. With
+enrolment off the server says nothing about the device — a revoke then stops no login, so signing out
+would only send the operator back in — and a wipe order is the one thing it answers regardless. Its
+30-minute interval (`DEVICE_STATUS_CHECK_INTERVAL_MS`) is promised by the panel in Persian
+(«حداکثر نیم ساعت», backend `FaMessages.WIPE_TAKES_EFFECT` and `device-revoke.html`): change one and
+change the other.
+
+### Nothing sensitive in a URL — nginx writes the whole URL into both of its logs
+
+The access log's `uri` and the error log's `request: "…"` carry the path **and the query string**,
+verified with a real container; headers and bodies are never logged. The logs outlive the request
+by months (rotation, Filebeat, backups) and are readable by people the app's access rules do not
+cover. So a token, the enrolment code, or a name or personnel code a user typed must travel in a
+header or a `POST` body, never in `?…`. A server-side search added later is the likely way to break
+this. `docker/DEPLOY.md` §7a «Nothing sensitive in a URL».
+
+### The error log's level is set in the template, not in `nginx.conf`
+
+`nginx.conf` is copied into the image and is not rendered with the environment, so a `${PWA_…}`
+there would be passed to nginx literally. `PWA_ERROR_LOG_LEVEL` therefore drives a second
+`error_log` at http level in `templates/default.conf.template`; the `notice` line in `nginx.conf`
+stays for the process's own start/reload/shutdown messages. `05-pwa-logs.sh` refuses `debug` — the
+image runs the non-debug `nginx` binary, which accepts it and logs nothing more — and any unknown
+value, before nginx starts.
+
+### The container's nginx runs as uid 101 — ports, redirects and the key follow from it
+
+`docker/Dockerfile` declares `USER 101:101`, so nginx has no root master process (CIS Docker
+Benchmark 4.1). Three things change with it, and each one fails quietly if missed:
+
+- **It listens on 8080/8443 inside the container**, because a non-root process cannot bind below
+  1024; `docker-compose.yml` publishes them as the host's 80/443. A compose file older than the
+  image still publishes the container's 80/443, where nothing listens: the container reports
+  healthy and the host port refuses connections. Ship the two together.
+- **`absolute_redirect off` in `nginx.conf`.** Redirects nginx makes itself — the trailing slash
+  on a directory — would otherwise name the port it listens on (`https://host:8443/assets/`), not
+  the 443 the client used. Measured with it: `Location: /assets/`.
+- **`ssl/key.pem` must be readable by uid 101.** A key left `root:root 0600` stops nginx at start
+  with `[emerg] cannot load certificate key … Permission denied`. The fix is `chown 101:101`; the
+  key is in the workers' memory under any setup, so nothing is given away.
+
+The tmpfs mounts are owned by 101 through their `uid=`/`gid=` options, and the Dockerfile chowns
+the same two directories so a plain `docker run` works too. `apk upgrade` in the build cannot swap
+nginx.org's nginx for Alpine's own package only because the official image pins nginx and its
+modules in `/etc/apk/world`; the build compares `nginx -v` before and after as well (backend
+AGENTS.md #207). The host-install configs in `docs/deployment.md` keep 80/443 and a root master —
+that difference is deliberate, not drift.
+
 ### Lint
 `eslint.config.js` is flat config (ESLint 9); the `lint` script no longer passes `--ext`, which
 flat config rejects. The gate was previously failing to start at all, so it contributed nothing.
@@ -1079,6 +1281,10 @@ callback new on reconnect) and one reserved empty interface in the store.
   - **Headers.** A location that sets its own `Cache-Control` (`/assets/`, `sw.js`, the manifest) drops the server-level security headers entirely. That is why `docker/nginx/snippets/security-headers.conf` is included in the server block **and** in every location that has an `add_header`. Adding a location with its own header and no include ships it without a CSP.
   - **Client address.** `$proxy_add_x_forwarded_for` keeps whatever the client sent and appends the real peer. The backend (`AuthApiController`, `RequestMdcFilter`, `WebSessionMetadataStore`, `IntegrationApiKeyFilter`) records the **first** entry, so any caller could choose the IP that sessions and the audit trail show. Measured: a client header `1.2.3.4` arrived at the backend as `1.2.3.4, 172.21.0.1`. nginx is the first hop here, so it sets `X-Forwarded-For $remote_addr`. The documented systemd and WinSW configs were fixed the same way.
   - **Certificates under `cap_drop: ALL`.** The container's root cannot read a key file it does not own (no `CAP_DAC_OVERRIDE`): a `key.pem` owned by uid 1000 with mode 600 stops nginx with `Permission denied`. Measured both ways. `docker/DEPLOY.md` §4 has the `chown root` step.
+  - **`proxy_pass` with a URI inside an exact-match location rewrites the whole path.** Since 1.0.2 the sign-in endpoints have their own `location = /api/auth/login { … }` blocks (rate limit). In `location /api/ { proxy_pass UPSTREAM/api/; }` the URI part replaces the matched *prefix*, which happens to be the same path; in `location = /api/auth/login { proxy_pass UPSTREAM/api/; }` it replaces the *whole* matched path, and every sign-in would reach Spring as `POST /api/`. So the exact locations carry **no URI** (`proxy_pass ${PWA_BACKEND_UPSTREAM};`), and the shared proxy settings live in `snippets/api-proxy.conf` so the four blocks cannot drift. Verified: login, `/api/auth/challenge` and the enrolment call all reach their handlers through nginx.
+  - **A rate-limit `429` must be JSON, or the app reports a dead network.** nginx's own error page is HTML; the client parses `{"message": …}` (`services/api/client.ts`). `error_page 429 @pwa_rate_limited` returns the backend's shape with a Persian sentence, `Retry-After` and the security headers.
+  - **The log directory must be a bind mount, and logrotate wants names.** Two traps found while adding file logs in 1.0.3. (a) In the official image `/var/log/nginx/access.log` and `error.log` are **links to `/dev/stdout` / `/dev/stderr`**. A *named* volume mounted there is filled from the image on first use — links included — so it silently keeps logging to `docker logs` and never writes a file; only a host path (bind mount) replaces the links. `entrypoint.d/05-pwa-logs.sh` prints which of the two is happening on the first start-up line, and refuses an unwritable directory with a `FATAL` that names the `chown`. (b) `create 0640 101 101` in a logrotate file fails with `unknown group '101'`: logrotate resolves owner and group by **name**, and uid/gid 101 usually has no name on the host. `docker/logrotate/mfdcs-pwa` gives the mode alone; logrotate then copies the owner of the file it rotated (nginx's 101). Also: a permission test that re-chowns a directory **while a container still holds the volume** proves nothing — the old volume survives `docker volume rm`, and files created earlier stay writable.
+  - **busybox `command -v` remembers a command you have just deleted.** In the image's build step `apk del apk-tools` removed `/sbin/apk`, and `command -v apk` in the same `sh -c` still answered `/sbin/apk`, failing the check meant to prove it was gone. Test the file (`[ ! -e /sbin/apk ]`). And never write a check as `! command …` under `set -e`: a negated command never stops the script, so the check cannot fail.
 
 - **`main.tsx` interpolates into `innerHTML`, and it is safe only because of where the string comes from.** The database-version-mismatch screen is deliberately plain DOM — the database the app is built on is unavailable, so the failure screen must not depend on React. It builds its markup with a template literal that includes `${error.message}`. That message is constructed by this app inside `DatabaseVersionMismatchError`, never fetched, so there is nothing to escape today. It is listed here because the sink is real: the moment that screen shows text that came from the server, an API response, or a filename an operator chose, it becomes an XSS hole in the one code path that runs before any of the app's own defences.
 

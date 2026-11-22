@@ -26,7 +26,8 @@ import type {
 } from '@/types'
 import type { AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
-import type { EnrollmentStateResponse, LoginChallengeResponse } from '@/types/device'
+import type { EnrollmentStateResponse, LoginChallengeResponse, WipeConfirmedResponse } from '@/types/device'
+import { measuredRequest } from '@/services/clock/serverClock'
 
 // ===========================================================================
 // Health
@@ -36,7 +37,10 @@ export async function login(
   credentials: LoginRequest,
   signal?: AbortSignal
 ): Promise<LoginResponse> {
-  return apiClient.post<LoginResponse>('/api/auth/login', credentials, signal, false)
+  // Measured: a server from V28 on says its time in the answer, which sets this device's clock
+  // correction from the first moment of a session (PWA roadmap §7). An older server says nothing,
+  // and nothing is recorded.
+  return measuredRequest(() => apiClient.post<LoginResponse>('/api/auth/login', credentials, signal, false))
 }
 
 // ===========================================================================
@@ -81,6 +85,25 @@ export async function confirmDeviceEnrollment(
   return apiClient.post<EnrollmentStateResponse>(
     '/api/devices/enrollment-requests/confirm',
     { requestId, enrollmentCode, signature },
+    signal,
+    false
+  )
+}
+
+/**
+ * A revoked device confirming it has deleted its data (backend V28, wipe on revoke). Signed with
+ * this device's key over `wipeMessage(deviceId, wipeOrderedAt)`; unauthenticated, because the
+ * revoke ended every session. Under the enrolment prefix so the nginx rate limit already covers it.
+ */
+export async function confirmDeviceWipe(
+  deviceId: number,
+  wipeOrderedAt: number,
+  signature: string,
+  signal?: AbortSignal
+): Promise<WipeConfirmedResponse> {
+  return apiClient.post<WipeConfirmedResponse>(
+    '/api/devices/enrollment-requests/wipe-confirm',
+    { deviceId, wipeOrderedAt, signature },
     signal,
     false
   )
@@ -145,6 +168,12 @@ export interface ServerLogSheet {
   sheetFieldDefinitionsSnapshot?: FieldDefinition[] | null
   /** The answers to those questions, keyed by field key. Null when nobody has answered. */
   sheetFormData?: Record<string, unknown> | null
+  /**
+   * Server time the answers last changed (`log_sheets.sheet_form_updated_at`) — on the wire since
+   * V9, declared so a merge can tell answers older than this device's last delivery from newer
+   * ones (`LogSheet.sheetFormDeliveredAt`).
+   */
+  sheetFormUpdatedAt?: number | null
 }
 
 /** Server-generated rows for a log sheet (authoritative asset list). */
@@ -185,6 +214,40 @@ export interface LogSheetContextDto {
    * `sheetFieldDefinitionsSnapshot`, which is null on a custom sheet until its first answer.
    */
   sheetFieldDefinitions?: FieldDefinition[]
+  /**
+   * The reference lists this round's lookup fields draw from, with the revision each stands at
+   * (backend roadmap §31 Phase 2). The items never travel in a bundle — they arrive once per
+   * device through `GET /api/lookups/{code}/items` (services/lookups/lookupSync.ts).
+   */
+  requiredLookups?: RequiredLookup[]
+}
+
+/** One list a round needs on the device. `code` is the list's identity; `revision` its version. */
+export interface RequiredLookup {
+  code: string
+  name: string
+  revision: number
+}
+
+/** One page of a reference list for a device — `GET /api/lookups/{code}/items`. */
+export interface LookupDevicePage {
+  code: string
+  name: string
+  revision: number
+  serverTime: number
+  leaseUntil: number
+  columns: Array<{ key: string; label: string; searchable: boolean; display: boolean }>
+  items: Array<{
+    id: number
+    code: string
+    label: string
+    active: boolean
+    attributes: Record<string, string>
+    updatedAt: number
+  }>
+  hasMore: boolean
+  nextSince: number
+  nextAfterId: number
 }
 
 /** Self-contained server payload for one log sheet (metadata + entries + scoped context). */
@@ -192,6 +255,11 @@ export interface LogSheetBundleDto {
   sheet: ServerLogSheet
   entries: ServerLogSheetEntry[]
   context: LogSheetContextDto | null
+  /**
+   * The server's verdict on each signature on this round (backend roadmap §32) — see
+   * `LogSheet.signatureStates`. Absent from an older server.
+   */
+  signatureStates?: Record<string, string>
 }
 
 export interface LogSheetInboxResponse {
@@ -204,7 +272,7 @@ export interface LogSheetInboxResponse {
 export async function fetchLogSheetInbox(
   signal?: AbortSignal
 ): Promise<LogSheetInboxResponse> {
-  return apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal)
+  return measuredRequest(() => apiClient.get<LogSheetInboxResponse>('/api/log-sheets/inbox', signal))
 }
 
 export async function fetchLogSheetBundle(
@@ -212,6 +280,21 @@ export async function fetchLogSheetBundle(
   signal?: AbortSignal
 ): Promise<LogSheetBundleDto> {
   return apiClient.get<LogSheetBundleDto>(`/api/log-sheets/${serverId}/bundle`, signal)
+}
+
+/**
+ * One page of a reference list (backend roadmap §31 Phase 2). Refused with 403 when no open round
+ * assigned to this user draws from the list — the caller then drops its copy.
+ */
+export async function fetchLookupPage(
+  code: string,
+  since: number,
+  afterId: number,
+  limit: number,
+  signal?: AbortSignal
+): Promise<LookupDevicePage> {
+  const query = `since=${encodeURIComponent(String(since))}&afterId=${encodeURIComponent(String(afterId))}&limit=${limit}`
+  return apiClient.get<LookupDevicePage>(`/api/lookups/${encodeURIComponent(code)}/items?${query}`, signal)
 }
 
 export async function claimLogSheet(
@@ -308,12 +391,32 @@ export interface BootstrapResponse {
     /** Optional: a server older than this field says nothing, and the device stays strict. */
     nfcManualEntryEnabled?: boolean
   }
+  /**
+   * How long the tablet keeps its own copy of a round (backend roadmap §41). Absent from a server
+   * older than that; the device then keeps whatever it had, or the constants it shipped with.
+   * Every field is typed `unknown` because nothing here is trusted until
+   * `normalizeDeviceRetention` has checked it.
+   */
+  deviceRetention?: {
+    syncedRetentionHours?: unknown
+    unsyncedPurgeEnabled?: unknown
+    unsyncedRetentionHours?: unknown
+  }
+  /**
+   * How long a signed-in session may keep working without any answer from the server (backend
+   * V28). Absent from an older server; the device then never locks for lack of contact. Typed
+   * `unknown` until `normalizeOfflineSessionLimit` has read it.
+   */
+  offlineSession?: {
+    limitEnabled?: unknown
+    limitHours?: unknown
+  }
 }
 
 export type MasterDataResponse = BootstrapResponse
 
 export async function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
-  return apiClient.get<BootstrapResponse>('/api/bootstrap', signal)
+  return measuredRequest(() => apiClient.get<BootstrapResponse>('/api/bootstrap', signal))
 }
 
 /** Backward-compat alias — always returns slim bootstrap, never full master data. */
@@ -451,6 +554,14 @@ export interface LogSheetSubmitResult {
   serverId?: number | string
   error?: string | null
   outcome?: 'SUBMITTED' | 'SUPERSEDED' | 'EXPIRED' | 'CANCELLED' | 'DUPLICATE' | 'ERROR'
+  /**
+   * Backend V25: `true` when the server refused to apply this round but kept it as a void
+   * submission for review. `false` (backend V26, issue B-04 §2) when it would normally have kept
+   * it and declined — this operator already has five different refusals on the round — which
+   * matters because `SUPERSEDED`/`CANCELLED` otherwise imply kept. Absent from an older server,
+   * and on every other outcome.
+   */
+  kept?: boolean | null
 }
 
 export interface ApiLogSheetEntry {
@@ -497,6 +608,8 @@ export interface LogSheetBatchItem {
   operationalUnitId?: number | string
   completedAt?: number
   clientActionId?: string
+  /** Backend V28: the clock correction that went into `completedAt`. Evidence only. */
+  clientClockOffsetMs?: number
   /**
    * Answers to the round's own questions.
    *
@@ -551,8 +664,13 @@ export interface LogSheetProgressResult {
     | 'EXPIRED'
     | 'VALIDATION_ERROR'
     | 'ERROR'
-  /** Server time the progress was stamped, on an accepted push only. */
+  /** Server time the progress was stamped, on an accepted push only — or, with `kept`, kept. */
   savedAt?: number | null
+  /**
+   * Backend V25: on an `EXPIRED` answer, `true` when the readings were kept for the supervisor
+   * (not applied to the round). Absent from an older server.
+   */
+  kept?: boolean | null
 }
 
 /**
@@ -585,6 +703,22 @@ export interface LogSheetProgressItem {
  *
  * Report how far one or more rounds have got, without completing any of them.
  */
+/**
+ * Backend V25: how many rounds this tablet holds whose readings the server has received in no
+ * form, and the oldest. Shown on the panel's «نشست‌های اپ موبایل»; changes nothing else.
+ */
+export interface SyncBacklogReport {
+  undeliveredCount: number
+  oldestUndeliveredAt: number | null
+}
+
+export async function reportSyncBacklog(
+  report: SyncBacklogReport,
+  signal?: AbortSignal
+): Promise<void> {
+  await apiClient.post<unknown>('/api/sync/backlog', report, signal)
+}
+
 export async function pushLogSheetProgressBatch(
   logSheets: LogSheetProgressItem[],
   signal?: AbortSignal

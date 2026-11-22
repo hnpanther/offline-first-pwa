@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { syncManager, type SyncEvent } from '@/services/sync'
 import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { expireLookups } from '@/services/lookups/lookupStore'
 import { pullAndMergeInbox } from '@/hooks/useInboxSync'
 import { useAppStore } from '@/store'
 import { getSettings } from '@/services/storage'
@@ -13,6 +14,13 @@ export function useSyncManager(): void {
   const setSyncError = useAppStore(s => s.setSyncError)
   const isOnline = useAppStore(s => s.isOnline)
   const authSession = useAppStore(s => s.authSession)
+
+  // Reference lists whose lease ended go now, online or not: the lease exists precisely for the
+  // tablet that stays offline (backend roadmap §31). A field reading the store also deletes an
+  // expired copy the moment it looks; this covers the device nobody opens a lookup field on.
+  useEffect(() => {
+    void expireLookups().catch(() => {})
+  }, [authSession])
 
   useEffect(() => {
     if (!isOnline || !authSession) return

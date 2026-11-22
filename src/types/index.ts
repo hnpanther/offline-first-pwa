@@ -71,6 +71,10 @@ export type FormFieldType =
   | 'audio'
   | 'video'
   | 'location'
+  | 'signature'
+  // Backend roadmap §31 Phase 2 — rendered by LookupFieldInput, never by DynamicFormField.
+  | 'lookup'
+  | 'lookupmulti'
 
 export interface FormFieldOption {
   value: string
@@ -89,6 +93,8 @@ export interface FormField {
   unit?: string
   defaultValue?: unknown
   helperText?: string
+  /** A choice field that accepts a typed answer outside `options` — `validation.allowCustom`. */
+  allowCustom?: boolean
 }
 
 export interface SyncState {
@@ -147,6 +153,45 @@ export interface AppSettings {
    * changing them in the web panel reaches every tablet on its next reconnect.
    */
   attachmentLimits: AttachmentLimits
+  /**
+   * How long this tablet keeps its own copy of a round (backend roadmap §41). Server-owned,
+   * delivered on bootstrap, never edited on the device.
+   *
+   * **Absent until a server has sent it**, and the absence is meaningful: the purge then runs on
+   * the constants this app shipped with (`LEGACY_RETENTION` in `services/sync/deviceRetention.ts`),
+   * so a newer app against an older server behaves exactly as before. There is deliberately no
+   * default object in `DEFAULT_SETTINGS` — one would be indistinguishable from a value the server
+   * chose.
+   */
+  deviceRetention?: DeviceRetentionPolicy
+  /**
+   * How long a signed-in session may keep working without any answer from the server before the
+   * app locks and asks for the password again (backend V28). Server-owned, delivered on bootstrap,
+   * never edited on the device. Absent until a server has sent it — and absent means never lock,
+   * exactly the behaviour before this existed.
+   */
+  offlineSessionLimit?: OfflineSessionPolicy
+}
+
+/** The offline-session ceiling as the server sends it — see `services/auth/offlineSession.ts`. */
+export interface OfflineSessionPolicy {
+  /** Off means a session never locks for lack of contact. */
+  enabled: boolean
+  /** Hours since the server last answered this session. 8–720. */
+  hours: number
+}
+
+/** The three server settings the local purge reads. Hours, as the panel shows them. */
+export interface DeviceRetentionPolicy {
+  /** A round the server accepted stays this long as history. 1–720. */
+  syncedRetentionHours: number
+  /**
+   * Whether a round that never reached the server — refused by it, or a draft whose deadline
+   * passed — is ever purged automatically. Off means never.
+   */
+  unsyncedPurgeEnabled: boolean
+  /** Used only when `unsyncedPurgeEnabled` is on. 72–8760. */
+  unsyncedRetentionHours: number
 }
 
 export interface AttachmentLimits {
@@ -447,6 +492,15 @@ export interface LocalAttachment {
    * Plain, non-indexed property — needs no Dexie version bump.
    */
   pendingDelete?: boolean
+  /**
+   * The id this file was first captured under, when the server answered that id
+   * `409 ATTACHMENT_ID_TAKEN` (backend B-10, issue P-06): somebody else's file already holds it,
+   * so the file was given this row's fresh id and its round's reference rewritten to match. Its
+   * presence is also the «one re-mint per file» rule — a second collision parks the row.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  idRemintedFrom?: string
   createdAt: number
   uploadedAt?: number
 }
@@ -521,6 +575,12 @@ export interface LogSheet {
    * Dexie version bump, the same as `fieldDefinitions` and `fieldOverridesSnapshot` above.
    */
   sheetFieldDefinitions?: FieldDefinition[]
+  /**
+   * The reference lists this round's lookup fields draw from, as its bundle declared them
+   * (backend roadmap §31 Phase 2). The device keeps a list while any round still open on it needs
+   * one, and drops it when none does — see services/lookups/lookupSync.ts.
+   */
+  requiredLookups?: Array<{ code: string; name: string; revision: number }>
   /** Answers to those questions, keyed by field key. */
   sheetFormData?: Record<string, unknown>
   /**
@@ -534,6 +594,34 @@ export interface LogSheet {
    * the save itself, and cleared when the server accepts it.
    */
   sheetFormLocallyEditedAt?: number
+  /**
+   * Server time (`savedAt`) of the accepted progress push that last carried this device's
+   * answers to the round's questions.
+   *
+   * What lets a bundle merge recognise answers OLDER than the ones this device already
+   * delivered: a bundle fetched just before that push landed and merged just after it — once the
+   * marker above is cleared — would otherwise put the server's previous answers back on the
+   * device. Server clock on both sides of the comparison (`ServerLogSheet.sheetFormUpdatedAt`).
+   * Plain, non-indexed property — no Dexie version bump.
+   */
+  sheetFormDeliveredAt?: number
+
+  /**
+   * The server's verdict on every signature this round holds (backend roadmap §32), keyed
+   * `"sheet:<fieldKey>"` / `"<assetId>:<fieldKey>"`, valued `VALID` / `STALE` / `NOT_BOUND` /
+   * `UNVERIFIED` — replaced whole on every bundle merge. Only the server can judge a signature;
+   * see `utils/signatureVerdict.ts`.
+   *
+   * Plain, non-indexed property — needs no Dexie version bump.
+   */
+  signatureStates?: Record<string, string>
+
+  /**
+   * Device-only fingerprints of what each VALID signature covered when it arrived, so an answer
+   * changed on this tablet afterwards shows the signature as out of date before the next sync.
+   * Never sent anywhere. Plain, non-indexed property — no Dexie version bump.
+   */
+  signatureBaselines?: Record<string, string>
 
   /**
    * How the operator must identify each asset on **this** round — frozen by the server when the
@@ -555,7 +643,17 @@ export interface LogSheet {
    */
   lastSubmitOutcome?: string
   submittedAt?: number
+  /**
+   * When the operator finished the round — **on the server's clock** as this device last measured
+   * it (`serverNow()`, PWA roadmap §7), not the raw device clock. The server judges the deadline on
+   * this value and refuses one lying in its own future (backend B-17).
+   */
   completedAt?: number
+  /**
+   * The correction (server − device, ms) that went into `completedAt`, sent with the round as
+   * evidence (`clientClockOffsetMs`). Absent on a round completed by an older build.
+   */
+  completionClockOffsetMs?: number
   clientActionId?: string
   /**
    * Whether this device still owes the server a progress report for this round.
@@ -574,6 +672,38 @@ export interface LogSheet {
   progressSyncedAt?: number
   /** Why the last progress push was refused, for the fill page. Never shown as a sync failure. */
   progressError?: string
+  /**
+   * When the server answered a refused **submission** of this round with `kept: true` (backend
+   * V25, issue P-02/B-01): it was not applied, but the server holds it as a void submission for
+   * a supervisor to review. Absent means the readings exist only on this device — unless the
+   * outcome is `SUPERSEDED`/`CANCELLED`, which the server has always kept. Plain, non-indexed
+   * property: no Dexie version bump.
+   */
+  serverKeptAt?: number
+  /**
+   * When the server answered the last refused submission of this round with `kept: false`
+   * (backend V26, issue B-04 §2): it declined to keep it, so the outcome's usual meaning —
+   * `SUPERSEDED`/`CANCELLED` imply kept — does not hold, and the readings are only here.
+   * Cleared whenever a later answer keeps it. Plain, non-indexed property: no Dexie version bump.
+   */
+  serverKeepRefusedAt?: number
+  /**
+   * Late progress (backend V25, issue P-01/B-02): readings of a draft whose deadline passed.
+   *
+   * The progress lane pushes such a draft **once per state of its markers**:
+   * `lateProgressSentMarker` is the newest edit marker the last late push covered, answered
+   * `EXPIRED` either way. `lateProgressKeptMarker` / `lateProgressKeptAt` are set only when that
+   * answer said `kept: true` — the server holds those readings for the supervisor.
+   *
+   * **The edit markers themselves are deliberately not cleared on `kept`.** Kept is not applied:
+   * if the supervisor extends the deadline, the next inbox/bundle merge carries the server's
+   * values for these assets, which do not include the late readings, and only the markers make
+   * this device's values win that merge. Cleared by an ordinary accepted push once the round is
+   * open again — exactly as for any other progress.
+   */
+  lateProgressSentMarker?: number
+  lateProgressKeptMarker?: number
+  lateProgressKeptAt?: number
   createdAt: number
   updatedAt: number
 }

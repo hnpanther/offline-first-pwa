@@ -24,6 +24,21 @@ const fa = {
       'شناسه کاربری شما هنوز از سرور دریافت نشده است. کارهای ذخیره‌شده روی دستگاه کاملاً قابل استفاده‌اند، اما ارسال به سرور و به‌روزرسانی کارتابل تا برقراری ارتباط متوقف است. با اتصال مجدد، خودکار ادامه پیدا می‌کند.',
     sessionEnded:
       'نشست شما به پایان رسیده است. ممکن است زمان آن منقضی شده باشد یا از پنل ادمین ابطال شده باشد یا روی دستگاه دیگری وارد شده باشید. دوباره وارد شوید.',
+    // Backend V28 — the offline-session ceiling. Nothing is deleted by a lock; the sentence says so.
+    offlineLockedLimit:
+      'برنامه قفل شد: این دستگاه مدت طولانی به سرور وصل نشده است. برای ادامه به شبکه وصل شوید و دوباره وارد شوید. کارهای ذخیره‌شده و ارسال‌نشده روی دستگاه مانده‌اند و پس از ورود ارسال می‌شوند.',
+    offlineLockedClock:
+      'برنامه قفل شد: ساعت این دستگاه از آخرین تماس با سرور عقب‌تر است. ساعت دستگاه را درست کنید، به شبکه وصل شوید و دوباره وارد شوید. کارهای ذخیره‌شده روی دستگاه مانده‌اند.',
+    offlineLockSoon: (when: string) =>
+      `این دستگاه مدتی است به سرور وصل نشده. اگر تا ${when} به شبکه وصل نشوید، برنامه قفل می‌شود و برای ادامه باید دوباره وارد شوید. هیچ داده‌ای پاک نمی‌شود.`,
+    // Backend V28 — a revoke found by the device-status watch, enrolment enforced, no wipe ordered.
+    deviceRevokedSignedOut:
+      'مجوز این دستگاه لغو شده است و از حساب خارج شدید. کارهای ذخیره‌شده روی دستگاه مانده‌اند؛ برای ارسال آن‌ها دستگاه باید از نو ثبت شود.',
+    // Backend V28 — wipe on revoke.
+    deviceWiped:
+      'به دستور مدیر سامانه، همهٔ داده‌های این برنامه از این دستگاه پاک شد و ثبت دستگاه لغو شده است. برای استفادهٔ دوباره، دستگاه باید از نو ثبت شود.',
+    deviceWipeBlocked:
+      'پاک‌سازی داده‌های این دستگاه به دستور مدیر سامانه کامل نشد، چون برنامه در پنجرهٔ دیگری باز است. همهٔ پنجره‌ها و زبانه‌های این برنامه را ببندید و دوباره باز کنید.',
     server: {
       checking: 'در حال بررسی دسترسی به سرور…',
       reachable: 'سرور در دسترس است',
@@ -245,6 +260,30 @@ const fa = {
     imageAnnotation: 'علامت‌گذاری روی عکس پیش از ذخیره',
     imageAnnotationHint:
       'پس از گرفتن عکس، پیش‌نمایش باز می‌شود و می‌توانید روی تصویر خط، فلش، کادر یا متن اضافه کنید. تصویر نهایی با همان علامت‌ها ذخیره و ارسال می‌شود.',
+    // Backend roadmap §41 — how long a round stays on this tablet. Shown, never edited here.
+    syncedRetention: 'نگهداری راند ارسال‌شده روی این دستگاه',
+    syncedRetentionHint:
+      'راندی که سرور آن را پذیرفته، این مدت در «سابقه» می‌ماند و سپس از این دستگاه پاک می‌شود. خود راند روی سرور می‌ماند.',
+    unsyncedPurge: 'پاک‌کردن خودکار راند ارسال‌نشده',
+    unsyncedPurgeHint:
+      'راندی که به سرور نرسیده — رد شده، یا پیش‌نویسی که مهلتش گذشته — ممکن است تنها نسخه‌ی خوانش‌ها باشد. فقط وقتی خودکار پاک می‌شود که مدیر آن را روی سرور روشن کرده باشد.',
+    retentionHours: (hours: number) => `${hours} ساعت`,
+    unsyncedPurgeAfter: (hours: number) => `فعال — پس از ${hours} ساعت`,
+    unsyncedPurgeNever: 'غیرفعال — هرگز',
+    unsyncedPurgeLegacy: 'فعال — پس از ۷ روز (پیش‌نویس منقضی: ۲۴ ساعت)',
+    retentionNotReceived: 'هنوز از سرور دریافت نشده؛ قاعده‌ی پیش‌فرض همین نسخه از برنامه',
+    // Backend V28 — the offline-session ceiling. Shown, never edited here.
+    offlineSessionLimit: 'قفل برنامه پس از مدت طولانی بدون اتصال به سرور',
+    offlineSessionLimitHint:
+      'اگر این دستگاه این مدت هیچ پاسخی از سرور نگیرد، برنامه قفل می‌شود و برای ادامه باید با شبکه دوباره وارد شد. هیچ داده‌ای پاک نمی‌شود. مدیر آن را روی سرور تنظیم می‌کند.',
+    offlineSessionLimitAfter: (hours: number) => `فعال — پس از ${hours} ساعت بدون اتصال`,
+    offlineSessionLimitOff: 'غیرفعال',
+    serverClockOffset: 'اختلاف ساعت این دستگاه با سرور',
+    serverClockOffsetHint:
+      'مهلت‌ها و زمان تکمیل با ساعت سرور حساب می‌شوند؛ این مقدار در هر اتصال دوباره اندازه گرفته می‌شود.',
+    serverClockUnmeasured: 'هنوز اندازه گرفته نشده',
+    serverClockOffsetValue: (minutes: number) =>
+      minutes === 0 ? 'کمتر از یک دقیقه' : minutes > 0 ? `${minutes} دقیقه عقب` : `${-minutes} دقیقه جلو`,
     displaySection: 'نمایش و چرخش صفحه',
     screenOrientation: 'جهت صفحه',
     screenOrientationAuto: 'خودکار (بر اساس چرخش دستگاه)',
@@ -273,6 +312,11 @@ const fa = {
     pendingSync: 'در انتظار ارسال',
     todaySubmitted: 'ارسال‌شده امروز',
     syncedCount: 'همگام‌سازی‌شده',
+    // Backend V25: rounds whose readings the server has received in no form — not applied, not
+    // kept for review. Distinct from «در انتظار ارسال», which is the queue that drains by itself.
+    undelivered: 'ارسال‌نشده',
+    undeliveredHint:
+      'راندهایی که خوانش‌هایشان به هیچ شکلی به سرور نرسیده است. روی این دستگاه نگه داشته می‌شوند؛ تعدادشان برای سرپرست هم گزارش می‌شود.',
     ownStatsHint: 'این آمار فقط مربوط به کارهای خود شماست.',
     quickCollect: 'جمع‌آوری داده',
     drafts: 'پیش‌نویس'
@@ -332,6 +376,27 @@ const fa = {
     limitVideoSeconds: 'حداکثر مدت ویدئو (ثانیه)',
     micNoteVsPhoto:
       'گرفتن عکس به مجوز جداگانه نیاز ندارد، چون دوربین دستگاه را باز می‌کند؛ ولی ضبط صدا حتماً به مجوز میکروفون در مرورگر نیاز دارد.'
+  },
+  // Roadmap §32: the signature field. The device draws and stores a PNG; who signed, when it was
+  // stamped and whether it still covers the answers are decided by the server on sync.
+  signature: {
+    sign: 'امضا کنید',
+    resign: 'امضای دوباره',
+    accept: 'ثبت امضا',
+    clear: 'پاک کردن صفحه',
+    cancel: 'انصراف',
+    remove: 'حذف امضا',
+    drawHere: 'در کادر زیر امضا کنید.',
+    signed: 'امضا شده',
+    signedAt: 'زمان امضا',
+    unsigned: 'هنوز امضا نشده است.',
+    notOnDevice: 'تصویر امضا روی این دستگاه نیست؛ با اتصال به شبکه نمایش داده می‌شود.',
+    saveFailed: 'امضا ذخیره نشد.',
+    hint: 'امضا به پاسخ‌هایی که پوشش می‌دهد گره می‌خورد؛ اگر بعداً یکی از آن‌ها تغییر کند، امضا «پیش از تغییر» نمایش داده می‌شود.',
+    staleForm: 'پاسخ‌های این فرم پس از امضا تغییر کرده‌اند — امضا پیش از تغییر پاسخ‌ها گرفته شده است.',
+    staleRound: 'پاسخ‌ها یا مقادیر دارایی‌های این کار پس از امضا تغییر کرده‌اند — امضا پیش از این تغییرات گرفته شده است.',
+    resignHint: 'در صورت نیاز «امضای دوباره» را بزنید.',
+    valid: 'امضا با پاسخ‌های فعلی مطابقت دارد.'
   },
   nfcInspect: {
     title: 'بازرسی تگ NFC',

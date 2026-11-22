@@ -18,6 +18,8 @@ import { useAppStore } from '@/store'
 import { useLogSheets } from '@/hooks/useLogSheets'
 import { useManualSync } from '@/hooks/useSync'
 import { computeDashboardStats } from '@/utils/dashboardStats'
+import { computeUndeliveredBacklog } from '@/services/sync/undelivered'
+import CloudOffIcon from '@mui/icons-material/CloudOff'
 import { hasPlantWideScope } from '@/types/auth'
 import { t } from '@/i18n'
 
@@ -92,6 +94,10 @@ export function Dashboard() {
   const isAdmin = hasPlantWideScope(authSession ?? null)
   const { open: openCount, submittedToday: todayCount, synced: syncedCount } =
     computeDashboardStats(logSheets, { sessionUserId, isAdmin })
+  // Backend V25 — over the same rows the other counters read (the viewer's own, or every row for
+  // a plant-wide user). Not the store's `failedCount`, which is only the last pass's result and
+  // drops to zero on the next pass even while refused rounds sit on the device.
+  const undeliveredCount = computeUndeliveredBacklog(logSheets).count
 
   const formatTime = (ts: number | null) => {
     if (!ts) return '—'
@@ -135,7 +141,7 @@ export function Dashboard() {
           gap: 2,
           gridTemplateColumns: {
             xs: 'repeat(2, minmax(0, 1fr))',
-            sm: 'repeat(4, minmax(0, 1fr))'
+            sm: 'repeat(5, minmax(0, 1fr))'
           }
         }}
       >
@@ -164,7 +170,19 @@ export function Dashboard() {
           icon={<SyncIcon />}
           color={failedCount > 0 ? 'error' : 'success'}
         />
+        <StatCard
+          title={t.dashboard.undelivered}
+          value={undeliveredCount}
+          icon={<CloudOffIcon />}
+          color={undeliveredCount > 0 ? 'error' : 'success'}
+          onClick={() => navigate('/logsheets/history')}
+        />
       </Box>
+      {undeliveredCount > 0 && (
+        <Typography variant="caption" color="error" sx={{ mt: -2 }}>
+          {t.dashboard.undeliveredHint}
+        </Typography>
+      )}
       {!isAdmin && (
         <Typography variant="caption" color="text.secondary" sx={{ mt: -2 }}>
           {t.dashboard.ownStatsHint}

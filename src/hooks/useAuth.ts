@@ -16,6 +16,8 @@ import { fetchBootstrap } from '@/services/api'
 import { gateOf, loginWithDevice, type DeviceGate } from '@/services/device/deviceAuth'
 import { setUnauthorizedHandler } from '@/services/api/client'
 import { useAppStore } from '@/store'
+import { serverNow } from '@/services/clock/serverClock'
+import { clearSessionContact, markSessionStarted } from '@/services/auth/offlineSession'
 import type { AuthSession } from '@/types/auth'
 import { isSessionValid } from '@/types/auth'
 import { postLoginPath } from '@/utils/loginRedirect'
@@ -105,11 +107,16 @@ export function useAuthInit(): void {
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      // Already signed out — by the operator, the offline lock or a revoke the device found
+      // (backend V28). A request that was in flight then and answers 401 now must not replace
+      // the reason the login page is about to show with the generic «session ended».
+      if (!useAppStore.getState().authSession) return
       useAppStore.getState().setSessionEnded(true)
       setAuthSession(null)
       setSessionUserId(null)
       clearInbox()
       void clearUserSessionContext()
+      void clearSessionContact()
       navigate('/login', { replace: true, state: { sessionEnded: true } })
     })
     return () => setUnauthorizedHandler(null)
@@ -131,6 +138,8 @@ export function useAuth() {
         // the same single login request it always was.
         const response = await loginWithDevice(username, password)
         const session = await saveAuthSession(response)
+        // The offline-session ceiling counts from here (backend V28).
+        await markSessionStarted()
         await bindSessionUserContext(response.username)
         setAuthSession(session)
         return { ok: true }
@@ -143,18 +152,42 @@ export function useAuth() {
     [setAuthSession]
   )
 
-  const signOut = useCallback(async () => {
+  /**
+   * Signs out. `offlineLocked` is the offline-session ceiling's lock (backend V28): the same
+   * sign-out — nothing local is deleted, unsent work stays and is sent after the next sign-in —
+   * with the login page told why.
+   */
+  const signOut = useCallback(async (reason?: { offlineLocked?: 'limit' | 'clock'; deviceRevoked?: boolean }) => {
     useAppStore.getState().setSessionBindingPending(false)
+    // Set before the session is cleared: clearing it makes ProtectedRoute redirect on its own, and
+    // that redirect replaces the router state below — the store is what survives (see the store).
+    useAppStore.getState().setSignOutNotice(
+      reason?.offlineLocked === 'clock'
+        ? 'offlineLockedClock'
+        : reason?.offlineLocked
+          ? 'offlineLockedLimit'
+          : reason?.deviceRevoked
+            ? 'deviceRevoked'
+            : null
+    )
     await clearUserSessionContext()
     await clearAuthSession()
+    await clearSessionContact()
     setAuthSession(null)
     setSessionUserId(null)
     clearInbox()
-    navigate('/login', { replace: true })
+    navigate('/login', {
+      replace: true,
+      state: reason?.offlineLocked
+        ? { offlineLocked: reason.offlineLocked }
+        : reason?.deviceRevoked
+          ? { deviceRevoked: true }
+          : undefined
+    })
   }, [setAuthSession, setSessionUserId, clearInbox, navigate])
 
   const serverReachable = useAppStore(s => s.serverReachable)
-  const isAuthenticated = isSessionValid(authSession, Date.now(), serverReachable)
+  const isAuthenticated = isSessionValid(authSession, serverNow(), serverReachable)
 
   return {
     authSession: authSession as AuthSession | null,

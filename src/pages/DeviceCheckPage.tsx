@@ -18,7 +18,9 @@ import MyLocationIcon from '@mui/icons-material/MyLocation'
 import StorageIcon from '@mui/icons-material/Storage'
 import { isNFCSupported, startNFCScan, stopNFCScan, resolveNfcTagId } from '@/services/nfc'
 import { decoderReport, qrScanSupport, startQrScan } from '@/services/scan/qrScanner'
-import { getStorageStatus } from '@/utils/storageQuota'
+import { getStorageStatus, isStoragePersisted } from '@/utils/storageQuota'
+import { currentUndeliveredBacklog } from '@/services/sync/backlogReport'
+import { t } from '@/i18n'
 
 /**
  * «بررسی سخت‌افزار دستگاه» — an administrator standing next to a tablet, finding out which of
@@ -46,11 +48,18 @@ import { getStorageStatus } from '@/utils/storageQuota'
  * be standing next to with a complaint.
  */
 
+/**
+ * `warn` is for a fact that is not a fault yet but can become data loss — today only storage the
+ * browser has not made persistent (issue P-09), which works perfectly until the day it is evicted.
+ */
 type Outcome =
   | { state: 'idle' }
   | { state: 'running' }
   | { state: 'ok'; detail: string }
+  | { state: 'warn'; detail: string }
   | { state: 'fail'; detail: string }
+
+const ALERT_SEVERITY = { ok: 'success', warn: 'warning', fail: 'error' } as const
 
 const IDLE: Outcome = { state: 'idle' }
 
@@ -92,6 +101,7 @@ function OutcomeChip({ outcome }: { outcome: Outcome }) {
   if (outcome.state === 'idle') return <Chip size="small" variant="outlined" label="آزمایش نشده" />
   if (outcome.state === 'running') return <Chip size="small" color="info" label="در حال آزمایش…" />
   if (outcome.state === 'ok') return <Chip size="small" color="success" label="سالم" />
+  if (outcome.state === 'warn') return <Chip size="small" color="warning" label="هشدار" />
   return <Chip size="small" color="error" label="مشکل دارد" />
 }
 
@@ -137,9 +147,9 @@ function CheckRow({
           {hint}
         </Typography>
 
-        {(outcome.state === 'ok' || outcome.state === 'fail') && (
+        {(outcome.state === 'ok' || outcome.state === 'warn' || outcome.state === 'fail') && (
           <Alert
-            severity={outcome.state === 'ok' ? 'success' : 'error'}
+            severity={ALERT_SEVERITY[outcome.state]}
             sx={{ mb: 1, py: 0.25, '& .MuiAlert-message': { fontSize: '0.78rem', wordBreak: 'break-word' } }}
           >
             {outcome.detail}
@@ -351,12 +361,30 @@ export function DeviceCheckPage() {
         return
       }
       const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(0)
-      const detail = `مصرف‌شده: ${mb(status.usage)} مگابایت از ${mb(status.quota)} مگابایت`
-      setStorage(
-        status.low
-          ? { state: 'fail', detail: `${detail} — فضا رو به اتمام است؛ ضبط پیوست رد می‌شود.` }
-          : { state: 'ok', detail }
-      )
+      // Backend V25: over the whole device, every operator's rows — this page is what somebody
+      // runs before a tablet is wiped or retired, and a round whose readings exist only here is
+      // exactly what must not be lost with it.
+      const backlog = await currentUndeliveredBacklog()
+      const persisted = await isStoragePersisted()
+      const detail =
+        `مصرف‌شده: ${mb(status.usage)} مگابایت از ${mb(status.quota)} مگابایت` +
+        ` · ${t.dashboard.undelivered}: ${backlog.count}` +
+        (persisted === true ? ' · حافظه ماندگار است' : '')
+      // Issue P-09: a browser that has not made this origin's storage persistent may evict all of
+      // it under pressure, silently — readings not yet delivered included. Not a fault today, and
+      // the one data-loss path this app cannot see coming, so it is said here rather than hidden.
+      const evictable =
+        persisted === false
+          ? ' — مرورگر حافظه‌ی این برنامه را «ماندگار» نکرده است: اگر فضای دستگاه کم شود، ممکن است همه‌ی' +
+            ' داده‌های آن، از جمله راندهای ارسال‌نشده، بی‌خبر پاک شوند. برنامه را به شکل نصب‌شده اجرا کنید.'
+          : ''
+      if (status.low) {
+        setStorage({ state: 'fail', detail: `${detail} — فضا رو به اتمام است؛ ضبط پیوست رد می‌شود.${evictable}` })
+      } else if (evictable) {
+        setStorage({ state: 'warn', detail: `${detail}${evictable}` })
+      } else {
+        setStorage({ state: 'ok', detail })
+      }
     } catch (err) {
       setStorage({
         state: 'fail',

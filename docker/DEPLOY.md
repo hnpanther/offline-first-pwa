@@ -9,7 +9,7 @@ only needs to reach the backend's port (§5).
 
 | File | What it is |
 |---|---|
-| `Dockerfile` | `nginx:1.30-alpine` + your `dist/` + the config below. Builds nothing itself (§1) |
+| `Dockerfile` | `nginx:1.30.6-alpine3.24` (pinned) + Alpine's newer security fixes + your `dist/` + the config below, running as uid 101 rather than root (§7). Builds nothing itself (§1) |
 | `Dockerfile.dockerignore` | Keeps everything but `dist/` and `docker/nginx/` out of the build context — `certs/` holds the CA's private key and must never reach a layer |
 | `docker-compose.yml` | The service, its volumes and its hardening |
 | `.env.example` | Every setting. Copy to `.env` (gitignored) |
@@ -58,6 +58,23 @@ Check three things — each one has already shipped wrong once in this project:
 3. **`dist/` is fresh**: `dist/sw.js` exists and its timestamp is from this build. The image build
    fails on purpose if `index.html`, `sw.js` or `manifest.webmanifest` is missing.
 
+**Addresses a security scan will find in `dist/assets/index-*.js` — expected, and what to check.**
+A scan of the bundle reports two addresses (raised by the plant's security unit, 2026-11-19):
+
+- **The value of `VITE_SERVER_URL`** from `.env.mobile`. Every `VITE_*` value is compiled into the
+  bundle in plain text, and this one must be: the APK needs to know its server. A server address
+  is configuration, not a secret. **What is wrong is a developer's address in a production
+  build** — e.g. `https://192.168.1.159:4173` (`:4173` is `vite preview`), which would point every
+  freshly installed tablet at a workstation, and at whatever device later holds that IP. Check 1
+  above is the fix: the site's own production address, one build per site.
+- **`http://localhost:8081`** — `FALLBACK_SERVER_URL` in `services/settings/deliveryServerUrl.ts`,
+  used only by a device with no address configured, and always in the bundle. On a tablet
+  `localhost` is the tablet itself, so it reaches nothing. Harmless; it could be compiled out of
+  production builds (`import.meta.env.DEV`), which was offered and not done.
+
+**Never put a secret in a `VITE_*` variable** (a key, a token, a password): it is published to
+every browser and every APK. Today `.env.mobile` holds only the address.
+
 ---
 
 ## 3. Build the image
@@ -78,18 +95,25 @@ Build where Docker Hub is reachable, then carry the image across:
 
 ```bash
 # build machine, repository root
-docker build -f docker/Dockerfile --build-arg APP_VERSION=1.0.0 -t mfdcs-pwa:1.0.0 .
-docker save mfdcs-pwa:1.0.0 | gzip > mfdcs-pwa-1.0.0.tar.gz
+docker build --no-cache -f docker/Dockerfile --build-arg APP_VERSION=1.0.3 -t mfdcs-pwa:1.0.3 .
+docker save mfdcs-pwa:1.0.3 | gzip > mfdcs-pwa-1.0.3.tar.gz
 ```
 
 ```bash
 # server
-gunzip -c mfdcs-pwa-1.0.0.tar.gz | docker load
+gunzip -c mfdcs-pwa-1.0.3.tar.gz | docker load
 ```
 
 Copy the `docker/` folder to the server as well (without `ssl/` and `.env` from the build
-machine). Then set `PWA_IMAGE_TAG=1.0.0` in `.env` and start with `docker compose up -d`
-(no `--build`: the image is already loaded, and compose uses it by name).
+machine). Then set `PWA_IMAGE_TAG=1.0.3` in `.env` and start with `docker compose up -d`
+(no `--build`: the image is already loaded, and compose uses it by name). **`PWA_IMAGE_TAG` is
+required** since 1.0.2: compose refuses to start without it rather than running `latest`.
+
+**The base image is pinned by digest** (`ARG NGINX_IMAGE` in the Dockerfile), so the build machine
+must have **pulled** `nginx:1.30.6-alpine3.24`; a base that arrived by `docker load` has no
+registry digest — build with `--build-arg NGINX_IMAGE=nginx:1.30.6-alpine3.24` then. `--no-cache`
+is what makes a rebuild pick up Alpine's security updates; without it the `apk upgrade` layer comes
+from the cache.
 
 ---
 
@@ -115,16 +139,34 @@ Rules:
   openssl x509 -in /path/to/plant/rootCA.pem -noout -subject      # must equal the issuer above
   ```
 
-- **File permissions (Linux).** The container drops every capability except the few nginx needs,
-  so its root user can no longer read a file it does not own. Give the key to root:
+- **File permissions (Linux).** nginx runs as uid **101** — the image's own `nginx` user — and
+  never as root, so the key must be readable by uid 101. The complete table, for `ssl/` and for
+  `logs/` (§7a), is at the top of `docker-compose.yml`'s `volumes:`:
 
   ```bash
-  sudo chown root:root ssl/key.pem ssl/cert.pem
-  sudo chmod 600 ssl/key.pem && sudo chmod 644 ssl/cert.pem
+  sudo chown root:root ssl ssl/cert.pem && sudo chmod 0755 ssl && sudo chmod 0644 ssl/cert.pem
+  sudo chown 101:101 ssl/key.pem && sudo chmod 0400 ssl/key.pem
   ```
 
-  A key owned by your own user with mode 600 makes nginx exit with `Permission denied` on
-  `key.pem`.
+  `0400` rather than the `0600` this guide used to give: nothing needs to write the key, and both
+  work. Tested on 2026-11-17 against `mfdcs-pwa:1.0.3`, each with the image's own user:
+
+  | `ssl/` | `cert.pem` | `key.pem` | Result |
+  |---|---|---|---|
+  | `root:root 0755` | `root:root 0644` | `101:101 0400` | starts — **the recommended setup** |
+  | `root:root 0755` | `root:root 0644` | `101:101 0600` | starts |
+  | `root:root 0755` | `root:root 0644` | `root:101 0440` | starts (read through the group) — equally good |
+  | `root:101 0750` | `root:root 0644` | `101:101 0400` | starts |
+  | `root:root 0755` | `root:root 0644` | `root:root 0600` | **exits**: `[emerg] cannot load certificate key … Permission denied` |
+  | `root:root 0700` | `root:root 0644` | `101:101 0400` | **exits**: `[emerg] cannot load certificate … Permission denied` |
+  | `root:root 0755` | `root:root 0600` | `101:101 0400` | **exits**: `[emerg] cannot load certificate … Permission denied` |
+
+  A key left as `root:root 0600` — what most tools produce, and what this guide asked for before
+  the image stopped running as root — makes nginx exit at start:
+  `[emerg] cannot load certificate key "/etc/nginx/ssl/key.pem" … Permission denied`. The number is
+  what counts; on the host, uid 101 may belong to an account with some other name. Nothing is
+  given away by it: the worker processes that serve traffic hold the key in memory under any
+  setup, root master or not.
 - **The CA's private key never goes in `ssl/`.** Only the server certificate and its key.
 
 mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy them to
@@ -136,12 +178,30 @@ mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy th
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PWA_IMAGE_TAG` | `latest` | Image version to run. Set it to the release |
+| `PWA_IMAGE_TAG` | **none — required** | Image version to run, e.g. `1.0.3`. Compose refuses to start without it (it used to fall back to `latest`, which made "which build is running" unanswerable) |
 | `PWA_HTTP_PORT` | `80` | Host port for HTTP. Only redirects to HTTPS and answers `/healthz` |
 | `PWA_HTTPS_PORT` | `443` | Host port for HTTPS. **Keep 443**: the HTTP→HTTPS redirect assumes it |
 | `PWA_SERVER_NAME` | `_` | The name(s) or IP tablets type, space-separated; `_` accepts any. Informational with the shipped template: it has one `server` block per port, and nginx hands a request whose name matches none to that block anyway, so this restricts nothing |
 | `PWA_BACKEND_UPSTREAM` | `http://host.docker.internal:8081` | Spring Boot, as seen **from inside the container**. Scheme, host, port; no `/api`, no trailing slash |
-| `PWA_MAX_BODY_SIZE` | `32m` | Largest request forwarded. Must stay above the backend's 25 MB attachment limit |
+| `PWA_MAX_BODY_SIZE` | `64m` | Largest request forwarded. Must stay above the backend's 25 MB attachment limit, and is **paired with the backend's `app.http.max-json-body-bytes` (64 MB)** — change one, change the other: lower here and nginx answers 413 to a body the backend would accept (backend B-16) |
+| `PWA_LOGIN_RATE` | `60r/m` | How often **one client address** may call the four endpoints that need no session — sign-in, the device challenge, both enrolment calls. nginx syntax (`r/m`, `r/s`) |
+| `PWA_LOGIN_BURST` | `30` | How many of those may arrive at once before the rate applies. A sign-in is 2 requests from a browser, 4 from the APK (each call has a CORS preflight) |
+| `PWA_HSTS_MAX_AGE` | `31536000` | Seconds a browser remembers "HTTPS only" for this name. `0` tells browsers that remember it to forget |
+| `PWA_LOG_FORMAT` | `json` | Access log format: `json` (one object per line, for Filebeat → Logstash) or `main` (one line of text). Anything else stops the container at start, with a message. §7a |
+| `PWA_ERROR_LOG_LEVEL` | `notice` | How much goes into `error.log`, most to least: `info`, `notice`, `warn`, `error`, `crit`, `alert`, `emerg`. `debug` and anything else stop the container at start, with a message. **Not read by 1.0.4 and earlier.** §7a «The error log» |
+| `PWA_TZ` | `Asia/Tehran` | Time zone of the log timestamps. They carry their offset either way (`+03:30`) |
+
+**If every tablet reaches this server through one NAT address**, they share one rate-limit
+bucket: a shift of thirty signing in within the same minute needs about 60–120 requests. Read the
+access log at a shift change before trusting the defaults, and raise `PWA_LOGIN_RATE` /
+`PWA_LOGIN_BURST` until it fits. A refused request gets `429` and the app shows «تعداد درخواست‌های
+ورود از این دستگاه بیش از حد مجاز است…»; nothing else under `/api/` is limited.
+
+**Renamed in 1.0.4:** these were `PWA_AUTH_RATE` / `PWA_AUTH_BURST`. The old names are **not read
+any more** — a site `.env` that still sets them silently gets the defaults, so rename them there
+when moving to 1.0.4. Why: BuildKit's `SecretsUsedInArgOrEnv` check flags any `ENV` whose name
+contains `AUTH` as a possible secret, and these are a rate limit, not a secret. Renaming keeps
+that check on for the day a real secret is put in an `ENV` by mistake.
 
 Where the backend runs decides `PWA_BACKEND_UPSTREAM`:
 
@@ -174,7 +234,8 @@ Then, from a machine on the plant network:
 ```bash
 curl -s  http://<server>/healthz                          # ok
 curl -sI http://<server>/                                 # 301 → https://
-curl -sI --cacert rootCA.pem https://<server>/            # 200, Content-Security-Policy present
+curl -sI --cacert rootCA.pem https://<server>/            # 200, Content-Security-Policy present,
+                                                          # its script-src with 'wasm-unsafe-eval' (issue D-10)
 curl -sI --cacert rootCA.pem https://<server>/sw.js       # Cache-Control: no-cache
 curl -s  --cacert rootCA.pem https://<server>/api/health  # the backend answers through nginx
 ```
@@ -182,6 +243,9 @@ curl -s  --cacert rootCA.pem https://<server>/api/health  # the backend answers 
 And on **one real tablet**, before walking away:
 
 - the browser opens the app with no certificate warning, and it still opens with Wi-Fi off;
+- **in the browser delivery** (not the APK, not `vite preview` — neither sends this CSP), scan one QR
+  code and one barcode: «رمزگشای کد در این دستگاه بارگذاری نشد» means the CSP is blocking the
+  WebAssembly decoder (issue D-10);
 - the APK signs in (it trusts the CA bundled at build time, not the one installed on the device).
 
 ---
@@ -193,11 +257,46 @@ And on **one real tablet**, before walking away:
 | Offline after first load | `index.html`, `sw.js`, `workbox-*.js` and the manifest are `no-cache`; `/assets/` is cached a year (content-hashed names). Verified: the service worker installs and the app opens on a deep link with the network off |
 | Unknown deep links | Fall back to `index.html` (client-side routes). A missing file under `/assets/` is a real 404, never HTML pretending to be JavaScript |
 | Large media | 32 MB bodies; uploads and downloads stream through without temp files; 300 s proxy timeouts (the client allows 120 s) |
-| Security headers | CSP, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`. On **every** response — including locations that set their own caching, which nginx would otherwise strip |
+| Security headers | CSP, `Strict-Transport-Security` (since 1.0.2), `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`. On **every** HTTPS response — including locations that set their own caching, which nginx would otherwise strip |
+| TLS | 1.2 and 1.3 only. Since 1.0.2 TLS 1.2 offers only forward-secret AEAD suites (ECDHE with AES-GCM or ChaCha20-Poly1305); CBC-mode and static-RSA suites are refused |
+| Sign-in rate limit | Since 1.0.2, per client address on the four endpoints that need no session (`PWA_LOGIN_RATE`, `PWA_LOGIN_BURST`); `429` with a Persian JSON message. The backend's own lockout stops guessing a password, not asking |
+| What is in the image | Since 1.0.2, 19 Alpine packages (71 before): nginx's five dynamic modules (xslt, image-filter, geoip, njs, acme — none ever loaded), `curl` and the package manager are removed, and with them libxml2, libxslt, the image libraries and the X11 client libraries. The build fails if nginx's version moved or a removed piece is still there |
 | Client address | `X-Forwarded-For` is **overwritten** with the real peer, never appended. The backend records the first entry; appending would let any client choose the address the audit trail shows |
-| Hardening | Read-only root filesystem, scratch paths on tmpfs, all capabilities dropped except `CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`, `no-new-privileges`, no server version in headers |
-| Logs | Container stdout/stderr, rotated at 5 × 20 MB. `docker compose logs -f` |
-| Health | `/healthz` on port 80, checked every 30 s; `restart: unless-stopped` |
+| Hardening | Runs as uid 101 from start to finish — no root master process — and listens on 8080/8443 inside the container, published as the host's 80/443. No capabilities at all, read-only root filesystem, scratch paths on tmpfs owned by 101, `no-new-privileges`, no server version in headers |
+| Resources | Sized for a 2 vCPU / 16 GB host: a 1 GB memory ceiling and 1.75 CPUs. nginx itself uses tens of megabytes, so the ceiling stops a leak rather than budgeting anything; the reasoning is beside the limits in `docker-compose.yml` |
+| Logs | Since 1.0.3, **files on the host** in `docker/logs/` — `access.log` (`json` or `main`) and `error.log` — kept across container re-creation and rotated by the host's logrotate. Without that mount, container stdout/stderr as before. §7a |
+| Health | `/healthz` on port 8080 inside the container (the host's port 80), checked every 30 s; `restart: unless-stopped` |
+
+### Running as a non-root user
+
+The image declares `USER 101:101`, so nothing in the container ever runs as root — the CIS Docker
+Benchmark's check 4.1, which the earlier image failed because nginx's master process started as
+root to bind ports 80 and 443. What follows from it:
+
+| | Before | Now |
+|---|---|---|
+| Ports inside the container | 80, 443 | **8080, 8443** — a non-root process cannot bind below 1024 |
+| Ports on the host | 80, 443 | 80, 443 — unchanged; compose publishes `80:8080` and `443:8443` |
+| Capabilities | `CHOWN`, `SETUID`, `SETGID`, `NET_BIND_SERVICE` | **none** |
+| `ssl/key.pem` | readable by root | **readable by uid 101** (§4) |
+| Redirects nginx makes itself | absolute | **relative** (`absolute_redirect off`): an absolute one would name the port nginx listens on, 8443, not the 443 the client used |
+
+**The one host step** is the key's ownership (§4). The tmpfs mounts are given to uid 101 by the
+compose file itself.
+
+**Upgrading a server from an image that ran as root:** `chown` the key first, and deploy the
+`docker-compose.yml` from the same release as the image. The old file publishes the container's
+port 80 and 443, where nothing listens any more — the container is healthy and the host port
+refuses connections.
+
+Verified on 2026-11-15 with the compose file's own settings: the master and every worker run as
+`nginx`; PID 1's effective capabilities are `0000000000000000`; the image's healthcheck reports
+healthy; the log has no permission, read-only, `emerg`, `crit` or `warn` line; envsubst renders the
+site into the uid-101 tmpfs; HTTP redirects to `https://<host>/…` with no port; a directory
+redirect is `Location: /assets/`; every security header is present; the manifest's type, the
+service worker's `no-cache`, the deep-link fallback and the `/assets/` 404 behave as in the table
+above; `docker stop` exits 0. End to end, `POST /api/auth/login` through this nginx to the
+backend and its database answered 200.
 
 ### What the CSP changes
 
@@ -210,8 +309,228 @@ old name until every browser tablet has synced there, rather than redirecting it
 `/api/` request is cross-origin, and this header refuses it. The APK is not affected by anything
 in this file: it never loads a page from nginx.
 
-**HSTS is deliberately not sent** — with a private CA and IP addresses it can strand a site that
-has to fall back ([docs/roadmap.md](../docs/roadmap.md) §1).
+### HSTS (since 1.0.2)
+
+`Strict-Transport-Security: max-age=31536000` on every HTTPS response. After one visit the
+browser rewrites `http://` to `https://` for this name before sending anything, and a certificate
+error no longer has a "proceed anyway" button. Until 1.0.2 it was deliberately left out pending a
+decision ([docs/roadmap.md](../docs/roadmap.md) §1); the site has taken it. What to know:
+
+- **It does nothing for an IP address.** Browsers ignore the header when the address typed is an IP
+  literal (RFC 6797 §8.1.1). Tablets that open `https://192.168.x.x` are unaffected either way.
+- **It does nothing for the APK**, which never loads a page from nginx and already refuses
+  cleartext.
+- **The one way it hurts: an expired certificate becomes a hard stop** for every browser tablet
+  that has seen the header, until the certificate is renewed (§9). Watch the expiry date.
+- **To switch it off** for a fleet that has already seen it, set `PWA_HSTS_MAX_AGE=0` and keep it
+  for a while: that tells each browser to forget. Removing the header alone does not.
+
+### Verified on 2026-11-17 (1.0.2)
+
+In front of a `logsheet-backend:1.0.2` container, with the compose file's hardening flags:
+`/healthz` 200; HTTP → HTTPS 301 and no HSTS on plain HTTP; on HTTPS every security header
+including HSTS, on `/`, `index.html`, `/assets/` (immutable), `sw.js` (no-cache), the manifest
+(`application/manifest+json`) and the `429`; the deep-link fallback; sign-in, bootstrap and inbox
+through nginx; `/api/auth/challenge` and the enrolment call reaching their handlers;
+`X-Forwarded-For: 6.6.6.6` sent by the client recorded as the real peer; a photo uploaded and read
+back byte for byte through nginx; **45 rapid sign-ins → 33 answered, 12 refused with the JSON 429**,
+while `/api/health` and signed-in calls kept answering; TLS 1.0, 1.1, CBC and static-RSA suites
+**refused** (1.0.1 accepted the last two), ECDHE-GCM, ChaCha20 and TLS 1.3 accepted; the CORS
+preflight of the APK's sign-in answered with its `Access-Control-Allow-Origin`; `nginx -t` clean
+and no warning in the log; compose refuses to start without `PWA_IMAGE_TAG`.
+
+---
+
+## 7a. Logs (since 1.0.3)
+
+### Where they are
+
+`docker-compose.yml` bind-mounts `docker/logs/` at `/var/log/nginx`, so nginx writes two ordinary
+files on the host:
+
+| File | What | Format |
+|---|---|---|
+| `logs/access.log` | one line per request (not `/healthz`) | `PWA_LOG_FORMAT`: `json` (default) or `main` |
+| `logs/error.log` | start-up, warnings, rate-limit refusals, `reopening logs` — at `PWA_ERROR_LOG_LEVEL` (below) | nginx's own text |
+
+**Everything nginx writes is in these two files** — both are on the bind mount, so both survive a
+re-created container and both are rotated. The one thing that is **not** there is what the
+container prints *before* nginx starts: the `logs: …` line and any `FATAL: …` from the start-up
+checks go to `docker compose logs`, which is where to look when the container will not start.
+
+**Why files, not `docker logs`:** Docker keeps a container's output **with the container**, and
+every `docker compose up -d` with a new image re-creates it — the previous version's logs went with
+it. Files on the host survive that, are rotated by your own policy, and are what Filebeat follows.
+`docker compose logs` now shows only the start-up lines, including one that says where the logs
+are going:
+
+```text
+logs: files in /var/log/nginx — access.log (json), error.log (text).
+```
+
+**It must be a bind mount (a host path).** A *named* volume is filled from the image on first use,
+and in this image `/var/log/nginx` holds two links — `access.log → /dev/stdout`,
+`error.log → /dev/stderr` — so a named volume keeps sending everything to `docker logs` and never
+writes a file. The start-up line says so when it happens. Remove the mount to go back to the
+pre-1.0.3 behaviour.
+
+### Owner and mode
+
+```bash
+cd docker
+sudo mkdir -p logs && sudo chown 101:101 logs && sudo chmod 0750 logs
+```
+
+nginx creates the files itself (`101:101 0644`). Tested on 2026-11-17 against `mfdcs-pwa:1.0.3`:
+
+| `logs/` | Result |
+|---|---|
+| `101:101 0750` | starts — **the recommended setup** |
+| `101:101 0700` | starts (but Filebeat, if it runs as a non-root user, cannot enter) |
+| `root:root 0755` | **exits before nginx starts**: `FATAL: /var/log/nginx is not writable by uid 101. On the host: chown 101:101 <logs directory> && chmod 750 <logs directory>` |
+| `root:101 0770` | starts — **but logrotate refuses the directory** (`parent directory has insecure permissions`) and the logs then grow without limit. Keep `0750` |
+| `0750`, with an `access.log` owned by `root` | **exits**: `FATAL: /var/log/nginx/access.log exists and is not writable by uid 101` |
+| `0750`, `access.log` `101:101 0640` (what logrotate creates) | starts |
+
+### The two formats
+
+Both carry the same facts; switching changes the shape only.
+
+`json` — one object per line, every value escaped (`escape=json`), so a User-Agent containing
+quotes, backslashes or a tab stays on its own line and cannot forge another. Fields:
+
+| Field | |
+|---|---|
+| `time` | ISO 8601 with offset, e.g. `2026-11-17T12:11:27+03:30` |
+| `request_id` | nginx's 32-hex-digit id for the request — **also in the backend's log** (below) |
+| `remote_addr`, `xff_in` | the real peer; and what the client *claimed* in `X-Forwarded-For` (never trusted — a non-empty value from a tablet is worth a look) |
+| `host`, `server_port`, `method`, `uri`, `protocol` | `uri` includes the query string |
+| `status`, `bytes_sent`, `body_bytes_sent`, `request_length`, `request_time` | numbers |
+| `upstream_addr`, `upstream_status`, `upstream_response_time` | empty for a static file; for `/api/` they say whether a slow or failed request was the backend's |
+| `limit_req_status` | `REJECTED` on a rate-limited sign-in, `PASSED` otherwise, empty where no limit applies |
+| `ssl_protocol`, `ssl_cipher` | empty on plain HTTP — the evidence that only strong TLS is in use |
+| `http_referer`, `http_user_agent` | |
+
+`main` — one line of text with the same facts, for `tail -f`:
+
+```text
+172.18.0.1 - - [2026-11-17T12:11:57+03:30] "POST /api/auth/login HTTP/1.1" 200 5935 "-" "okhttp/4" rid=6609b8d9… host=pwa.example rt=0.220 ua=10.0.0.12:8081 us=200 urt=0.214 lim=PASSED tls=TLSv1.3/TLS_AES_256_GCM_SHA384
+```
+
+**Not in either, on purpose:** request bodies (the sign-in password) and the `Authorization` header
+(the bearer token). Verified: neither appeared in a log that contained a sign-in. **The URL,
+query string included, is in both** — see «Nothing sensitive in a URL» below.
+
+**Switching the format** takes effect at the next start, and new lines are appended to the same
+file — so for a while `access.log` holds both shapes, and a JSON reader trips on the text lines.
+Rotate first (`sudo logrotate --force /etc/logrotate.d/mfdcs-pwa`), then restart.
+
+**One request, both logs.** nginx sends its `request_id` to the backend as `X-Correlation-Id`, which
+the backend puts on every log line of that request. Search the backend's `app.log` for the
+`request_id` of a failed request and you have its whole story. A client's own `X-Correlation-Id`
+is overwritten, so a tablet cannot choose what the backend's log says. Verified: the id in the
+access log, the id in the backend's lines and the one in the response header were the same.
+
+**A byte that is not UTF-8**, if a client sends one in a header, reaches the line unchanged —
+nginx escapes quotes and control characters, not invalid UTF-8. The line is still one line and
+still JSON in shape; configure the reader to replace invalid sequences rather than drop the line.
+
+### The error log — its level, and what it holds
+
+**It is text, and stays text.** `log_format` applies to the access log only; the error log's
+line is fixed by nginx and no directive changes it, in the open-source build or in NGINX Plus. To
+get JSON, parse it where it is shipped — Filebeat/Fluent Bit/Vector each have a parser for this
+shape — rather than in nginx. One line:
+
+```text
+2026/11/20 06:53:41 [error] 23#23: *3 connect() failed (111: Connection refused) while connecting to upstream, client: 172.17.0.1, server: _, request: "POST /api/auth/login HTTP/1.1", upstream: "http://127.0.0.1:8081/api/auth/login", host: "localhost:18443"
+```
+
+Time, level, process and thread, the connection number (`*3`), the message — then, when the line is
+about a request, the client address, the server, the **request line**, the upstream and the host.
+
+**The level** is `PWA_ERROR_LOG_LEVEL` (`.env`). nginx writes a message when it is at the chosen
+level **or more severe**, so the list runs from the most to write to the least:
+
+| Level | Severity | What it adds, on this site |
+|---|---|---|
+| `debug` | lowest | Every internal step of every request. **Refused here**: the image runs the `nginx` binary, built without `--with-debug`, which accepts `debug` and then writes nothing more than `info` — a setting that silently does nothing is worse than one refused. Kept out deliberately |
+| `info` | | Client-side events: a TLS handshake that failed (an old tablet, a wrong certificate), a client closing the connection early. **For chasing a TLS or connectivity problem, briefly** — on a busy site it is the noisy one |
+| `notice` | **default** | Nothing extra from requests in practice; what `notice` adds is process events, which are logged at `notice` whatever this says (below) |
+| `warn` | | **Rate-limit refusals** (`limiting requests, excess: … by zone "pwa_auth", client: …` — logged at `warn` by `limit_req_log_level`), a request body buffered to a temporary file, an upstream that sent an invalid header. **Recommended for production** together with `notice` |
+| `error` | | **Why a request failed**: the backend refused or timed out (`connect() failed`, `upstream timed out` — every 502/504), a body over `PWA_MAX_BODY_SIZE` (`client intended to send too large body` — the 413), a file not found or not readable. **From here up, rate-limit refusals are no longer recorded**; the access log still marks each one (`limit_req_status: REJECTED`), and the container says so at start |
+| `crit` | | Serious faults: out of file descriptors, a socket that cannot be opened, some TLS failures inside nginx |
+| `alert` | | Faults needing action at once, e.g. a worker that could not be started |
+| `emerg` | highest | nginx cannot run: a bad configuration, a certificate it cannot load, a port it cannot bind. These stop the container |
+
+**Two lines, one file.** `nginx.conf` is not a template — it is read before the environment is
+applied — so its own `error_log … notice` stays and carries the process's messages: start, reload,
+`reopening logs` after a rotation, shutdown, a bad configuration. The level you set comes from a
+second `error_log`, at http level in `templates/default.conf.template`, and governs everything a
+**request** causes. So whatever level you choose, start-up and rotation stay visible.
+
+**Changing it** takes effect at the next start (`docker compose up -d` after editing `.env`); no
+image rebuild. Verified on 2026-11-20 against a build of this commit: `warn` recorded the
+rate-limit refusal and both upstream failures; `error` recorded the two upstream failures and not
+the refusal, and printed the note at start; `debug` and `bogus` each stopped the container with
+their `FATAL:` line; the process's `notice` lines were present at every level.
+
+### Nothing sensitive in a URL
+
+**Both logs write the full URL of a request, query string included**: the access log in `uri`,
+for every request; the error log in `request: "…"`, for every request that causes a line. Neither
+writes headers or bodies. Verified on 2026-11-20: a request to
+`/api/lookups/staff/items?q=EXAMPLE-NAME` with `Authorization: Bearer EXAMPLE-TOKEN` put the name
+in both files and the token in neither.
+
+**Why that is a security matter.** A log is not protected like the database. It is readable by
+anyone with access to the host or to `docker/logs/`, who is not necessarily anyone allowed into
+the panel or the database; the application's access rules (unit scope, roles) do not apply to it;
+and it is kept — 30 rotations by default, then whatever Filebeat, Logstash and the backups keep.
+A value that once went into a URL is in all of those places, for that long, and cannot be taken
+back. What would be harmful there:
+
+- a token, key or signed link (`?token=…`) — whoever reads the log can act as that user;
+- the one-time device-enrolment code;
+- personal data — a name, a personnel or national code typed into a search (`?q=…`).
+
+**Today nothing sensitive goes into a URL.** The PWA sends its token in `Authorization`, the
+enrolment code and request number in the body, and no search text in a query string; the panel
+does not pass through this nginx. **The rule for anything new**: send sensitive values in the body
+(a `POST`) or a header, never in the path or the query string. If a URL must carry one — a
+server-side search of a personnel list, say — mask it before it is logged, in both logs.
+
+### Rotation — `docker/logrotate/mfdcs-pwa`
+
+```bash
+sudo cp logrotate/mfdcs-pwa /etc/logrotate.d/mfdcs-pwa
+sudo chown root:root /etc/logrotate.d/mfdcs-pwa && sudo chmod 0644 /etc/logrotate.d/mfdcs-pwa
+sudoedit /etc/logrotate.d/mfdcs-pwa          # the path on its first line: where docker/ lives here
+sudo logrotate --force --verbose /etc/logrotate.d/mfdcs-pwa     # once, to see it work
+```
+
+Daily (and earlier at 200 MB), 30 rotations kept, compressed a day late, new files created
+`0640` with the old file's owner, then `docker kill --signal=USR1 mfdcs-pwa` so nginx reopens its
+files — no restart, nothing lost. The file's own comments say why each line is there. Tested on
+2026-11-17 with logrotate 3.22 against a running `mfdcs-pwa:1.0.3`: the rotated file held only the
+lines before the rotation and the new one only those after; the next rotation compressed it
+(`gzip -t` clean); nginx logged `reopening logs` and stayed healthy. **The test found one mistake
+and it is fixed:** logrotate wants *names* in `create mode owner group`, and refused `101 101`
+with `unknown group '101'` — so the file gives the mode alone and the owner is copied.
+
+### Size
+
+Roughly 600 bytes a line in `json`, 400 in `main`. Fifty tablets syncing every 30 s plus their
+uploads is in the order of a few hundred MB a day uncompressed at the busiest, a tenth of that
+compressed. This is an estimate, not a measurement; look at `du -sh docker/logs` after the first
+busy week and adjust `rotate`.
+
+### Shipping to Logstash later
+
+Filebeat on this host, reading `<docker>/logs/access.log` with the `ndjson` parser (or `main` with
+a grok pattern) and `error.log` as plain lines. Point it at `access.log` only, not `access.log-*`:
+Filebeat follows a renamed file by its inode, so a rotation loses nothing and reads nothing twice.
+Filebeat runs as root on the host, so the `0750` directory is no obstacle.
 
 ---
 
@@ -296,10 +615,11 @@ Docker Desktop runs Linux containers fine, with two differences worth knowing:
 | Symptom | Cause | Fix |
 |---|---|---|
 | Container restarts, log: `cannot load certificate "/etc/nginx/ssl/cert.pem"` | `ssl/` empty or wrong names | §4 |
-| Log: `Permission denied` on `key.pem` | Key not readable by root without capabilities | `chown root:root`, §4 |
+| Log: `Permission denied` on `key.pem` | Key not readable by uid 101 — nginx no longer runs as root | `chown 101:101 ssl/key.pem`, §4 |
+| Container healthy, but the host's port 80/443 refuses connections | A `docker-compose.yml` older than the image, still publishing the container's 80/443 | Use the compose file from the same release: `80:8080`, `443:8443` (§7) |
 | Log: `host not found in upstream` | `PWA_BACKEND_UPSTREAM` unresolvable | §5 |
 | `502 Bad Gateway` on `/api/` | Backend down or wrong port | `curl` the upstream from the host; check the WinSW service |
-| `413 Request Entity Too Large` on an upload | Above `PWA_MAX_BODY_SIZE` | Raise it (and the backend's limit) |
+| `413 Request Entity Too Large` on an upload | Above `PWA_MAX_BODY_SIZE` | Raise it **and** the backend's `app.http.max-json-body-bytes` — the two are a pair |
 | Tablets: «ارتباط با سرور برقرار نشد», browser shows a certificate error | Certificate not from the plant CA, expired, or address missing from SAN | §4 checks |
 | APK fails, Chrome on the same tablet works | APK bundles a different CA | [docs/apk.md §5](../docs/apk.md) |
 | Browser tablets still run the old version | A cached `sw.js` somewhere in between | `curl -sI …/sw.js` must say `no-cache`; check no other proxy caches it |

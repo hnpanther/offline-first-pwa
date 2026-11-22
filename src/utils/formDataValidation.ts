@@ -2,6 +2,8 @@ import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/a
 import type { LogSheet } from '@/types'
 import type { FieldDefinition } from '@/types/sync'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
+import { entryLimitError } from '@/utils/fieldValidation'
+import { isLookupDataType, lookupChoices } from '@/utils/lookupValue'
 
 /**
  * A client-side mirror of the server's submit validation.
@@ -28,6 +30,8 @@ import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 
 /** Mirrors `FormDataValidationSupport.isBlank(value, dataType)` on the server. */
 export function isFieldValueBlank(value: unknown, dataType: string | undefined): boolean {
+  // A reference-list answer: blank when it names no code (backend FormDataValidationSupport).
+  if (isLookupDataType(dataType)) return lookupChoices(value).length === 0
   if (value === undefined || value === null) return true
   if (typeof value === 'string') return value.trim() === ''
   if (Array.isArray(value)) return value.length === 0
@@ -99,6 +103,11 @@ export interface SubmitBlockingIssue {
   assetName?: string
   /** The field's label, matching what the operator sees on the form. */
   fieldLabel: string
+  /**
+   * Why the value the device holds is refused — set only for a number outside its entry limit
+   * (backend roadmap §40), worded with the limit. Absent means the field is required and blank.
+   */
+  problem?: string
 }
 
 /**
@@ -123,24 +132,61 @@ export function findSubmitBlockingIssues(
     if (defs.length === 0) continue
 
     for (const def of defs) {
-      if (def.deleted || !def.required) continue
-      if (isFieldValueBlank(entry.formData?.[def.key], def.dataType)) {
+      if (def.deleted) continue
+      const value = entry.formData?.[def.key]
+      if (def.required && isFieldValueBlank(value, def.dataType)) {
         issues.push({
           assetId: entry.assetId,
           assetName: entry.assetName,
           fieldLabel: def.label || def.key
         })
+        continue
+      }
+      // A number outside its entry limit (backend roadmap §40) — refused by the server's
+      // `validateNumber` against the very same frozen definition. The entry form already will
+      // not save one; this catches a value stored by a build that predates the limit, while the
+      // operator can still open the asset and fix it. Only when the value IS a number: whether
+      // something unparseable counts as one is the server's question, and this module never
+      // blocks on a guess (see the rule at the top).
+      if (def.dataType === 'number' && isPlainNumber(value)) {
+        const problem = entryLimitError(value, def.validation)
+        if (problem) {
+          issues.push({
+            assetId: entry.assetId,
+            assetName: entry.assetName,
+            fieldLabel: def.label || def.key,
+            problem
+          })
+        }
       }
     }
   }
   return issues
 }
 
+function isPlainNumber(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value !== 'string' || value.trim() === '') return false
+  return Number.isFinite(Number(value.trim()))
+}
+
 /** A short Persian summary naming the first few offending assets and fields. */
 export function describeSubmitBlockingIssues(issues: SubmitBlockingIssue[]): string {
   if (issues.length === 0) return ''
+  const missing = issues.filter(i => !i.problem)
+  const refused = issues.filter(i => i.problem)
+  const sentences: string[] = []
+  if (missing.length > 0) {
+    sentences.push(`فیلدهای الزامی تکمیل نشده‌اند — ${listed(missing, i => `${i.assetName ?? i.assetId}: ${i.fieldLabel}`)}.`)
+  }
+  if (refused.length > 0) {
+    sentences.push(`مقدار خارج از حد مجاز — ${listed(refused, i => `${i.assetName ?? i.assetId}: ${i.fieldLabel} (${i.problem})`)}`)
+  }
+  return sentences.join(' ')
+}
+
+function listed(issues: SubmitBlockingIssue[], label: (i: SubmitBlockingIssue) => string): string {
   const shown = issues.slice(0, 3)
-  const parts = shown.map(i => `${i.assetName ?? i.assetId}: ${i.fieldLabel}`)
   const more = issues.length > shown.length ? ` و ${issues.length - shown.length} مورد دیگر` : ''
-  return `فیلدهای الزامی تکمیل نشده‌اند — ${parts.join('، ')}${more}.`
+  return shown.map(label).join('، ') + more
 }

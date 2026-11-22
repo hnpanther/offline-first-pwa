@@ -150,6 +150,29 @@ export async function updateLogSheet(
   await db.logSheets.update(existing.id, { ...updates, updatedAt: Date.now() })
 }
 
+/**
+ * Patches a sheet with changes computed from the row **as it is inside the write's transaction**.
+ *
+ * For a writer that decides what to write from what the row holds — the bundle merge deciding
+ * whose answers stand — while another writer can change the row in between: the fill page
+ * saving an asset or the round's questions. Reading the row earlier and patching later is the
+ * lost update `updateLogSheet`'s `put` branch documents; here the read, the decision and the
+ * patch are one `rw` transaction, so a save is either seen by the decision or untouched by it.
+ *
+ * `build` must be synchronous: an IndexedDB transaction commits as soon as nothing is pending
+ * on it, so awaiting anything else inside would end it early.
+ */
+export async function updateLogSheetFrom(
+  localId: string,
+  build: (current: LogSheet) => Partial<LogSheet>
+): Promise<void> {
+  await db.transaction('rw', db.logSheets, async () => {
+    const current = await db.logSheets.where('localId').equals(localId).first()
+    if (!current?.id) throw new Error(`LogSheet not found: ${localId}`)
+    await db.logSheets.update(current.id, { ...build(current), updatedAt: Date.now() })
+  })
+}
+
 /** Move a locally submitted sheet back to draft (clears outbound queue metadata). */
 export async function revertLogSheetToDraft(localId: string): Promise<void> {
   await resetLogSheetToOpenDraft(localId)
@@ -212,6 +235,19 @@ export async function resetLogSheetToOpenDraft(
 
 export async function getAllLogSheets(): Promise<LogSheet[]> {
   const items = await db.logSheets.toArray()
+  return items.sort((a, b) => b.createdAt - a.createdAt)
+}
+
+/**
+ * Rounds in one local state, read through the `status` index rather than the whole table.
+ *
+ * For the readers that run on every sync tick (issue P-08): the submit queue wants only
+ * `submitted` rows and the progress lane only `draft` ones, and on a tablet that has been
+ * collecting for a week deserialising every round — each with up to 300 entries — five times
+ * every thirty seconds is what makes the form feel slow.
+ */
+export async function getLogSheetsByStatus(status: LogSheet['status']): Promise<LogSheet[]> {
+  const items = await db.logSheets.where('status').equals(status).toArray()
   return items.sort((a, b) => b.createdAt - a.createdAt)
 }
 

@@ -13,7 +13,7 @@ facts are the part most worth keeping: a design can be re-argued cheaply, a cons
 by reading five files and a built APK cannot.
 
 The backend keeps its own, with the same convention:
-[`backend-offline-first/docs/roadmap.md`](../../JavaProject/backend-offline-first/docs/roadmap.md).
+[`backend-offline-first/docs/roadmap.md`](../../backend-offline-first/docs/roadmap.md).
 
 ---
 
@@ -62,8 +62,14 @@ already reached**: on the nginx host, on the backend, or from a third machine.
    (`docker/nginx/snippets/security-headers.conf`); still open for the systemd and WinSW configs,
    which can include the same snippet.
    Add `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY` in the same pass.
-   **HSTS deliberately excluded**: with a private CA and IP-based URLs it buys little and can
-   strand a site that has to fall back, so it needs its own decision rather than riding along.
+   **HSTS** was excluded here pending its own decision — with a private CA and IP-based URLs it buys
+   little and can strand a site that has to fall back. **Decided and built for the Docker
+   deployment in `mfdcs-pwa:1.0.2`** (2026-11-17, after the security unit's review):
+   `max-age` one year, configurable as `PWA_HSTS_MAX_AGE`, `0` to make browsers forget. It still
+   does nothing for an IP address or for the APK; what it costs is that an expired certificate
+   becomes a hard stop for browser tablets (`docker/DEPLOY.md` § "HSTS"). The same release added a
+   per-address rate limit on sign-in and an AEAD-only TLS 1.2 cipher list. **Still open for the
+   systemd and WinSW configs** in `docs/deployment.md`, which have none of the three.
 2. **File integrity monitoring on the nginx host.** Hash the `dist/` tree at build time, store the
    manifest, re-hash on a timer on the host and alert on drift. This is the honest version of
    "can the backend check the files are intact" — the backend can *hold* the expected hashes;
@@ -91,7 +97,7 @@ point where "check one tablet after deploying" is a real check rather than a hab
 | Fact | Where |
 |---|---|
 | `api_sessions` already records `ip_address`, `user_agent`, `device_label` and `last_seen_at` per session | backend `ApiSession` |
-| JWTs are **stateful**: the `jti` must match a live row **belonging to the `uid` in the token** | backend [security.md §8](../../JavaProject/backend-offline-first/docs/security.md) |
+| JWTs are **stateful**: the `jti` must match a live row **belonging to the `uid` in the token** | backend [security.md §8](../../backend-offline-first/docs/security.md) |
 | The token carries **no roles or permissions** — authorities are read from the database on every request | same |
 | **One device per user**; a new login supersedes the previous session, with the reason recorded | same |
 | Deactivating or deleting a user closes live sessions immediately | same |
@@ -149,9 +155,9 @@ something the device's operator does not control, which means hardware.
 | Fact | Where |
 |---|---|
 | There is **no full master-data pull** — a device holds only the bundles for its own sheets | [sync.md](sync.md), `AGENTS.md` |
-| Scope is enforced **server-side** from the database, never from a claim in the token | backend [security.md](../../JavaProject/backend-offline-first/docs/security.md) |
+| Scope is enforced **server-side** from the database, never from a claim in the token | backend [security.md](../../backend-offline-first/docs/security.md) |
 | Outbound sync carries **only the signed-in operator's own work**, on every queue | `AGENTS.md` § Critical invariants |
-| A forged token cannot grant authority, impersonate another user, or outlive its session row | backend [security.md §8](../../JavaProject/backend-offline-first/docs/security.md) |
+| A forged token cannot grant authority, impersonate another user, or outlive its session row | backend [security.md §8](../../backend-offline-first/docs/security.md) |
 
 So the reachable loss from one rooted tablet is **that operator's own scope** — which is what the
 architecture was built to guarantee, and it holds.
@@ -275,13 +281,34 @@ linked document. Do not copy it here.*
 | `ensureLocalLogSheet`'s offline fallback does not have the submitted-pending guard (not reachable from any current caller) | AGENTS.md, log sheet merge |
 | Showing the last recorded value while a reading is taken, which needs the value in the bundle | backend `docs/roadmap.md` §9 |
 | The cost of rebuilding the inbox on every sync tick | backend `docs/roadmap.md` §3 |
-| `CLAUDE.md`, `AGENTS.md` and this file point to the backend at `D:\LocalStorage\Project\JavaProject\backend-offline-first` and link to it as `../../JavaProject/...`. On the current development machine the backend is the sibling directory `../backend-offline-first`, so those links do not resolve there | this file's header, `CLAUDE.md`, AGENTS.md |
+| `scripts/generate-icons.mjs` still defaults to `../../JavaProject/backend-offline-first` for the backend's `static/` folder; on the current machine the backend is the sibling `../backend-offline-first`, so set `BACKEND_STATIC_DIR` (or change the default). The documents' own paths and links were corrected on 2026-11-19 | README «icons», the script |
 
 ---
 
-# 7. A tablet whose clock is wrong
+# 7. A tablet whose clock is wrong — **the offset, the floor and the server's upper bound built (2026-11-18, backend V28)**
 
-*Found in a production-risk review on 2026-10-15. Nothing is built yet.*
+*Found in a production-risk review on 2026-10-15.*
+
+> **Built**, and described where built behaviour belongs — [sync.md](sync.md), «The server's clock,
+> on this device»: the server-clock offset measured on sign-in, bootstrap and the inbox and
+> persisted (design item 1); every absolute-time decision and `completedAt` on `serverNow()`, with
+> durations and device-only stamps left on the device clock (item 2); a floor so `serverNow()` never
+> reads earlier than the server time last seen («the clock must not run backwards», detection rule 1,
+> applied rather than only detected); the offset sent with each completion as `clientClockOffsetMs`
+> and stored by the server as evidence; the session check on the server's clock; and on the server,
+> **`completedAt` no later than its receipt plus 5 minutes** — the first of the three server bounds
+> (backend issue B-17). The cleanup guard (item 3) was already in place since P-05.
+>
+> **Still open, as designed below:** detection within a run (`performance.now()`) and across
+> restarts in the APK (`elapsedRealtime`) — note `performance.now()` stops during Android's deep
+> sleep, so the in-run comparison must tolerate a sleep, not read it as a clock change; the server's
+> **lower** bound (`completedAt` not earlier than the claim, the assignment or the latest progress
+> `savedAt` the server itself recorded); the «clock looks wrong» banner (item 4); and a flag sent when
+> a change was detected. A clock set back offline by less than the time since the last sync is still
+> believed — that is the limit stated below, unchanged.
+>
+> The «What is true today» table below is the state **before** that change and is kept as the record
+> of what was decided.
 
 Every deadline and retention decision on the device is taken against the **device's** clock. The
 server already sends its own time, and the client stores it and uses it for nothing. On a plant
@@ -556,7 +583,7 @@ or a move that has to happen while tablets are out in the plant and cannot be vi
 
 # 11. Sheet-level fields, and a round with no assets — **built**
 
-*The device half of the backend's [roadmap §24](../../JavaProject/backend-offline-first/docs/roadmap.md).
+*The device half of the backend's [roadmap §24](../../backend-offline-first/docs/roadmap.md).
 Raised as: "a log sheet should be able to carry a few fields of its own beside the assets — and a
 sheet may have no asset at all, just a few questions."*
 
@@ -710,7 +737,7 @@ field.
 
 # 12. QR beside NFC on the device — **built**
 
-*The device half of the backend's [roadmap §25](../../JavaProject/backend-offline-first/docs/roadmap.md).
+*The device half of the backend's [roadmap §25](../../backend-offline-first/docs/roadmap.md).
 Raised as: "a template should be able to allow NFC, or QR, or either of the two — with NFC the
 default."*
 
@@ -1004,14 +1031,42 @@ is the shape of bug this warning exists to make impossible to have.
 
 ---
 
-# 15. A choice you can search and type into, lookup lists, and a signature — the device half
+# 15. A choice you can search and type into, lookup lists, and a signature — the device half — **built**
 
 *The device side of backend roadmap §31 and §32*
-([`backend-offline-first/docs/roadmap.md`](../../JavaProject/backend-offline-first/docs/roadmap.md)).
-Nothing here is built; the reasoning, the server rules and the declined fingerprint field (§33)
-live there. This section records only what is particular to the tablet.
+([`backend-offline-first/docs/roadmap.md`](../../backend-offline-first/docs/roadmap.md)).
+The reasoning, the server rules and the declined fingerprint field (§33) live there. This section
+records only what is particular to the tablet.
 
-## What happens today
+> **Built — all three** (corrected 2026-11-19; this section used to say «nothing here is built»
+> after the code had shipped). Where each now lives:
+>
+> - **Searchable choice and free entry** — `components/forms/ChoiceAutocomplete.tsx` and
+>   `choiceControl.ts` (the threshold: more than eight options), the Persian normaliser in
+>   `utils/persianSearch.ts` with its test; README «Searchable choice lists».
+> - **Lookup lists** — `services/lookups/` (`lookupStore`, `lookupSync`, `lookups.test.ts`) and
+>   `components/forms/LookupFieldInput.tsx`; Dexie `version(4)` in [storage.md](storage.md); README
+>   «Lookup»; AGENTS.md's lookup rows.
+> - **Signature** — `components/forms/SignatureFieldInput.tsx` and `utils/signatureValue.ts`;
+>   README «Signature field».
+>
+> **Where the build departed from the plan below**, so the plan is not mistaken for behaviour:
+>
+> - The lookup store is two stores, `lookupLists` (keyed by the list's code) and `lookupItems`
+>   (keyed by the server's item id, indexed by list) — not one store keyed on `[list+code]`; and
+>   lists are delivered by the round's `requiredLookups` grant and a lease, not by a general
+>   incremental sync (backend §31 «Decided while building it»).
+> - The personal-data question was decided: a reference list is the **one** store that does not
+>   survive sign-out, and an expired lease deletes it (AGENTS.md).
+> - **The signature's hash is computed by the server, never by the device** — the opposite of the
+>   last bullet below. The device sends `{ type: 'signature', ids, signedAt }`; the signer and the
+>   hash are stamped at sync, because two canonicalisations would drift and every signature taken
+>   offline would then read as stale (backend §32 «The shape, decided»).
+>
+> The rest of this section is the original plan, kept for its reasoning; its «What happens today»
+> table describes the device before the build.
+
+## What happens today (before the build)
 
 | Fact | Where |
 |---|---|
@@ -1069,10 +1124,11 @@ sync was voided and shows a send error, makes the bar at the top say «1 رکو�
 files uploadable as the void's evidence, and a 403 on such a file parks it — bytes kept, out of the
 badge — instead of retrying it for ever (`attachmentSync.isRefusedVoidEvidence`). Tests in
 `attachmentSync.test.ts`. A row parked by that 403 is also exempt from the cleanup that retires a
-week-old failed sheet with its parked files (`deleteSyncedAttachmentsForLogSheet`), so the wrong
+failed sheet with its parked files (since backend V24 that cleanup is off by default for failed
+sheets) (`deleteSyncedAttachmentsForLogSheet`), so the wrong
 deploy order cannot turn "parked" into "deleted" (`attachmentsDb.test.ts`). The server half,
 built at the same time, is backend roadmap
-§35 ([`backend-offline-first/docs/roadmap.md`](../../JavaProject/backend-offline-first/docs/roadmap.md)).
+§35 ([`backend-offline-first/docs/roadmap.md`](../../backend-offline-first/docs/roadmap.md)).
 
 ## What happens today
 

@@ -339,3 +339,197 @@ describe('the store follows the server, not just IndexedDB', () => {
     expect(useAppStore.getState().settings.imageAnnotationEnabled).toBe(false)
   })
 })
+
+/**
+ * Backend roadmap §41 — how long a round stays on the tablet, carried on the same bootstrap as the
+ * ceilings and the policies, and held to the same two rules: a change in the panel must reach the
+ * device, and a server that says nothing must never reset what the device has.
+ *
+ * The third rule is this feature's own: the device clamps, and nothing it receives can turn on
+ * the purge of rounds that never reached the server unless the server said exactly `true`.
+ */
+describe('device retention over bootstrap', () => {
+  const RETENTION = { syncedRetentionHours: 48, unsyncedPurgeEnabled: false, unsyncedRetentionHours: 168 }
+
+  beforeEach(() => {
+    useAppStore.getState().setSettings({ ...DEFAULT_SETTINGS })
+  })
+
+  it('has no policy before any sync — the purge then runs on the shipped constants', async () => {
+    expect((await getSettings()).deviceRetention).toBeUndefined()
+  })
+
+  it('adopts the server values and publishes them to the store', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+    expect(useAppStore.getState().settings.deviceRetention).toEqual(RETENTION)
+  })
+
+  it('applies the block even when the payload carries nothing else', async () => {
+    // Gating the write on attachmentLimits/mobilePolicy being present would make the retention
+    // depend on an unrelated part of the response.
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('lands in the same write as the other blocks, without either overwriting the other', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        attachmentLimits: LIMITS,
+        mobilePolicy: { imageAnnotationEnabled: false, nfcStrictSerialMatch: true, nfcManualEntryEnabled: true },
+        deviceRetention: RETENTION
+      })
+    )
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.attachmentLimits).toEqual(LIMITS)
+    expect(settings.imageAnnotationEnabled).toBe(false)
+    expect(settings.nfcManualEntryEnabled).toBe(true)
+    expect(settings.deviceRetention).toEqual(RETENTION)
+  })
+
+  it('leaves the stored retention alone when an older server sends no block', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, deviceRetention: RETENTION })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('treats a null block like no block', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, deviceRetention: RETENTION })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: null }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('keeps a device that never had a policy on the shipped constants when the server sends none', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ attachmentLimits: LIMITS }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toBeUndefined()
+  })
+
+  it('leaves the stored retention alone when the pull fails', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, deviceRetention: RETENTION })
+    fetchBootstrap.mockRejectedValue(new Error('offline'))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual(RETENTION)
+  })
+
+  it('clamps out-of-range values before storing them', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        deviceRetention: { syncedRetentionHours: 9999, unsyncedPurgeEnabled: true, unsyncedRetentionHours: 3 }
+      })
+    )
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention).toEqual({
+      syncedRetentionHours: 720,
+      unsyncedPurgeEnabled: true,
+      unsyncedRetentionHours: 72
+    })
+  })
+
+  it('never switches the purge of undelivered rounds on for anything but exactly true', async () => {
+    fetchBootstrap.mockResolvedValue(
+      bootstrapPayload({
+        deviceRetention: { syncedRetentionHours: 24, unsyncedPurgeEnabled: 'true', unsyncedRetentionHours: 168 }
+      })
+    )
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention?.unsyncedPurgeEnabled).toBe(false)
+  })
+
+  it('turns the purge off again when the administrator does', async () => {
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      deviceRetention: { ...RETENTION, unsyncedPurgeEnabled: true, unsyncedRetentionHours: 72 }
+    })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    expect((await getSettings()).deviceRetention?.unsyncedPurgeEnabled).toBe(false)
+  })
+
+  it('leaves the device-owned settings untouched', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, serverUrl: 'https://plant.example', syncIntervalMs: 45_000 })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ deviceRetention: RETENTION }))
+
+    await pullBootstrap()
+
+    const settings = await getSettings()
+    expect(settings.serverUrl).toBe('https://plant.example')
+    expect(settings.syncIntervalMs).toBe(45_000)
+  })
+})
+
+// =============================================================================================
+// Backend V28 — the offline-session ceiling, and the staleness check on the server's clock
+// =============================================================================================
+
+describe('the offline-session ceiling over bootstrap', () => {
+  it('a device that was never told has none, and so never locks', async () => {
+    expect((await getSettings()).offlineSessionLimit).toBeUndefined()
+  })
+
+  it('adopts the plant ceiling, clamped, and keeps it when a later server says nothing', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: true, limitHours: 2 } }))
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: true, hours: 8 })
+    expect(useAppStore.getState().settings.offlineSessionLimit).toEqual({ enabled: true, hours: 8 })
+
+    fetchBootstrap.mockResolvedValue(bootstrapPayload())
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: true, hours: 8 })
+  })
+
+  it('turns it off again when the plant does', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: true, limitHours: 24 } }))
+    await pullBootstrap()
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: false, limitHours: 24 } }))
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: false, hours: 24 })
+  })
+
+  it('a malformed switch is off — a value nobody chose must not lock anybody out', async () => {
+    fetchBootstrap.mockResolvedValue(bootstrapPayload({ offlineSession: { limitEnabled: 'yes', limitHours: 'x' } }))
+    await pullBootstrap()
+    expect((await getSettings()).offlineSessionLimit).toEqual({ enabled: false, hours: 72 })
+  })
+})
+
+describe('the staleness check is on the server clock', () => {
+  it('a device clock running hours behind still refreshes once the server hour has passed', async () => {
+    const { recordServerTimeSample, resetServerClockForTests } = await import('@/services/clock/serverClock')
+    const deviceNow = Date.now()
+    // The device runs three hours behind the server; the last pull was two hours ago, server time.
+    recordServerTimeSample(deviceNow + 3 * 3_600_000, deviceNow, deviceNow)
+    await db.syncMeta.put({ key: 'lastBootstrapAt', value: deviceNow + 3_600_000 })
+    fetchBootstrap.mockResolvedValue(bootstrapPayload())
+
+    await pullBootstrapIfStale(60 * 60 * 1000)
+
+    expect(fetchBootstrap).toHaveBeenCalledOnce()
+    resetServerClockForTests()
+  })
+})

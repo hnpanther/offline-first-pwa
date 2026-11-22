@@ -6,7 +6,9 @@ import type { LoginRequest, LoginResponse } from '@/types/auth'
 import type { EnrollmentStateResponse, LoginChallengeResponse } from '@/types/device'
 import {
   DeviceGateError,
+  WIPING_MESSAGE,
   completeEnrollment,
+  restartEnrollment,
   gateForError,
   gateOf,
   loginWithDevice,
@@ -275,5 +277,82 @@ describe('enrolling', () => {
 
   it('cannot confirm before a request exists', async () => {
     await expect(completeEnrollment('12345678', deps())).rejects.toThrow()
+  })
+})
+
+// =============================================================================================
+// Backend V28 — a wipe order reaches the login and the enrolment, and stops both
+// =============================================================================================
+
+describe('a wipe order', () => {
+  const ORDER = { enforced: false, deviceStatus: 'REVOKED' as const, wipe: true, wipeOrderedAt: 1_763_452_800_123 }
+
+  it('in the challenge answer is carried out instead of a login — even with enrolment off', async () => {
+    await approvedIdentity(9, 'fp')
+    const handleWipe = vi.fn().mockResolvedValue('wiping')
+    const d = deps({ fetchLoginChallenge: vi.fn().mockResolvedValue(ORDER), handleWipe })
+
+    const failure = await loginWithDevice('op', 'pw', d).catch(e => e)
+
+    expect(failure).toBeInstanceOf(DeviceGateError)
+    expect((failure as DeviceGateError).gate).toBe('revoked')
+    expect((failure as DeviceGateError).message).toBe(WIPING_MESSAGE)
+    expect(handleWipe).toHaveBeenCalledWith(9, ORDER)
+    // `enforced: false` would have routed to a plain login; the order stopped it.
+    expect(d.login).not.toHaveBeenCalled()
+  })
+
+  it('without one, the login is exactly what it was', async () => {
+    await approvedIdentity(9, 'fp')
+    const handleWipe = vi.fn()
+    const d = deps({ fetchLoginChallenge: vi.fn().mockResolvedValue({ enforced: false }), handleWipe })
+
+    await loginWithDevice('op', 'pw', d)
+
+    expect(handleWipe).not.toHaveBeenCalled()
+    expect(d.login).toHaveBeenCalledWith({ username: 'op', password: 'pw' })
+  })
+
+  it('is asked about before a revoked key is thrown away — and a wipe under way keeps the key', async () => {
+    await approvedIdentity(9, 'fp')
+    const revoked = new ApiError(403, 'revoked', { code: 'DEVICE_REVOKED', message: 'x' })
+    const d = deps({
+      requestDeviceEnrollment: vi.fn().mockRejectedValue(revoked),
+      checkWipe: vi.fn().mockResolvedValue('wiping')
+    })
+
+    await expect(startEnrollment('tablet', d)).rejects.toThrow(WIPING_MESSAGE)
+
+    expect(d.checkWipe).toHaveBeenCalledTimes(1)
+    // Not discarded: the wipe sets it aside to sign its confirmation.
+    expect((await loadIdentity())?.requestId).toBe(9)
+    expect(d.requestDeviceEnrollment).toHaveBeenCalledTimes(1)
+  })
+
+  it('with no order, a revoked key is replaced as before', async () => {
+    const old = await approvedIdentity(9, 'fp')
+    const revoked = new ApiError(403, 'revoked', { code: 'DEVICE_REVOKED', message: 'x' })
+    const d = deps({
+      requestDeviceEnrollment: vi
+        .fn()
+        .mockRejectedValueOnce(revoked)
+        .mockResolvedValueOnce({ requestId: 10, status: 'PENDING', keyFingerprint: 'fp2' }),
+      checkWipe: vi.fn().mockResolvedValue('none')
+    })
+
+    const view = await startEnrollment('tablet', d)
+
+    expect(view.requestId).toBe(10)
+    expect((await loadIdentity())?.publicKey).not.toBe(old.publicKey)
+  })
+
+  it('is asked about before an explicit «start over» throws the key away', async () => {
+    await approvedIdentity(9, 'fp')
+    const d = deps({ checkWipe: vi.fn().mockResolvedValue('wiping') })
+
+    await expect(restartEnrollment('tablet', d)).rejects.toThrow(WIPING_MESSAGE)
+
+    expect((await loadIdentity())?.requestId).toBe(9)
+    expect(d.requestDeviceEnrollment).not.toHaveBeenCalled()
   })
 })

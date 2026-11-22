@@ -9,7 +9,10 @@ import { fetchBootstrap } from '@/services/api'
 import type { BootstrapResponse } from '@/services/api'
 import { useAppStore } from '@/store'
 import { toIdString } from '@/utils/ids'
+import { normalizeDeviceRetention } from '@/services/sync/deviceRetention'
+import { normalizeOfflineSessionLimit } from '@/services/auth/offlineSession'
 import type { AppSettings, OperationalUnit } from '@/types'
+import { serverNow } from '@/services/clock/serverClock'
 
 export type PullStatus = 'idle' | 'pulling' | 'success' | 'error'
 
@@ -57,13 +60,24 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
     // the device already had — never a reset to defaults, which would silently widen a limit
     // or weaken the scan rule someone tightened.
     //
-    // Both blocks land in one write. Two read-modify-write passes would race and the second
-    // would overwrite the first with its own stale snapshot.
-    if (data.attachmentLimits || data.mobilePolicy) {
+    // All three blocks land in one write. Separate read-modify-write passes would race and the
+    // last would overwrite the others with its own stale snapshot.
+    //
+    // `deviceRetention` (backend roadmap §41) is read through `normalizeDeviceRetention` and
+    // stored already clamped: `undefined` means the server sent no block, which keeps what the
+    // device has — and on a device that never had one, the purge keeps running on the constants
+    // it shipped with.
+    const deviceRetention = normalizeDeviceRetention(data.deviceRetention)
+    // Backend V28, the same rule: absent keeps what the device has (and a device that never had
+    // one never locks); present is clamped before it is stored.
+    const offlineSessionLimit = normalizeOfflineSessionLimit(data.offlineSession)
+    if (data.attachmentLimits || data.mobilePolicy || deviceRetention || offlineSessionLimit) {
       const settings = await getSettings()
       const merged: AppSettings = {
         ...settings,
         ...(data.attachmentLimits ? { attachmentLimits: data.attachmentLimits } : {}),
+        ...(deviceRetention ? { deviceRetention } : {}),
+        ...(offlineSessionLimit ? { offlineSessionLimit } : {}),
         ...(data.mobilePolicy
           ? {
               imageAnnotationEnabled: data.mobilePolicy.imageAnnotationEnabled,
@@ -119,7 +133,9 @@ export async function pullBootstrapIfStale(
   signal?: AbortSignal
 ): Promise<PullResult> {
   const lastBootstrapAt = await getLastBootstrapAt()
-  const isStale = lastBootstrapAt == null || Date.now() - lastBootstrapAt >= maxAgeMs
+  // `lastBootstrapAt` is the server's time (`data.serverTime`), so it is compared with the
+  // server's «now»: on the device clock, a tablet running behind would not refresh for hours.
+  const isStale = lastBootstrapAt == null || serverNow() - lastBootstrapAt >= maxAgeMs
 
   if (!isStale) {
     return { success: true }

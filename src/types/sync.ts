@@ -56,6 +56,15 @@ export type FieldDataType =
   | 'audio'
   | 'video'
   | 'location'
+  // Backend roadmap §32: a drawing that vouches for the other answers of its form. Stored as an
+  // IMAGE attachment; the signer and the hash are stamped by the server (utils/signatureValue.ts).
+  | 'signature'
+  // Backend roadmap §31 Phase 2: a choice from a reference list (personnel, contractors). The
+  // value is `{ code, label, state }` (one) or an array of them (many) — never a string, which is
+  // why these are types of their own: every reader must know which shape to expect. See
+  // utils/lookupValue.ts and services/lookups.
+  | 'lookup'
+  | 'lookupmulti'
 
 export interface FieldValidationRange {
   min?: number
@@ -173,6 +182,59 @@ export interface FieldValidation {
     sources?: Array<'NFC' | 'QR' | 'BARCODE'>
     manual?: boolean
   }
+  /**
+   * A `select` / `multiselect` that accepts an answer which is NOT one of its `options`
+   * (backend roadmap §31, phase 1). Stored only when true; only a literal `true` opens it, so a
+   * blob this build cannot read stays the narrower list.
+   *
+   * The typed answer is stored exactly where a chosen option would be — a string, or an element
+   * of the array — so nothing in sync, merge or revisions changes shape. «Was it typed?» is
+   * answered at read time by «is it in the options». It is never a warning or a danger, and the
+   * server is the boundary: it accepts one only for a field whose frozen definition says so.
+   *
+   * Searching a long list is NOT this flag: it is automatic above a threshold
+   * (`components/forms/choiceControl.ts`) because it changes nothing the server accepts.
+   *
+   * Threaded through `FieldValidationSupport.build(...)` on the server, so it survives an edit of
+   * the field.
+   */
+  allowCustom?: boolean
+  /**
+   * What a `number` answer may be AT ALL (backend roadmap §40) — `{ min, max }`, either optional.
+   *
+   * **Not a band.** `warning` / `danger` say what is normal: a value outside them is stored and
+   * judged. This says what is possible — a count out of a fixed total, a dial's printed scale —
+   * and a value outside it is a typing error, so it is **refused at entry**: the form will not
+   * save it (`buildValidationRules`), and the server refuses it at sync with `VALIDATION_ERROR`,
+   * the one outcome that opens correct-and-resubmit. It never colours anything and never reaches
+   * severity.
+   *
+   * Read defensively by `utils/fieldValidation.ts#entryRange`: absent, malformed or inverted is
+   * «no limit», because a limit nothing can satisfy is a field nobody can fill. Overridable per
+   * asset (`AssetFieldOverride.entryRange`). Threaded through `FieldValidationSupport.build(...)`
+   * on the server, so it survives an edit of the field.
+   */
+  entryRange?: FieldValidationRange
+  /**
+   * Only whole numbers may be entered (backend roadmap §40). Stored only when true; only a
+   * literal `true` turns it on. Refused at entry like `entryRange`, and the keypad drops the
+   * separator. On the class only — never per asset.
+   */
+  integerOnly?: boolean
+  /**
+   * Which reference list a `lookup` / `lookupmulti` field draws from — the list's code (backend
+   * roadmap §31 Phase 2). The items are never in the definition: they arrive once per device
+   * through `GET /api/lookups/{code}/items`, for the lists `context.requiredLookups` names.
+   */
+  lookupList?: string
+  /**
+   * The picker may record a code its list does not offer (backend roadmap §31, «A code the device
+   * copy does not have yet»): when a search finds nothing, one explicit row «استفاده از کد «…»».
+   * Only a literal `true` turns it on. It changes what the field OFFERS — the server accepts and
+   * flags an unknown code whatever this says, and code-only entry (no list on the device) is on
+   * for every lookup field regardless.
+   */
+  lookupAcceptsUnlistedCode?: boolean
   /*
    * `allowNegative` used to live here. It is gone, and not just unused: the backend never had the
    * concept, the web panel could not set it, and `FieldValidationSupport.build(...)` rebuilds this
@@ -250,6 +312,13 @@ export interface AssetFieldOverride {
    */
   warningOptions?: string[] | null
   dangerOptions?: string[] | null
+  /**
+   * What can be entered at all on THIS machine (backend roadmap §40) — allowed in both modes,
+   * because the bound so often belongs to the asset: an 8-lamp and a 32-lamp panel of one class.
+   * `null` means «no limit on this asset», which drops the class's rather than inheriting it.
+   * `integerOnly` is never here: it stays on the class.
+   */
+  entryRange?: FieldValidationRange | null
 }
 
 // ---------------------------------------------------------------------------

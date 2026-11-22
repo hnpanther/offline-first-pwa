@@ -480,6 +480,81 @@ export function severityMessage(severity: FieldValidationSeverity): string | nul
   return null
 }
 
+// ---------------------------------------------------------------------------------------------
+// Entry limit — what a number may be AT ALL (backend roadmap §40).
+//
+// Not a severity. A band paints a value that is stored; this REFUSES one: the form will not save
+// it (`buildValidationRules`), and the server would refuse it at sync with VALIDATION_ERROR. It
+// mirrors the server's `FieldValidationSupport.entryRange` / `entryLimitViolation`, and the
+// mirror matters in one direction only — a device stricter than the server would strand a round
+// the server would accept, so every unreadable shape here reads as «no limit», exactly as there.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The entry range as stored: absent, malformed or inverted is **no limit** (`{}`).
+ *
+ * That is the safe direction for a limit, the opposite of a gate's: a limit nothing can satisfy
+ * does not raise a false alarm, it makes a field nobody can fill.
+ */
+export function entryRange(validation?: FieldValidation | Record<string, unknown>): NumericRange {
+  const nested = nestedRange(validation as Record<string, unknown> | undefined, 'entryRange')
+  if (!nested || isEmptyRange(nested)) return {}
+  if (nested.min != null && nested.max != null && nested.min > nested.max) return {}
+  return nested
+}
+
+/** Whether only whole numbers may be entered. Only a literal `true` turns it on. */
+export function isIntegerOnly(validation?: FieldValidation | Record<string, unknown>): boolean {
+  return (validation as Record<string, unknown> | undefined)?.integerOnly === true
+}
+
+/** Whether this field limits what can be entered at all. */
+export function hasEntryLimit(validation?: FieldValidation | Record<string, unknown>): boolean {
+  return isIntegerOnly(validation) || !isEmptyRange(entryRange(validation))
+}
+
+/**
+ * Why this value cannot be saved, in Persian and naming the limit — or `null` when it can.
+ *
+ * Names the limit on purpose: a limit set too tight blocks a true reading in the field, and the
+ * operator must be able to say what was refused so the wrong number is reported the first time
+ * it bites. A blank value is never refused here — that is `required`'s business — and a field
+ * with no limit refuses nothing, which is exactly what every number field did before.
+ */
+export function entryLimitError(
+  value: unknown,
+  validation?: FieldValidation | Record<string, unknown>
+): string | null {
+  const wholeOnly = isIntegerOnly(validation)
+  const range = entryRange(validation)
+  if (!wholeOnly && isEmptyRange(range)) return null
+  if (value === undefined || value === null || String(value).trim() === '') return null
+  const numeric = toNumber(value)
+  if (numeric == null) return 'مقدار باید عدد باشد.'
+  if (wholeOnly && !Number.isInteger(numeric)) return 'فقط عدد صحیح پذیرفته می‌شود.'
+  if (contains(range, numeric)) return null
+  if (range.min != null && range.max != null) return `مقدار باید بین ${range.min} و ${range.max} باشد.`
+  if (range.min != null) return `مقدار باید حداقل ${range.min} باشد.`
+  return `مقدار باید حداکثر ${range.max} باشد.`
+}
+
+/**
+ * «مجاز: 0–32، فقط عدد صحیح» — the hint under the input, before anything is typed — or null.
+ * Same words as the panel's chip (`FieldValidationSupport.entryLimitSummaryFa`).
+ */
+export function entryLimitSummaryFa(
+  validation?: FieldValidation | Record<string, unknown>
+): string | null {
+  const range = entryRange(validation)
+  const wholeOnly = isIntegerOnly(validation)
+  let text: string | null = null
+  if (range.min != null && range.max != null) text = `${range.min}–${range.max}`
+  else if (range.min != null) text = `≥ ${range.min}`
+  else if (range.max != null) text = `≤ ${range.max}`
+  if (text == null) return wholeOnly ? 'مجاز: فقط عدد صحیح' : null
+  return wholeOnly ? `مجاز: ${text}، فقط عدد صحیح` : `مجاز: ${text}`
+}
+
 /**
  * A number field is signed. Always.
  *
@@ -512,6 +587,11 @@ const NUMERIC_INPUT = /^-?\d*\.?\d*$/
  * Character by character rather than testing the whole string, so a paste of `12x.5` yields
  * `12.5` instead of being rejected outright, and a partial `-` or `1.` survives while the
  * operator is still typing. {@link normalizeNumericOnBlur} tidies those up afterwards.
+ *
+ * **Deliberately the same for a whole-number field (`integerOnly`).** Dropping the separator
+ * there would turn a typed `12.5` into `125` — a different reading, silently, which may well sit
+ * inside the limit and be saved. The dot is left in and `entryLimitError` refuses the value by
+ * name; the numeric keypad that field asks for simply does not offer one.
  */
 export function filterNumericInput(raw: string): string {
   const trimmed = raw.replace(/\s/g, '')

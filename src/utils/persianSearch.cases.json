@@ -1,0 +1,28 @@
+{
+  "_comment": "The ONE table of «does this match» cases for the Persian search normaliser (roadmap §31). The panel runs it in src/test/js/choice-search.test.cjs; the PWA keeps a byte-identical copy at src/utils/persianSearch.cases.json and runs it in persianSearch.test.ts. Change both together, or the tablet and the panel stop agreeing on what a search finds.",
+  "normalize": [
+    {"in": "پمپ", "out": "پمپ"},
+    {"in": "علي", "out": "علی"},
+    {"in": "موسى", "out": "موسی"},
+    {"in": "كمپرسور", "out": "کمپرسور"},
+    {"in": "می‌شود", "out": "میشود"},
+    {"in": "مـــوتور", "out": "موتور"},
+    {"in": "مُوتور", "out": "موتور"},
+    {"in": "۱۲۳", "out": "123"},
+    {"in": "١٢٣", "out": "123"},
+    {"in": "  Valve   A-12 ", "out": "valve a-12"},
+    {"in": "", "out": ""},
+    {"in": null, "out": ""}
+  ],
+  "match": [
+    {"option": "نشتی آب‌بند", "query": "نشت", "match": true},
+    {"option": "نشتی آب‌بند", "query": "آببند", "match": true},
+    {"option": "کمپرسور هوا", "query": "كمپرسور", "match": true},
+    {"option": "پمپ ۱۲", "query": "12", "match": true},
+    {"option": "Pump 12", "query": "۱۲", "match": true},
+    {"option": "Valve A", "query": "valve a", "match": true},
+    {"option": "شیر", "query": "پمپ", "match": false},
+    {"option": "قطع برق", "query": "", "match": true},
+    {"option": "قطع برق", "query": "   ", "match": true}
+  ]
+}

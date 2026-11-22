@@ -3,7 +3,7 @@ import {
   type LogSheetProgressItem,
   type LogSheetProgressResult
 } from '@/services/api'
-import { getAllLogSheets, getLogSheet, updateLogSheet } from '@/services/storage'
+import { getLogSheet, getLogSheetsByStatus, updateLogSheet } from '@/services/storage'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import {
   isInvalidLocalLogSheet,
@@ -11,6 +11,7 @@ import {
   isLogSheetExpired,
   isRevokedAssignment
 } from '@/utils/logSheetStatus'
+import { isLateProgressDue } from '@/services/sync/undelivered'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import { ENTRY_SOURCE_BY_FILLED_VIA } from '@/services/sync/logSheetSync'
 import { toIdString } from '@/utils/ids'
@@ -63,7 +64,8 @@ export function isLogSheetProgressOwnedByUser(
   sheet: Pick<
     LogSheet,
     'status' | 'syncStatus' | 'serverStatus' | 'syncError' | 'serverId' | 'assigneeUserId' | 'localOwnerUserId'
-  >,
+  > &
+    Partial<Pick<LogSheet, 'entries' | 'sheetFormLocallyEditedAt' | 'lateProgressSentMarker'>>,
   userId: string | null
 ): boolean {
   if (!userId) return false
@@ -81,10 +83,22 @@ export function isLogSheetProgressOwnedByUser(
   if (isInvalidLocalLogSheet(sheet)) return false
   if (isRevokedAssignment(sheet)) return false
   if (isLogSheetCancelled(sheet)) return false
-  // Unlike a completion — which the server judges on the device's `completedAt`, so on-time work
-  // delivered late is still accepted — a progress report is about a round still being walked.
-  // There is no earlier moment it could belong to, so a passed deadline ends the reporting.
-  if (isLogSheetExpired(sheet)) return false
+  // A passed deadline no longer ends the reporting (issue P-01). It used to — "a progress report
+  // is about a round still being walked" — and an operator who walked thirty of forty assets with
+  // no signal and reconnected after the deadline then had no route left: no progress, no
+  // completion (the round is unfinished), and the readings existed only here. The server now
+  // KEEPS such a push for the supervisor without applying it (backend V25, B-02).
+  //
+  // Sent once per state of the edits, expired or not: once the server has answered a late push
+  // (`lateProgressSentMarker`), the row waits for a newer edit — or for the round to be reopened,
+  // which clears the stamp (`mergeInboxIntoLocalSheets`) so the same readings then arrive as
+  // ordinary progress and are applied. Without this a tablet whose clock runs behind the
+  // server's would re-send the same kept readings every 30 seconds.
+  if (sheet.lateProgressSentMarker != null && !isLateProgressDue({
+    entries: sheet.entries ?? [],
+    sheetFormLocallyEditedAt: sheet.sheetFormLocallyEditedAt,
+    lateProgressSentMarker: sheet.lateProgressSentMarker
+  })) return false
 
   return true
 }
@@ -123,8 +137,10 @@ export function hasDirtySheetForm(
 export async function getLogSheetsPendingProgress(userId?: string | null): Promise<LogSheet[]> {
   const resolved = userId === undefined ? await getSessionUserId() : userId
   if (!resolved) return []
-  const all = await getAllLogSheets()
-  return all.filter(
+  // Only drafts can report progress (`isLogSheetProgressOwnedByUser`), so only drafts are read
+  // — through the status index, on every tick (issue P-08).
+  const drafts = await getLogSheetsByStatus('draft')
+  return drafts.filter(
     sheet =>
       isLogSheetProgressOwnedByUser(sheet, resolved) &&
       (dirtyEntriesForProgress(sheet).length > 0 || hasDirtySheetForm(sheet))
@@ -209,8 +225,44 @@ async function applyProgressOutcome(
 ): Promise<'pushed' | 'refused'> {
   const accepted = result.outcome === 'SAVED' || result.outcome === 'NO_CHANGE'
 
-  if (!accepted) {
+  // The deadline had passed (issue P-01). Not applied either way; `kept` says whether the server
+  // now holds these readings for the supervisor (backend V25) or refused them outright (an older
+  // server). Recorded against the newest marker this push covered, so the row is not sent again
+  // until something newer is edited — and the markers themselves are LEFT IN PLACE: kept is not
+  // applied, and only the markers make this device's values win the merge if the supervisor
+  // extends the deadline and the server's (older) values come back in the bundle.
+  if (result.outcome === 'EXPIRED') {
+    let covered: number | undefined = pushedSheetFormMarker
+    for (const marker of pushedMarkers.values()) {
+      if (marker != null && (covered == null || marker > covered)) covered = marker
+    }
+    const kept = result.kept === true
     await updateLogSheet(sheet.localId, {
+      ...(covered != null ? { lateProgressSentMarker: covered } : {}),
+      ...(kept && covered != null
+        ? { lateProgressKeptMarker: covered, lateProgressKeptAt: result.savedAt ?? Date.now() }
+        : {}),
+      progressSyncStatus: kept ? 'synced' : 'failed',
+      progressError: result.error ?? undefined
+    })
+    return kept ? 'pushed' : 'refused'
+  }
+
+  if (!accepted) {
+    // An expired draft is pushed once per state of its markers (P-01) — and that has to hold
+    // whatever the refusal was, not only EXPIRED. A round handed to somebody else, cancelled or
+    // completed by another operator before this device's first late push is answered SUPERSEDED
+    // or CANCELLED; without this stamp the row would be re-sent every 30 seconds for ever. An open
+    // round keeps the long-standing behaviour: refused pushes retry until the inbox says why.
+    let covered: number | undefined
+    if (isLogSheetExpired(sheet)) {
+      covered = pushedSheetFormMarker
+      for (const marker of pushedMarkers.values()) {
+        if (marker != null && (covered == null || marker > covered)) covered = marker
+      }
+    }
+    await updateLogSheet(sheet.localId, {
+      ...(covered != null ? { lateProgressSentMarker: covered } : {}),
       progressSyncStatus: 'failed',
       progressError: result.error ?? undefined
     })
@@ -233,6 +285,11 @@ async function applyProgressOutcome(
   await updateLogSheet(sheet.localId, {
     entries,
     ...(sheetFormUnchanged ? { sheetFormLocallyEditedAt: undefined } : {}),
+    // The server now holds these answers as of `savedAt`; a bundle older than that is older
+    // than what this device delivered (see `LogSheet.sheetFormDeliveredAt`).
+    ...(pushedSheetFormMarker != null && result.savedAt != null
+      ? { sheetFormDeliveredAt: result.savedAt }
+      : {}),
     progressSyncStatus: 'synced',
     progressSyncedAt: result.savedAt ?? Date.now(),
     progressError: undefined

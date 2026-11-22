@@ -42,6 +42,21 @@ export async function requestPersistentStorage(): Promise<boolean> {
 }
 
 /**
+ * Whether the browser has made this origin's storage persistent — exempt from eviction when the
+ * device runs low. Asks only; never requests it (the device-check page reports, it does not fix).
+ *
+ * @returns `null` when the browser cannot say, which is not the same as `false`
+ */
+export async function isStoragePersisted(): Promise<boolean | null> {
+  if (typeof navigator === 'undefined' || !navigator.storage?.persisted) return null
+  try {
+    return await navigator.storage.persisted()
+  } catch {
+    return null
+  }
+}
+
+/**
  * Current usage against quota.
  *
  * A browser that reports nothing yields `low: false`: refusing to let an operator take a

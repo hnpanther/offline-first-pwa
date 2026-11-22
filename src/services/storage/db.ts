@@ -1,12 +1,16 @@
 import Dexie, { type Table } from 'dexie'
 import type { AssetClass, AssetEntry, AppSettings, Location, PlantSystem, MainFunction, SubFunction, LogSheetTemplate, LogSheet, LogSheetUserArchive, OperationalUnit, NfcFaultReport, LocalAttachment } from '@/types'
 import type { FieldDefinition, SyncMeta } from '@/types/sync'
+import type { LookupItemRow, LookupListMeta } from '@/services/lookups/lookupTypes'
 import { resolveLocalWorkOwner } from '@/utils/logSheetLocalData'
 import type { LogSheetEntryData } from '@/types'
 import { hasEntryFormData } from '@/utils/entryTimestamps'
 import { deviceServerUrl } from '@/services/settings/deliveryServerUrl'
 
 const DB_NAME = 'offline-pwa-db'
+
+/** The main database's name, for the one caller that deletes it whole: a wipe ordered by the server. */
+export const MAIN_DATABASE_NAME = DB_NAME
 
 class AppDatabase extends Dexie {
   assetClasses!: Table<AssetClass>
@@ -24,6 +28,9 @@ class AppDatabase extends Dexie {
   logSheetUserArchives!: Table<LogSheetUserArchive>
   nfcFaultReports!: Table<NfcFaultReport>
   attachments!: Table<LocalAttachment>
+  /** Reference lists held for offline lookup fields (V4) — see services/lookups/lookupStore.ts. */
+  lookupLists!: Table<LookupListMeta>
+  lookupItems!: Table<LookupItemRow>
 
   constructor() {
     super(DB_NAME)
@@ -188,6 +195,38 @@ class AppDatabase extends Dexie {
       await tx.table('attachments').toCollection().modify(row => {
         stampAttachmentOwner(row, ownerByLocalId)
       })
+    })
+
+    /**
+     * Version 4 — reference lists for offline lookup fields (backend roadmap §31 Phase 2).
+     *
+     * <p>Two new stores and nothing else: no existing store or index changes and no row is
+     * touched, so the upgrade cannot lose or alter anything already on a tablet.
+     *
+     * <p>`lookupLists` holds one row per list the device keeps — its revision, its lease, its
+     * sync cursor — keyed by the list's code lower-cased. `lookupItems` holds the items, keyed by
+     * the server's item id (unique across lists) and indexed by list, which is how a whole list
+     * is read for search and dropped when its lease ends or no open round needs it. Personal
+     * data: both are cleared at sign-out, unlike every other reference store on a shared tablet.
+     */
+    this.version(4).stores({
+      assetClasses: 'id, createdAt',
+      assetEntries: 'id, nfcTagId, nfcSerial, classId, subFunctionId',
+      locations: 'id, code, parentId',
+      plantSystems: 'id, code, locationId',
+      mainFunctions: 'id, code, systemId, locationId',
+      subFunctions: 'id, code, tag, mainFunctionId, systemId, locationId',
+      logSheetTemplates: 'id, scopeType, scopeId',
+      logSheets: 'id, localId, serverId, templateId, status, createdAt',
+      settings: 'key',
+      fieldDefinitions: 'id, classId, order',
+      syncMeta: 'key',
+      operationalUnits: 'id, code, parentId',
+      logSheetUserArchives: 'id, serverId, userId',
+      nfcFaultReports: 'id, logSheetServerId, assetId, syncStatus, createdAt',
+      attachments: 'id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt',
+      lookupLists: 'id',
+      lookupItems: 'id, listId'
     })
   }
 }

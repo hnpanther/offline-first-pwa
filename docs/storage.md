@@ -49,8 +49,8 @@ This is the data that matters. Losing it loses field readings.
 
 | Store | Key + indexes | Holds |
 |---|---|---|
-| `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts |
-| `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. `createdByUserId` is a **plain, unindexed** property — see below |
+| `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts. Backend V25 added four plain, non-indexed fields (no Dexie version bump): `serverKeptAt` (a refused submission the server kept), and `lateProgressSentMarker` / `lateProgressKeptMarker` / `lateProgressKeptAt` (an expired draft's edits sent once, and kept) — see [sync.md](sync.md) «Deadlines, offline». Backend V26 added `serverKeepRefusedAt` (a refusal answered `kept: false`), also plain. The sync tick reads the queue and the progress lane through the **`status`** index (`getLogSheetsByStatus`, issue P-08) |
+| `attachments` | `id, logSheetLocalId, logSheetServerId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. `createdByUserId` is a **plain, unindexed** property — see below; so is `idRemintedFrom` (issue P-06) |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
 
@@ -75,8 +75,19 @@ content.
 
 | Store | Key | Holds |
 |---|---|---|
-| `settings` | `key` | `AppSettings` — server URL, sync interval, NFC mode, screen orientation |
-| `syncMeta` | `key` | Last-sync timestamps per resource |
+| `settings` | `key` | `AppSettings` — server URL, sync interval, NFC mode, screen orientation, and the server-owned values bootstrap mirrors here (`attachmentLimits`, the scan and annotation policies, and since backend V24 the optional `deviceRetention` — absent until a server sends it, which is what keeps the purge on the shipped constants; no Dexie version change, it is a field of the one settings row) |
+| `syncMeta` | `key` | Last-sync timestamps per resource; `lastBacklogReport` (backend V25) — the last «ارسال‌نشده» count sent to the server and the session it went to, so an unchanged number is not resent every pass; `serverClock` (roadmap §7) — the measured `server − device` offset, its round trip, when it was measured and the server time last seen; `sessionLastContactAt` (backend V28) — server time of the last authenticated answer, which the offline-session ceiling counts from, cleared at sign-out; `deviceStatusCheckedAt` (backend V28) — device time of the signed-in device-status check, which spaces them 30 minutes apart |
+
+`settings` also holds, since backend V28, the optional `offlineSessionLimit` (`{enabled, hours}`),
+absent until a server sends it — which means never lock. No Dexie version change for either.
+
+**Outside IndexedDB, three small things (backend V28):** `localStorage['mfdcs.deviceWipe']` — a wipe
+order being carried out (`wiping`) or awaiting its signed confirmation (`confirming`), kept outside
+`offline-pwa-db` because it must survive that database being deleted; `sessionStorage['mfdcs.deviceWiped']`
+— «this start followed a wipe», read once by the login page; and in the separate
+`mfdcs-device-identity` database a second row, `wipe-ack`, holding the key set aside to sign the wipe
+confirmation (one store, one schema version, as before — a second row is not a schema change). The
+app stores nothing else in either storage area.
 
 `settings` never syncs. Some of it is device-specific by nature (screen orientation depends on
 how *that* tablet is mounted), and a shared account must not drag one device's choice onto
@@ -106,6 +117,13 @@ name its own capture until it had a network — precisely the situation this app
 a sheet that has no server id yet; the upload queue skips it by design until
 `bindAttachmentsToServerSheet` stamps the server id after the sheet syncs. Until then there is
 nowhere to send it.
+
+**The id is the primary key, so changing it is a move, not an update.** When the server answers
+that the id already names somebody else's file (`409 ATTACHMENT_ID_TAKEN`, issue P-06),
+`remintTakenAttachment` adds the row under a fresh UUID, deletes the old one and rewrites the
+round's reference to it — all in one `rw` transaction over `attachments` and `logSheets`, so no
+reference can be left naming an id no row holds. `idRemintedFrom` keeps the old id and limits it to
+once per file.
 
 ---
 
@@ -190,6 +208,19 @@ an interrupted upgrade can simply run again.
 It is idempotent and writes per sheet, so an upgrade interrupted halfway leaves every row readable
 and can simply run again.
 
+### `version(4)` — two new stores, nothing else changed
+
+`lookupLists` (keyed by the list's code lower-cased: revision, lease, cursor, the offline columns)
+and `lookupItems` (keyed by the server's item id, indexed by `listId`) — the device's copy of the
+reference lists its open rounds need (backend roadmap §31 Phase 2). No existing store, index or row
+is touched, so the upgrade cannot lose anything already on a tablet.
+
+These two are the **one exception to «reference data survives logout»**: a list may be personal
+data, so it is cleared at sign-out (`clearUserSessionContext`), deleted when its lease ends — online
+or not, at startup and whenever a field reads it — and dropped when no assigned round needs it. Nothing
+an operator recorded goes with it: every lookup answer stores its own `{code, label}`. See
+`services/lookups/` and [sync.md](sync.md) — «Reference lists».
+
 ### The recovery path in `openDatabase()`
 
 ```ts
@@ -208,13 +239,17 @@ wiping a user's database on an unrelated error would be far worse than failing l
 
 ## What survives what
 
-| Event | Reference data | Drafts | Attachments | Settings |
-|---|---|---|---|---|
-| App closed and reopened | ✅ | ✅ | ✅ | ✅ |
-| Logout | ✅ | ✅ | ✅ | ✅ |
-| Browser cache cleared | ❌ | ❌ | ❌ | ❌ |
-| "Clear site data" | ❌ | ❌ | ❌ | ❌ |
-| PWA uninstalled | ❌ | ❌ | ❌ | ❌ |
+| Event | Reference data | Reference **lists** (lookup) | Drafts | Attachments | Settings |
+|---|---|---|---|---|---|
+| App closed and reopened | ✅ | ✅ while the lease runs | ✅ | ✅ | ✅ |
+| Logout | ✅ | ❌ — personal data | ✅ | ✅ | ✅ |
+| Lease ends (from the last sync) / clock set back | ✅ | ❌ | ✅ | ✅ | ✅ |
+| No assigned round needs the list any more | ✅ | ❌ at the next sync | ✅ | ✅ | ✅ |
+| Browser cache cleared | ❌ | ❌ | ❌ | ❌ | ❌ |
+| "Clear site data" | ❌ | ❌ | ❌ | ❌ | ❌ |
+| PWA uninstalled | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Offline-session lock** (backend V28) | ✅ | ❌ — as logout | ✅ | ✅ | ✅ |
+| **Wipe ordered by the server** (backend V28) | ❌ | ❌ | ❌ — **unsent rounds too** | ❌ | ✅ server address only |
 
 **Logout does not clear local work**, and that is deliberate on a shared tablet: an operator
 signing out at the end of a shift must not destroy a round the next operator has not synced yet.

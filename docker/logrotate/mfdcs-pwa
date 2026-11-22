@@ -1,0 +1,53 @@
+# logrotate for the PWA container's nginx logs (docker/logs/, bind-mounted at /var/log/nginx).
+#
+# Install on the PWA host:
+#   sudo cp docker/logrotate/mfdcs-pwa /etc/logrotate.d/mfdcs-pwa
+#   sudo chown root:root /etc/logrotate.d/mfdcs-pwa && sudo chmod 0644 /etc/logrotate.d/mfdcs-pwa
+#   then EDIT THE PATH on the first line below to where docker/ lives on this host.
+# Try it once by hand:
+#   sudo logrotate --force --verbose /etc/logrotate.d/mfdcs-pwa
+#
+# Ubuntu runs /etc/logrotate.d/* once a day (logrotate.timer). What this does each time:
+#   - moves access.log to access.log-YYYYMMDD-<seconds>, and error.log likewise;
+#   - creates new, empty files with mode 0640, owned like the file it replaced (uid/gid 101,
+#     because nginx created that one);
+#   - signals the container with USR1, which makes nginx close the old files and open the new
+#     ones — no restart, no request lost. Without the signal nginx keeps writing into the
+#     renamed file, which is how "the log stopped yesterday" happens;
+#   - compresses each rotated file one day later (delaycompress: the newest rotated file is the
+#     one nginx might still be finishing when the signal arrives);
+#   - keeps 30 rotations; with maxsize, a busy day can rotate more than once, so 30 rotations is
+#     30 days at most. Size the disk for it: see docker/DEPLOY.md § "Logs".
+#
+# Tested on 2026-11-17 against the real container with this exact file (only the path changed).
+#
+# Why not `copytruncate`: it copies and then empties the live file, and every line nginx writes
+# between the two steps is lost. USR1 is what nginx provides for exactly this.
+#
+# Why no `su` line: logrotate requires one only when the directory is writable by a group or by
+# everyone. docker/logs is 0750 owned by 101 — writable by its owner alone — so it is not needed.
+# If you loosen the directory's mode, logrotate refuses with "insecure permissions"; fix the mode,
+# do not add `su`.
+
+/opt/mfdcs/docker/logs/*.log {
+    daily
+    maxsize 200M
+    rotate 30
+    missingok
+    notifempty
+    dateext
+    dateformat -%Y%m%d-%s
+    compress
+    delaycompress
+    # Mode only — NO owner and group. logrotate wants NAMES there and refuses a bare number
+    # ("unknown group '101'", found while testing this file), and on this host uid/gid 101 may
+    # have no name at all. Left out, they are copied from the file being rotated, which nginx
+    # created as 101:101 — exactly what is wanted.
+    create 0640
+    sharedscripts
+    postrotate
+        # The container's name is fixed in docker-compose.yml (container_name: mfdcs-pwa).
+        # `|| true`: a stopped container has nothing to reopen, and that must not fail the rotation.
+        docker kill --signal=USR1 mfdcs-pwa >/dev/null 2>&1 || true
+    endscript
+}

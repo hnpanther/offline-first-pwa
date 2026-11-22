@@ -91,6 +91,14 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **History & archives** — completed work plus per-user snapshots on shared tablets, with a per-asset restore back into a sheet that was reassigned and came back; the round's own answers («پرسش‌های این کار») are archived and restorable the same way
 - **Shared tablet isolation** — per-user inbox and outbound sync queue on shared devices (`sessionContext.ts`)
 - **Dynamic forms** — field definitions pulled from the server; warning/danger numeric ranges
+- **Searchable choice lists** — a `select` / `multiselect` with more than eight options becomes a
+  search box (Persian-aware: «ي/ی», «ك/ک», ZWNJ, Persian/Arabic digits — the same table of cases the
+  panel runs); where the field allows it, an answer that is not listed can be typed and is marked
+  «دستی». The server decides whether a typed answer is acceptable
+- **Signature field** — drawn on a 640×320 pad and stored as an image; the server stamps who signed,
+  when, and a hash of what the signature covers (the same form, the whole round, or nothing). When
+  a covered answer changes after signing, the field says «امضا پیش از تغییر … گرفته شده» so the
+  operator can sign again
 - **Role-based UI** — admin settings and NFC tag inspector; supervisor assign/release/reassign
 - **Device enrolment** — when the server turns it on (backend Settings, off by default), a
   tablet that is not enrolled sees «ثبت این دستگاه» under the login form: it shows a request
@@ -104,7 +112,9 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
   otherwise, re-checked every 15 s while on screen. It used to be green unconditionally
 - **Device hardware check (admin)** — «بررسی سخت‌افزار دستگاه» tests NFC, camera, video,
   microphone, QR/barcode scanning, GPS and storage **on the tablet itself**, with no server
-  involved. It reports rather than fixes, asks for each permission only when its own button is
+  involved. The storage check shows a **warning** (not a failure) when the browser has not made
+  the app's storage persistent — it may then evict everything, undelivered rounds included
+  (issue P-09). It reports rather than fixes, asks for each permission only when its own button is
   pressed, and shows the raw answer (`NDEFReader تعریف نشده`) instead of a verdict — so an
   administrator standing next to a tablet can tell a missing permission from a missing API.
   Its «رمزگشا» button opens no camera and asks for no permission: it reports whether the bundled
@@ -134,6 +144,9 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
   راند در حال انجام همیشه چنین چیزی دارد. به‌جایش «آخرین ارسال پیشرفت به سرور» در صفحه‌ی تکمیل
   نمایش داده می‌شود.
 - **آفلاین هیچ فرقی نمی‌کند.** گزارش در صف می‌ماند و با برگشت شبکه ارسال می‌شود.
+- **پاسخ «پرسش‌های این کار» بلافاصله ارسال می‌شود.** ذخیره‌ی دارایی‌ها با tick بعدی گزارش می‌شود،
+  ولی «ذخیره پرسش‌ها» اگر دستگاه آنلاین باشد همان لحظه به سرور می‌رود و زیر دکمه نوشته می‌شود که
+  پاسخ‌ها در صف‌اند، به سرور رسیده‌اند یا سرور آن‌ها را نپذیرفته است.
 
 جزئیات: [docs/sync.md](docs/sync.md) و در بک‌اند `docs/log-sheets.md` §3.5.
 
@@ -581,10 +594,20 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 1. `useAuthInit` reads session from IndexedDB.
 2. Valid session → dashboard (no login screen).
 3. **Online** + expired JWT → session cleared, redirect to login.
-4. **Offline** + expired JWT → session still accepted (offline-first).
+4. **Offline** + expired JWT → session still accepted (offline-first) — **unless the plant switched on
+   the offline-session lock** (backend V28, panel Settings, off by default): a session the server has
+   not answered for that many hours, or whose device clock reads earlier than the last answer, locks
+   and asks for the password again (which needs the network). Nothing is deleted; unsent rounds are
+   sent after the next sign-in. The app warns hours before, and never locks over an open asset form.
+   See [docs/sync.md](docs/sync.md) «The offline-session ceiling».
 5. **Login** always redirects to `/` (never restores a previous user’s deep link).
 6. The login form submits through its button or the keyboard’s **Enter / Go** action.
 7. **User switch** on a shared tablet clears inbox cache and isolates other users’ local work (`sessionContext.ts`). See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
+8. **A wipe the server ordered is finished before anything else** (backend V28, *wipe on revoke*). An administrator who revokes this device may order it emptied; the order arrives on the login page, at the next sign-in, or — while someone is signed in — through the tablet's own check at most every 30 minutes online (which also signs out a device revoked while enrolment is on, keeping its work), the app reloads and deletes **everything it holds — unsent rounds included** — before the database opens, keeps only the server address, and confirms with its device key. The login page then says «به دستور مدیر سامانه، همهٔ داده‌های این برنامه از این دستگاه پاک شد…»; the tablet must be enrolled again. See [docs/sync.md](docs/sync.md) «Wipe on revoke».
+
+### The device clock
+
+Deadlines and the completion time are decided on **the server's clock as this tablet measured it** (on sign-in, bootstrap and every inbox pull), never earlier than the server time it last saw — so a tablet whose clock runs fast does not turn on-time work into late work, and one set back cannot reopen a deadline the server had already seen pass. Settings shows the measured difference («اختلاف ساعت این دستگاه با سرور»). See [docs/sync.md](docs/sync.md) «The server's clock, on this device».
 
 ### Roles (frontend checks)
 
@@ -879,10 +902,16 @@ Route: `/` (all authenticated users).
 | Stat cards | **Open log sheets** and **submitted today**, counted from local log sheets (cards link to **Active log sheets**) |
 | Whose numbers | **Only the signed-in user's own work** — supervisors included; their team's work lives in the inbox's team tab. `ADMIN` / `HIGH_USER` see the device-wide totals instead. The rule is in `src/utils/dashboardStats.ts`. |
 | Pending sync | From `SyncManager.getPendingCount()` — submitted log sheets owned by the current user **plus** pending NFC fault reports if the role has `POST:/api/nfc-fault-reports/batch` |
+| **ارسال‌نشده** (backend V25) | Rounds whose readings the server has received **in no form** — refused with nothing kept, or an expired/cancelled/revoked draft whose edits the server never kept. Red when non-zero, links to **History**. Not the queue (that is *Pending sync*) and not the last pass's failures. The same number, over the whole device, is on **بررسی سخت‌افزار دستگاه** and is reported to the panel per session («نشست‌های اپ موبایل»). Definition: `services/sync/undelivered.ts`; see [docs/sync.md](docs/sync.md) |
 | Quick actions | Jump to `/logsheets/active` and `/logsheets/history` |
 | Sync card | Last sync time, pending/failed counts, manual sync button when online |
 
 Primary operator workflow is **Log sheets → Active**, not the dashboard stats.
+
+**Work done late is sent, not dropped (backend V25).** A round finished after its deadline, and
+the answers of a round left unfinished when its deadline passed, are sent once when the tablet
+reconnects; the server keeps them for the supervisor without applying them. If the supervisor then
+extends the deadline, the same work goes through on the next sync — the operator does nothing.
 
 ---
 
@@ -1081,7 +1110,7 @@ Reference: [`docs/sync.md`](docs/sync.md) § *Restoring an archived round*.
 | Capability | Offline |
 |------------|---------|
 | PWA UI (installed from :4173) | Yes |
-| Session (even expired JWT) | Yes |
+| Session (even expired JWT) | Yes — until the offline-session lock, if the plant switched it on (backend V28) |
 | Cached per-sheet reference data (from bundles) | Yes |
 | Assigned log sheets pre-provisioned earlier | Yes |
 | Open / fill / save log sheets | Yes |
@@ -1108,7 +1137,8 @@ Reference: [`docs/sync.md`](docs/sync.md) § *Restoring an archived round*.
 |----------|---------------|
 | Operator worked offline; supervisor revoked/reassigned | Draft marked `REVOKED` — cannot continue |
 | Operator submitted offline; assignee changed on server | Sync `SUPERSEDED` |
-| Completed before deadline offline; sync after deadline online | Accepted — deadline checked against device `completedAt` |
+| Completed before deadline offline; sync after deadline online | Accepted — deadline checked against `completedAt`, stamped on the server's clock as the tablet measured it |
+| Device revoked **and ordered wiped** | Everything the app holds is deleted at the next contact with the server, unsent rounds included; the device must be enrolled again |
 | Completion synced, then supervisor **reopened** the sheet | History card reads **بازگشایی شده — قابل ادامه**; «ادامه‌ی کار» on the fill page verifies with the server and returns it to an editable draft with the readings intact |
 
 ### Stale data limitations
@@ -1347,6 +1377,59 @@ reading.
 A field that genuinely cannot go below zero is expressed as a danger range with `min: 0`. That
 surfaces the mistake as a breach instead of silently swallowing the keystroke.
 
+### A field that draws from a reference list (backend roadmap §31 Phase 2)
+
+`lookup` / `lookupmulti` name a list (`validation.lookupList`) — personnel, contractors — that never
+travels in a bundle. `LookupFieldInput` has two modes and always says which:
+
+| The list on this device | The field |
+|---|---|
+| present, complete, lease running | searches the device's own copy (Persian-folded, active items only, display columns under each) |
+| absent, still syncing, or its lease ended | **code-only** — «فهرست مرجع روی این دستگاه نیست — کد را وارد کنید»; the server resolves the code at sync |
+
+The value is `{ code, label }` (or an array). The server stamps it — a known code takes the list's
+label, a retired or unknown one is accepted and marked `INACTIVE` / `UNKNOWN`, never refused — and
+the device shows a recorded answer exactly as stamped («· غیرفعال», «· خارج از فهرست»). Re-sending an
+unchanged answer changes nothing on the server.
+
+Two ways to deal with an item added since the tablet's last pull (backend roadmap §31):
+
+- **«به‌روزرسانی فهرست»** under every lookup field, online only: `refreshLookup` fetches that one
+  list from its cursor, renews its lease, and drops it if the server refuses (the grant is gone).
+  It touches no other list.
+- **«استفاده از کد «…»»** — only on a field whose definition has `lookupAcceptsUnlistedCode`, and only
+  when the search found nothing (`unlistedCodeFor`). Records `{ code }` with no label; the chip reads
+  «… · بررسی هنگام ارسال» until the server stamps it. Code-only entry, when the list is not on the
+  device, is on for every field regardless.
+
+How the lists arrive, how long they stay and when they go: [docs/sync.md](docs/sync.md) «Reference
+lists» and [docs/storage.md](docs/storage.md) `version(4)`. In short — only the lists the user's
+assigned open rounds need, only the columns marked for devices, for the list's lease after the last
+sync, and **cleared at sign-out**. `src/services/lookups/lookups.test.ts` covers it.
+
+### An entry limit — what a number may be at all (backend roadmap §40)
+
+What a field **refuses** is not its bands; it is `validation.entryRange` (`{min, max}`) and
+`validation.integerOnly`, for a value that cannot physically be otherwise — lamps lit out of a
+panel's total, a dial's printed scale. A value outside it is not stored and not judged:
+
+| Where | What happens |
+|---|---|
+| Typing | the helper under the field says why, in red and naming the limit («مقدار باید بین 0 و 32 باشد.»); before anything is typed it shows «مجاز: 0–32، فقط عدد صحیح» |
+| Saving the asset (or a round-level question) | `buildValidationRules` adds a `validate` rule from `entryLimitError`, so the form will not save — the one moment the operator can still correct it |
+| Submitting the round | `findSubmitBlockingIssues` also reports a stored value outside the limit (one a build before the limit saved), naming the asset and the field, so the operator can open the asset and fix it |
+| The server | refuses it at a progress push and at submit with `VALIDATION_ERROR` — which opens correct-and-resubmit |
+
+`integerOnly` asks for `inputMode: 'numeric'` (no separator on the keypad; `±` still covers the
+minus). A typed separator is **not** stripped: dropping it would turn `12.5` into `125`, a
+different reading that may well sit inside the limit — the value is refused by name instead.
+
+A per-asset `entryRange` in `fieldOverridesSnapshot` replaces the class's (an 8-lamp and a 32-lamp
+panel of one class), and `null` removes it for that machine; `integerOnly` stays the class's. Every
+unreadable shape — absent, malformed, inverted — reads as **no limit**, exactly as on the server:
+a device stricter than the server strands a round nobody can fix. `src/utils/fieldEntryLimit.test.ts`
+covers all of it.
+
 `src/utils/fieldValidation.test.ts` covers this end to end — both boundaries of both bands, with
 negative, zero and positive readings, plus the typing, blur and `±` paths.
 
@@ -1579,12 +1662,16 @@ A sheet only becomes **failed** when the server answered and said no, for one of
 Three are not the operator's to fix (a missing server id, a sheet deleted server-side, an asset
 that is not part of the sheet) and need a supervisor to reopen or extend it.
 
-The fourth — **a required field left empty** — is different, and is handled in two places:
+The fourth — **a field value the server refuses** (a required field left empty, or since backend
+roadmap §40 a number outside its entry limit) — is different, and is handled in two places:
 
 **Before submitting.** The app now checks required fields itself and refuses a final submit the
 server would certainly reject, naming the asset and the field: «فیلدهای الزامی تکمیل نشده‌اند —
 پمپ ۱: دما». The operator sees this while still standing at the form, instead of discovering it
 after the work is already stuck.
+A number outside its entry limit is named the same way, with the limit: «مقدار خارج از حد مجاز —
+تابلو ۱: چراغ روشن (مقدار باید بین 0 و 32 باشد.)». The entry form already refuses one, so this is
+reached only by a value a build before the limit stored.
 
 The check mirrors the server's own rules exactly, including the awkward ones — an unchecked
 required checkbox and a photo field whose only image was deleted both count as empty. It is
@@ -1681,21 +1768,32 @@ Runs after every successful sync pass. It only deletes rows from the local `logS
 table — **nothing is ever deleted on the server**, and rows are only removed once they
 are in a terminal state.
 
-| State | Retention | Counted from |
+**How long is set on the server**, not in the app (backend roadmap §41, V24): the panel's
+«تنظیمات» → «نگهداری راند روی تبلت» has three values that reach every tablet on bootstrap.
+The defaults are below; the full rules are in [docs/sync.md](docs/sync.md) («How long a round
+stays on this device»).
+
+| State | Retention (server default) | Counted from |
 |-------|-----------|--------------|
-| Synced (sent successfully) | **24 hours**, then deleted locally | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
-| Failed (server rejected: superseded / revoked / cancelled) | **7 days**, then deleted | `submittedAt` → `updatedAt` → `createdAt` |
-| Expired draft (deadline passed, never submitted) | **24 hours**, then deleted | `dueAt` → `updatedAt` → `createdAt` |
-| Active draft (in progress, not expired) | **Never** auto-deleted | — |
-| Submitted, pending sync | **Never** auto-deleted — kept until the server answers | — |
+| Synced (sent successfully) | **24 hours** (`device.synced_retention_hours`, 1–720), then deleted locally | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
+| Failed (server rejected: superseded / revoked / cancelled / expired) **and kept by the server for review** | **Never** — unless `device.unsynced_purge_enabled` is on; then `device.unsynced_retention_hours` (default 168, 72–8760) | `submittedAt` → `updatedAt` → `createdAt` |
+| Expired draft (deadline passed, never submitted) whose edits the server kept, or with none | **Never** — unless that switch is on; then the same hours | `dueAt` → `updatedAt` → `createdAt` |
+| **«ارسال‌نشده»** — refused or expired with readings **only on this tablet** (`isUndeliveredRound`) | **Never** auto-deleted, whatever the settings (issue P-05) | — |
+| Active draft (in progress, not expired) | **Never** auto-deleted, whatever the settings | — |
+| Submitted, pending sync | **Never** auto-deleted — kept until the server answers, whatever the settings | — |
 | Synced, then **reopened** by a supervisor | **Never** while the new deadline stands; purged on the ordinary rules once it passes | `dueAt` decides whether the reopen is still live |
 | **Archived snapshots** (`logSheetUserArchives`) | **Never** auto-deleted | — |
 
+A tablet that has never talked to a server with this setting keeps the old constants:
+24 hours synced, **7 days** failed, **24 hours** expired draft.
+
 **What this means for operators:** a completed log sheet stays visible under **History**
-on the device for roughly one day after it syncs; a rejected one for a week. After that
-the local copy is purged to keep the tablet small — the record itself still lives on the
-server and remains visible in the web admin panel. Only the **device-local** history is
-time-limited.
+on the device for roughly one day after it syncs (by default). A round that never reached
+the server — rejected, or left as a draft past its deadline — **stays on the tablet** by
+default, because it may hold the only copy of what was recorded. A delivered record still
+lives on the server and remains visible in the web admin panel; only the **device-local**
+history is time-limited. Administrators can see the values the tablet is running under on
+its Settings screen.
 
 **A reopened completion is held back from the purge on purpose.** It is live work again, and
 the local row is where the continue action lives — but it is also the only place `filledVia`
@@ -1811,7 +1909,7 @@ Each assigned item (and claim/bundle responses) contains:
 | `sheet` | Server log sheet metadata (`ServerLogSheet`) — status, dueAt, assignee, template, scope, … |
 | `entries` | Rows to fill (`ServerLogSheetEntry`) — assetId, assetName, nfcTagId, classId, formData, … |
 | `context` | Scoped reference slice for **this sheet only** — locations, systems, functions, subFunctions, assetEntries, assetClasses, fieldDefinitions, optional `scopeDisplayLabel` |
-| `sheet.fieldOverridesSnapshot` | Optional. Per-asset field overrides frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Copied onto the stored record by `applyLogSheetBundle` and applied through `sheetFieldDefinitions(sheet, classId, fallback, assetId)`. Under `source: RANGES_ONLY` the bands are display only — the server recomputes severity from its own copy, so a client that ignores them still syncs correct data. Under `FULL` it also **adds and removes fields**, so it decides which inputs the form has and what the N-of-M badge counts. May also re-mark a choice field's `warningOptions` / `dangerOptions`, and set or clear a field's `conditions` — which options alert, and **whether a band is judged at all in this state**, are thresholds, so `RANGES_ONLY` carries both. `conditions` is replaced whole rather than merged (it is an ordered first-match statement) and an explicit `null` drops the class's gate for that machine; it is also the one key here that is **not** display-only in effect, since ignoring it paints a stopped pump red while the server records `ok` |
+| `sheet.fieldOverridesSnapshot` | Optional. Per-asset field overrides frozen with the sheet, `{ "<assetId>": { source, fields } }`. A **delta** — only what differs from the class. Absent when no asset on the sheet overrides anything, which is most sheets. Copied onto the stored record by `applyLogSheetBundle` and applied through `sheetFieldDefinitions(sheet, classId, fallback, assetId)`. Under `source: RANGES_ONLY` the bands are display only — the server recomputes severity from its own copy, so a client that ignores them still syncs correct data. Under `FULL` it also **adds and removes fields**, so it decides which inputs the form has and what the N-of-M badge counts. May also set or clear a number field's `entryRange` (what can be entered at all; `null` drops the class's limit for that machine — not display-only: the form refuses with it), re-mark a choice field's `warningOptions` / `dangerOptions`, and set or clear a field's `conditions` — which options alert, and **whether a band is judged at all in this state**, are thresholds, so `RANGES_ONLY` carries both. `conditions` is replaced whole rather than merged (it is an ordered first-match statement) and an explicit `null` drops the class's gate for that machine; it is also the one key here that is **not** display-only in effect, since ignoring it paints a stopped pump red while the server records `ok` |
 
 Client merge: `mergeLogSheetBundle.ts` applies **server-wins** `bulkPut` for context tables and updates the local `logSheets` row + entries.
 
@@ -1855,7 +1953,8 @@ IndexedDB), seeded from `VITE_SERVER_URL` on a fresh install. See
 > **Docker option:** after `npm run build:apk`, the `docker/` folder packages `dist/` behind nginx
 > as one container: TLS and config on volumes, security headers, `/api/` proxy. See
 > [docker/DEPLOY.md](docker/DEPLOY.md). The manual nginx setup below remains valid, and it is
-> what to use on a Windows server.
+> what to use on a Windows server. The container runs nginx as uid 101 rather than root, so its
+> TLS key must be readable by uid 101 (DEPLOY.md §4).
 
 ### Reference architecture (split hosts)
 

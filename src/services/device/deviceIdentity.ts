@@ -30,12 +30,19 @@ import Dexie, { type Table } from 'dexie'
 
 const IDENTITY_DB_NAME = 'mfdcs-device-identity'
 const RECORD_ID = 'device'
+/**
+ * Where a key waits after its device was wiped (backend V28), until the signed confirmation has
+ * reached the server. A second row in the same store — not a second store, and not a schema change.
+ * Moved out of {@link RECORD_ID} the moment the wipe runs, so the tablet is unenrolled at once and
+ * may be enrolled again with a new key while the old one still owes the server its confirmation.
+ */
+const RETIRED_RECORD_ID = 'wipe-ack'
 
 /** Where this device's enrolment stands, as far as this device knows. */
 export type LocalEnrollmentStatus = 'new' | 'pending' | 'approved'
 
 export interface DeviceIdentity {
-  id: typeof RECORD_ID
+  id: typeof RECORD_ID | typeof RETIRED_RECORD_ID
   /** Non-extractable. Signs; can never be exported. */
   privateKey: CryptoKey
   /** The public half, SPKI DER, base64 — what the server stores. */
@@ -125,6 +132,32 @@ export async function discardIdentity(): Promise<void> {
   await identityDb.identity.delete(RECORD_ID)
 }
 
+/**
+ * Moves the live key aside for the wipe confirmation (backend V28). Idempotent: with no live key
+ * (a second run of an interrupted wipe) the key already set aside is left as it is.
+ *
+ * @returns whether a live key was moved
+ */
+export async function retireIdentityForWipe(): Promise<boolean> {
+  return identityDb.transaction('rw', identityDb.identity, async () => {
+    const live = await identityDb.identity.get(RECORD_ID)
+    if (!live) return false
+    await identityDb.identity.put({ ...live, id: RETIRED_RECORD_ID })
+    await identityDb.identity.delete(RECORD_ID)
+    return true
+  })
+}
+
+/** The key set aside by {@link retireIdentityForWipe}, if its confirmation is still owed. */
+export async function loadRetiredIdentity(): Promise<DeviceIdentity | null> {
+  return (await identityDb.identity.get(RETIRED_RECORD_ID)) ?? null
+}
+
+/** Forgets the set-aside key — its confirmation reached the server, or never can. */
+export async function discardRetiredIdentity(): Promise<void> {
+  await identityDb.identity.delete(RETIRED_RECORD_ID)
+}
+
 /** Signs a UTF-8 message; the signature is IEEE P1363 (`r ‖ s`), base64. */
 export async function signMessage(identity: DeviceIdentity, message: string): Promise<string> {
   const signature = await crypto.subtle.sign(
@@ -145,6 +178,14 @@ export function loginMessage(nonce: string, username: string): string {
 
 export function enrollMessage(requestId: number, normalizedCode: string): string {
   return `mfdcs-enroll\n${requestId}\n${normalizedCode}`
+}
+
+/**
+ * What a revoked device signs to confirm it has deleted its data (backend V28): the device and the
+ * exact order it acted on, so a confirmation can never be credited to another order.
+ */
+export function wipeMessage(deviceId: number, wipeOrderedAt: number): string {
+  return `mfdcs-wipe\n${deviceId}\n${wipeOrderedAt}`
 }
 
 /**

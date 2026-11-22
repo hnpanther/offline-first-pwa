@@ -7,6 +7,7 @@ import {
   isLogSheetExpiredForSync,
   isSupersededSyncError
 } from '@/utils/logSheetStatus'
+import { serverNow } from '@/services/clock/serverClock'
 
 function archiveId(serverId: string, userId: string): string {
   return `${serverId}:${userId}`
@@ -106,7 +107,7 @@ export function isArchivedSubmissionPendingServerOutcome(
     'serverId' | 'status' | 'syncStatus' | 'serverStatus' | 'syncError' | 'syncedAt'
     | 'dueAt' | 'completedAt' | 'submittedAt'
   >,
-  now = Date.now()
+  now = serverNow()
 ): boolean {
   if (!sheet.serverId) return false
   if (sheet.status !== 'submitted') return false
@@ -125,7 +126,7 @@ export function isArchivedSubmissionPendingServerOutcome(
  */
 export async function getArchivedSubmissionsPendingServerOutcome(
   userId: string,
-  now = Date.now()
+  now = serverNow()
 ): Promise<LogSheet[]> {
   const rows = await db.logSheetUserArchives.where('userId').equals(userId).toArray()
   return rows

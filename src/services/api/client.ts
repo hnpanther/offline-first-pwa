@@ -1,6 +1,7 @@
 import { getSettings } from '@/services/storage'
 import { getAccessToken, clearAuthSession } from '@/services/auth'
 import { useAppStore } from '@/store'
+import { noteAuthenticatedContact } from '@/services/auth/offlineSession'
 
 /**
  * Centralized HTTP client for all server communication.
@@ -15,6 +16,19 @@ export class ApiError extends Error {
   ) {
     super(message)
     this.name = 'ApiError'
+  }
+
+  /**
+   * The stable English token a refusal carries when the client must branch on it rather than
+   * show it (`code` in the body, e.g. `ATTACHMENT_ID_TAKEN`) — never reworded, unlike `message`.
+   */
+  get code(): string | null {
+    const body = this.body
+    if (body && typeof body === 'object' && 'code' in body) {
+      const code = (body as { code: unknown }).code
+      if (typeof code === 'string' && code) return code
+    }
+    return null
   }
 }
 
@@ -189,11 +203,12 @@ async function request<T>(
   const url = `${baseUrl}${path}`
 
   let response: Response
+  const headers = await buildHeaders()
   const timeout = withTimeout(signal, REQUEST_TIMEOUT_MS)
   try {
     response = await fetch(url, {
       method,
-      headers: await buildHeaders(),
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: timeout.signal
     })
@@ -237,6 +252,9 @@ async function request<T>(
   }
 
   useAppStore.getState().setServerReachable(true)
+  // The server answered this session (backend V28): what the offline-session ceiling counts from.
+  // Only an answer to a request that carried the token says anything about the session.
+  if (authRequired && headers.Authorization) noteAuthenticatedContact()
 
   if (response.status === 204) return undefined as T
 
@@ -290,6 +308,7 @@ async function multipart<T>(path: string, form: FormData, signal?: AbortSignal):
     throw new ApiError(response.status, extractErrorMessage(body, `HTTP ${response.status}`), body)
   }
   useAppStore.getState().setServerReachable(true)
+  if (token) noteAuthenticatedContact()
   return response.json() as Promise<T>
 }
 
@@ -319,6 +338,7 @@ async function fetchBlob(path: string, signal?: AbortSignal): Promise<Blob> {
     throw new ApiError(response.status, `HTTP ${response.status}`)
   }
   useAppStore.getState().setServerReachable(true)
+  if (token) noteAuthenticatedContact()
   return response.blob()
 }
 
