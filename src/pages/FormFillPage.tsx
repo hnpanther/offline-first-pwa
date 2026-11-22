@@ -185,6 +185,19 @@ export function FormFillPage() {
     void load()
   }, [load])
 
+  // This page scrolls the window. The log-sheet asset form scrolls inside a dialog, so the same
+  // fields do not move the page there. Here, anything inserted above the action row (a lookup
+  // hint, the signature pad, a validation alert) is above whatever the browser anchored at the
+  // bottom, and anchoring yanks the scroll position. Opt out for the life of this page only.
+  useEffect(() => {
+    const root = document.documentElement
+    const previous = root.style.overflowAnchor
+    root.style.overflowAnchor = 'none'
+    return () => {
+      root.style.overflowAnchor = previous
+    }
+  }, [])
+
   const ensureDraft = async (values: Record<string, unknown>): Promise<LocalFormSubmission | null> => {
     if (submission) {
       const saved = await saveLocalFormDraft(submission.localId, values)
@@ -264,7 +277,20 @@ export function FormFillPage() {
     persianFormTitle(submission?.formTitle ?? definition?.title) || t.forms.title
 
   return (
-    <Box sx={{ p: 2, maxWidth: 720, mx: 'auto' }}>
+    <Box
+      sx={theme => ({
+        p: 2,
+        maxWidth: 720,
+        mx: 'auto',
+        // The app bar is fixed. Focusing the last control scrolls it to the top of the layout
+        // viewport, which is under that bar, and the browser then corrects — a jump. The margin
+        // is what scroll-into-view already honours.
+        '& .MuiInputBase-root, & .MuiButton-root, & .MuiSelect-select': {
+          scrollMarginTop: `calc(${Number(theme.mixins.toolbar.minHeight) || 56}px + 12px)`,
+          scrollMarginBottom: 24
+        }
+      })}
+    >
       <Button
         startIcon={<ArrowBackIcon />}
         onClick={() => navigate('/forms')}

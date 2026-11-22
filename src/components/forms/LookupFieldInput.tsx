@@ -2,6 +2,11 @@ import { Autocomplete, Box, Button, Chip, TextField } from '@mui/material'
 import { useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react'
 import { availability, searchList, type LookupAvailability } from '@/services/lookups/lookupStore'
 import { refreshLookup } from '@/services/lookups/lookupSync'
+import {
+  COMBOBOX_POPPER_STRATEGY,
+  showLookupAvailabilityHint,
+  type LookupFieldMode
+} from './comboboxLayout'
 import type { LookupOption } from '@/services/lookups/lookupTypes'
 import {
   lookupChoiceText,
@@ -83,7 +88,10 @@ export function LookupFieldInput({
   acceptsUnlistedCode = false
 }: LookupFieldInputProps) {
   const chosen = useMemo(() => lookupChoices(value), [value])
-  const [mode, setMode] = useState<LookupAvailability>('absent')
+  // `pending` until the lease read returns. Starting at `absent` painted the long hint and then
+  // removed it for every list that was actually ready — the field shortened, and a window
+  // scrolled to the end of the form jumped. See comboboxLayout.ts.
+  const [mode, setMode] = useState<LookupFieldMode>('pending')
   const [options, setOptions] = useState<LookupOption[]>([])
   const [input, setInput] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
@@ -177,7 +185,9 @@ export function LookupFieldInput({
   const helper = error
     ?? problem
     ?? refreshNote
-    ?? (searching ? undefined : AVAILABILITY_TEXT[mode as Exclude<LookupAvailability, 'ready'>])
+    ?? (showLookupAvailabilityHint(mode)
+      ? AVAILABILITY_TEXT[mode as Exclude<LookupAvailability, 'ready'>]
+      : undefined)
 
   const sharedProps = {
     options: shownOptions,
@@ -216,7 +226,10 @@ export function LookupFieldInput({
         helperText={helper}
         inputProps={{ ...(params as { inputProps?: object }).inputProps, dir: 'auto' }}
       />
-    )
+    ),
+    // Absolute popper hangs past the end of a window-scrolled form and the page jumps when it
+    // flips. Fixed does not change scroll height. Same anchor inside the log-sheet dialog.
+    slotProps: { popper: { popperOptions: { strategy: COMBOBOX_POPPER_STRATEGY } } }
   }
 
   // Online only, and only when there is a list to ask for. Offline the field already says why it

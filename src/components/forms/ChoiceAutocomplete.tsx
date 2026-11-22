@@ -20,6 +20,7 @@ import type { FieldValidation } from '@/types/sync'
 import { matchesSearch } from '@/utils/persianSearch'
 import { evaluateOptionSeverity, type FieldValidationSeverity } from '@/utils/fieldValidation'
 import { customAnswerProblem, findListedOption, isListedOption } from './choiceControl'
+import { COMBOBOX_POPPER_STRATEGY } from './comboboxLayout'
 
 /**
  * The «add what I typed» row. A control character cannot be part of a real option — the server
@@ -125,6 +126,7 @@ export function ChoiceAutocomplete({
         filterOptions={filterOptions}
         getOptionLabel={labelOf}
         noOptionsText={noOptionsText}
+        slotProps={{ popper: { popperOptions: { strategy: COMBOBOX_POPPER_STRATEGY } } }}
         onChange={(_, next) => {
           setTypedProblem(null)
           const out: string[] = []
@@ -176,6 +178,7 @@ export function ChoiceAutocomplete({
       value={single}
       autoHighlight
       clearOnBlur
+      slotProps={{ popper: { popperOptions: { strategy: COMBOBOX_POPPER_STRATEGY } } }}
       filterOptions={filterOptions}
       getOptionLabel={labelOf}
       noOptionsText={noOptionsText}

@@ -223,9 +223,31 @@ export function SignatureFieldInput({
       </Typography>
 
       {id && !drawing && (
-        <Box sx={{ maxWidth: 320, border: '1px solid', borderColor: 'divider', borderRadius: 1, bgcolor: '#fff', p: 0.5 }}>
+        <Box
+          sx={{
+            maxWidth: 320,
+            width: '100%',
+            // Reserve the bitmap's box before the bytes arrive. A one-line placeholder that then
+            // becomes the drawing shortens or lengthens the end of the form and the window jumps.
+            // The image is taken out of flow so its intrinsic size cannot grow this box.
+            position: 'relative',
+            aspectRatio: `${WIDTH} / ${HEIGHT}`,
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 1,
+            bgcolor: '#fff',
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center'
+          }}
+        >
           {src ? (
-            <Box component="img" src={src} alt={t.signature.signed} sx={{ display: 'block', width: '100%', height: 'auto' }} />
+            <Box
+              component="img"
+              src={src}
+              alt={t.signature.signed}
+              sx={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+            />
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
               {missing ? t.signature.notOnDevice : '…'}
@@ -256,7 +278,23 @@ export function SignatureFieldInput({
       )}
 
       {drawing && (
-        <Box sx={{ border: '1px dashed', borderColor: 'text.disabled', borderRadius: 1, bgcolor: '#fff', maxWidth: WIDTH }}>
+        <Box
+          sx={{
+            // The canvas bitmap is 640×320. Letting that attribute set the layout height paints
+            // a 320px-tall pad, then CSS shrinks it — a jump at the end of a window-scrolled
+            // form. The wrapper owns the aspect ratio; the bitmap stays 640×320 for the stroke.
+            // Absolute so the bitmap's intrinsic size cannot stretch the wrapper.
+            position: 'relative',
+            width: '100%',
+            maxWidth: WIDTH,
+            aspectRatio: `${WIDTH} / ${HEIGHT}`,
+            border: '1px dashed',
+            borderColor: 'text.disabled',
+            borderRadius: 1,
+            bgcolor: '#fff',
+            overflow: 'hidden'
+          }}
+        >
           <canvas
             ref={canvasRef}
             width={WIDTH}
@@ -267,7 +305,7 @@ export function SignatureFieldInput({
             onPointerUp={onUp}
             onPointerCancel={onUp}
             onPointerLeave={onUp}
-            style={{ display: 'block', width: '100%', height: 'auto', aspectRatio: `${WIDTH} / ${HEIGHT}`, touchAction: 'none' }}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', touchAction: 'none' }}
           />
         </Box>
       )}
