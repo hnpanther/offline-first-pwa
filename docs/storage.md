@@ -59,7 +59,7 @@ This is the data that matters. Losing it loses field readings.
 | Store | Key + indexes | Holds |
 |---|---|---|
 | `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts. Backend V25 added four plain, non-indexed fields (no Dexie version bump): `serverKeptAt` (a refused submission the server kept), and `lateProgressSentMarker` / `lateProgressKeptMarker` / `lateProgressKeptAt` (an expired draft's edits sent once, and kept) — see [sync.md](sync.md) «Deadlines, offline». Backend V26 added `serverKeepRefusedAt` (a refusal answered `kept: false`), also plain. The sync tick reads the queue and the progress lane through the **`status`** index (`getLogSheetsByStatus`, issue P-08) |
-| `formSubmissions` | `id, localId, serverId, formDefinitionId, status, syncStatus, createdByUserId, createdAt` | Ad-hoc form drafts / finals (carrier 3). Separate from log sheets — never counted in round compliance. `draftSyncStatus` / `locallyEditedAt` are plain properties for the draft-upsert lane (like progress); `syncStatus` is the final-submit lane. `createdByUserId` scopes outbound sync on a shared tablet. List/deep-link visibility also requires `reporterUnitId` or `subjectUnitId` in bootstrap `accessibleUnitIds` (plant-wide skips the unit filter). Synced rows follow the same `deviceRetention` windows as rounds via `cleanupFormSubmissions.ts` |
+| `formSubmissions` | `id, localId, serverId, formDefinitionId, status, syncStatus, createdByUserId, createdAt` | Ad-hoc form drafts / finals (carrier 3). Separate from log sheets — never counted in round compliance. `draftSyncStatus` / `locallyEditedAt` are plain properties for the draft-upsert lane (like progress); `syncStatus` is the final-submit lane. `createdByUserId` scopes outbound sync on a shared tablet. List and deep-link visibility also require `reporterUnitId` or `subjectUnitId` in bootstrap `accessibleUnitIds` (plant-wide skips the unit filter; an empty accessible set keeps the operator's own rows). The stored `formTitle` may be bilingual; the screen shows the Persian segment only (`persianFormTitle`). Synced rows follow the same `deviceRetention` windows as rounds via `cleanupFormSubmissions.ts`. Open drafts and pending finals are never purged. Sign-out does not delete these rows or their signature blobs |
 | `attachments` | `id, logSheetLocalId, logSheetServerId, formSubmissionLocalId, formSubmissionId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. Owner is XOR: log-sheet keys **or** form-submission keys. `createdByUserId` is a **plain, unindexed** property — see below; so is `idRemintedFrom` (issue P-06) |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |
@@ -229,8 +229,9 @@ These two are the **one exception to «reference data survives logout»**: a lis
 data, so it is cleared at sign-out (`clearUserSessionContext` → `clearAllLookups`), deleted when its lease ends — online
 or not, at startup and whenever a field reads it — and dropped when no assigned round and no
 FILL-able form needs it. Form personnel lists live in these same stores, not a second table;
-sign-out also deletes the `requiredFormLookups` lease key. Nothing an operator recorded goes
-with it: every lookup answer stores its own `{code, label}`, and form drafts, finals and
+sign-out also deletes the `requiredFormLookups` lease key, or the next sign-in would treat a
+previous operator's lease as already downloaded. Nothing an operator recorded goes
+with it: every lookup answer stores its own `{code, label}`, and form drafts, queued finals and
 signature bytes are other stores. See `services/lookups/` and [sync.md](sync.md) — «Reference lists».
 
 ### The recovery path in `openDatabase()`
@@ -254,9 +255,9 @@ wiping a user's database on an unrelated error would be far worse than failing l
 | Event | Reference data | Reference **lists** (lookup) | Drafts | Attachments | Settings |
 |---|---|---|---|---|---|
 | App closed and reopened | ✅ | ✅ while the lease runs | ✅ | ✅ | ✅ |
-| Logout | ✅ | ❌ — personal data | ✅ | ✅ | ✅ |
+| Logout | ✅ | ❌ — `clearAllLookups` (form lists and round lists) and the `requiredFormLookups` key | ✅ rounds, form drafts, queued finals | ✅ including signature blobs | ✅ |
 | Lease ends (from the last sync) / clock set back | ✅ | ❌ | ✅ | ✅ | ✅ |
-| No assigned round needs the list any more | ✅ | ❌ at the next sync | ✅ | ✅ | ✅ |
+| No assigned round **and** no FILL-able form needs the list any more | ✅ | ❌ at the next `syncRequiredLookups` | ✅ | ✅ | ✅ |
 | Browser cache cleared | ❌ | ❌ | ❌ | ❌ | ❌ |
 | "Clear site data" | ❌ | ❌ | ❌ | ❌ | ❌ |
 | PWA uninstalled | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -264,8 +265,11 @@ wiping a user's database on an unrelated error would be far worse than failing l
 | **Wipe ordered by the server** (backend V28) | ❌ | ❌ | ❌ — **unsent rounds too** | ❌ | ✅ server address only |
 
 **Logout does not clear local work**, and that is deliberate on a shared tablet: an operator
-signing out at the end of a shift must not destroy a round the next operator has not synced yet.
+signing out at the end of a shift must not destroy a round — or a form draft, a queued final, or
+a signature blob — the next operator has not synced yet. Lookup lists are the exception, because
+they can be personal data, and they go for both sources together.
 `logSheetUserArchives` is keyed by `userId` so each person sees only their own completed sheets.
+Form history on the device is the signed-in author's rows, further limited to an accessible unit.
 
 ## Related
 

@@ -1,12 +1,13 @@
 # Roadmap — decisions deferred, with the facts they rest on
 
-> **Nothing in this file is implemented.** Every other document under `docs/` describes the system
-> as it is; this one describes work that has been thought through and not done. Keep the
-> separation — a reader who cannot tell the two apart will trust a design as if it were behaviour,
-> which is exactly the failure the documentation rule in `CLAUDE.md` exists to prevent.
+> **Sections marked built describe the device as it is** (§15 searchable choice, lookup lists
+> and signatures; §17 ad-hoc forms). Those facts also live in `sync.md`, `storage.md`, `README.md`
+> and `AGENTS.md`. Every other section is work that has been thought through and not done. Keep
+> the separation — a reader who cannot tell the two apart will trust a design as if it were
+> behaviour, which is exactly the failure the documentation rule in `CLAUDE.md` exists to prevent.
 >
-> When one of these is built, move the content into the reference document it belongs to
-> (`deployment.md`, `apk.md`, `sync.md`) and delete the section here.
+> When one of the deferred sections is built, move the content into the reference document it
+> belongs to (`deployment.md`, `apk.md`, `sync.md`) and delete the section here.
 
 Each section records the **facts about the current system** that the decision depends on. Those
 facts are the part most worth keeping: a design can be re-argued cheaply, a constraint established
@@ -1054,10 +1055,16 @@ records only what is particular to the tablet.
 >
 > - The lookup store is two stores, `lookupLists` (keyed by the list's code) and `lookupItems`
 >   (keyed by the server's item id, indexed by list) — not one store keyed on `[list+code]`; and
->   lists are delivered by the round's `requiredLookups` grant and a lease, not by a general
->   incremental sync (backend §31 «Decided while building it»).
+>   lists are delivered by the round's `requiredLookups` grant **union** bootstrap
+>   `requiredFormLookups` (lists FILL-able forms actually use) and a lease — not by a general
+>   incremental sync, and not by downloading every catalog (backend §31 «Decided while building it»).
 > - The personal-data question was decided: a reference list is the **one** store that does not
->   survive sign-out, and an expired lease deletes it (AGENTS.md).
+>   survive sign-out. `clearAllLookups` drops form lists and round lists together, and the
+>   `requiredFormLookups` key goes with them. An expired lease deletes the copy (AGENTS.md).
+>   Drafts, queued finals and signature blobs stay.
+> - Dexie is at `version(5)` (`formDefinitions`, `formSubmissions`, form attachment indexes).
+>   The «before the build» table below still says `version(3)`; that line describes the device
+>   before this work, not the schema on disk now.
 > - **The signature's hash is computed by the server, never by the device** — the opposite of the
 >   last bullet below. The device sends `{ type: 'signature', ids, signedAt }`; the signer and the
 >   hash are stamped at sync, because two canonicalisations would drift and every signature taken
@@ -1186,11 +1193,39 @@ signal an operator has that work has not reached the server.
 
 # 17. Ad-hoc field forms on the tablet (carrier 3) — **built (infra)**
 
-*Backend V29 + PWA Dexie v5.* Separate submission carrier from log sheets: `formDefinitions` /
-`formSubmissions`, draft upsert lane (`POST /api/forms/drafts`) vs final submit
-(`POST /api/forms/submit`), attachment XOR via `formSubmissionId` (including signatures),
-bootstrap `requiredFormLookups` unioned with round lookup leases, unit-scoped list visibility,
-and post-sync retention via the same `deviceRetention` windows as rounds. UI at `/forms`. Still
-deferred: void/reopen (client already coerces `APPROVED`/`VOIDED` if the wire grows), review
-triage, fixed CBM/HSE templates, Kafka handoff. Contract: project store
-`docs/form-mobile-api.md`.
+*Backend V29 + PWA Dexie v5.* Separate submission carrier from log sheets. Log-sheet sync order
+is unchanged: the inbox merge still runs before any form catalog, form history or lookup wait;
+the batch is still before fault reports; the shared attachment pass still delivers a round's
+photos after that batch. A transport failure inside the form lane does not skip the log-sheet
+purge or that pass.
+
+What the device does:
+
+- `formDefinitions` / `formSubmissions` (Dexie `version(5)`). `formDefinitions` indexes `id, code`
+  only — the catalog is sorted in memory.
+- Draft upsert (`POST /api/forms/drafts`) does not write the final-submit fields. Final submit
+  (`POST /api/forms/submit`) runs only after **that form's** pending files, signature included,
+  have been uploaded while the server row is still a `DRAFT`. Unsent media holds the form back.
+  The signature row, its bytes and the ids in `formData` stay.
+- Login stores bootstrap `requiredFormLookups` (lists FILL-able forms use) and the inbox path
+  unions that with the assigned rounds' `requiredLookups` before `syncRequiredLookups`. No other
+  catalog is downloaded. Sign-out calls `clearAllLookups` (one pair of stores for form lists and
+  round lists) and deletes the lease key. Drafts, queued finals and signature blobs stay.
+- History is `GET /api/form-submissions`, terminal statuses only, under سوابق فرم‌ها
+  (`/forms/history`), together with a final the server refused. A dirty draft and an unsynced
+  final are not overwritten. The title on screen is the Persian segment only
+  (`persianFormTitle`); a code or an English segment is not shown.
+- The fill page scrolls the window. The end-of-form jump is kept off: `fixed` combobox popper,
+  lookup hint after the lease read, signature bitmap in an aspect-ratio box, `overflow-anchor:
+  none` while the page is mounted.
+- List and deep-link visibility: the signed-in author, and `reporterUnitId` or `subjectUnitId`
+  in `accessibleUnitIds` (plant-wide skips the unit filter). Outbound sync is scoped by
+  `createdByUserId`.
+- After a successful sync pass, and when coming online with a session,
+  `cleanupLocalFormSubmissions` applies the same `deviceRetention` windows as rounds. Open
+  drafts and pending finals are never purged.
+- Attachment owner is XOR via `formSubmissionId` (including signatures). UI at `/forms`.
+
+Still deferred: void/reopen actions (the client already coerces `APPROVED`/`VOIDED` if the wire
+grows, and history lists them), review triage, fixed CBM/HSE templates, Kafka handoff. Contract:
+project store `docs/form-mobile-api.md`.

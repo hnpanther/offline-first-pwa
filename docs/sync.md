@@ -5,27 +5,34 @@ step fails.
 
 **Code:** [`src/services/sync/`](../src/services/sync/) — `index.ts` (the manager),
 `pullBootstrap.ts`, `pullInbox.ts`, `logSheetSync.ts`, `attachmentSync.ts`,
-`formDraftSync.ts`, `formSubmitSync.ts`, `formCatalogSync.ts`,
-`mergeLogSheetBundle.ts`, `cleanupLogSheets.ts`
+`formDraftSync.ts`, `formSubmitSync.ts`, `formCatalogSync.ts`, `formHistorySync.ts`,
+`mergeLogSheetBundle.ts`, `cleanupLogSheets.ts`, `cleanupFormSubmissions.ts`
 
 ---
 
 ## The shape of it
 
 ```
-        PULL (server → device)                PUSH (device → server)
+        PULL (server → device)                 PUSH (device → server), in order
 
-  GET /api/bootstrap    ── master data      POST /api/log-sheets/progress ── what a round
-                     (+ requiredFormLookups)                                  has recorded
-  GET /api/log-sheets/inbox ── my sheets                                     so far
-  GET /api/log-sheets/{id}/bundle ── one    POST /api/log-sheets/batch    ── completions
-        sheet, everything needed offline    POST /api/attachments         ── one file
-  GET /api/forms        ── fillable forms                                      at a time
-                                            POST /api/nfc-fault-reports/batch
-                                            POST /api/forms/drafts        ── form drafts
-                                            POST /api/attachments         ── form media while DRAFT
-                                            POST /api/forms/submit        ── form finals
+  GET /api/bootstrap                         1. POST /api/log-sheets/progress
+      units + the FILL-able form lease           open rounds, best-effort
+  GET /api/log-sheets/inbox                  2. POST /api/forms/drafts
+  GET /api/log-sheets/{id}/bundle                best-effort; log sheets do not wait
+  GET /api/forms                             3. POST /api/log-sheets/batch
+  GET /api/form-submissions                  4. POST /api/nfc-fault-reports/batch
+                                             5. POST /api/attachments
+                                                this form's files, while the row is DRAFT
+                                             6. POST /api/forms/submit
+                                             7. POST /api/attachments
+                                                a round's files; shared pass, after the batch
 ```
+
+Log-sheet push order is the same as before forms existed: progress, then the batch, then fault
+reports, then the shared attachment pass. Form drafts sit with progress, outside that try. A
+form's own files are uploaded inside the final lane, while the server row is still a draft, and
+that lane does not carry a round's photos. The lookup download after the inbox merge is one call,
+and the set is only the assigned rounds' lists union the FILL-able forms' lists.
 
 Two rules hold the whole design together:
 
@@ -439,9 +446,19 @@ stores — and deletes the `requiredFormLookups` key. Drafts, queued finals and 
 stay.
 
 **History:** `GET /api/form-submissions` is merged into local rows the operator can already
-see. Submitted, approved and voided filings are listed under سوابق فرم‌ها, separate from open
-drafts. A draft with unsynced edits, and a final the server has not accepted, are not
-overwritten by that merge.
+see. Submitted, approved and voided filings, and a final the server refused, are listed under سوابق فرم‌ها (`/forms/history`),
+separate from open drafts. A draft with unsynced edits, and a final the server has not accepted,
+are not overwritten by that merge. The name on the card and on the fill page is
+`persianFormTitle`: the Persian segment of the stored title, with the code and any English
+segment removed. An English-only title falls back to the generic Persian label. The code is not
+shown.
+
+**The fill page scrolls the window**, unlike the asset dialog. At the bottom of the form a
+combobox, a lookup hint, or the signature pad used to change the document height and the
+browser's scroll anchoring jumped the view. The combobox popper is `fixed`, the absent-list
+hint waits until the lease read answers, the signature bitmap stays inside an aspect-ratio box,
+and `overflow-anchor` is off on the document for as long as that page is mounted. Log-sheet fill
+does not set it.
 
 **Fillable catalog list:** `getAllFormDefinitions` reads with `toArray()` and sorts by title in
 memory. Dexie v5 indexes only `id, code` — `orderBy('title')` throws a SchemaError, and
@@ -986,7 +1003,8 @@ it into the live round. Until the owner comes back, it stays.
 | A file **parked** (refused for good, not retried) | with its round, when that round is purged — **except** one parked by a 403 (a voided round's evidence the server would not take): kept even then, being the only copy |
 | A file the operator removed | at once if it never reached the server; otherwise kept as «to delete» until the server confirms the delete |
 | **NFC fault reports** | **never** — sent ones stay too; only a wipe or clearing the app's data removes them |
-| **Reference lists** (lookup, backend §31) | when the lease runs out — per list, `device_lease_hours` (default 24) counted from the last sync that refreshed it, checked at every start and sign-in **even offline**; when the device clock reads earlier than the server time it last saw for that list; when no assigned round needs the list any more (next sync); when the server answers 403/404 for it; and at sign-out, the offline-session lock and a wipe — personal data |
+| **Reference lists** (lookup, backend §31) | when the lease runs out — per list, `device_lease_hours` (default 24) counted from the last sync that refreshed it, checked at every start and sign-in **even offline**; when the device clock reads earlier than the server time it last saw for that list; when no assigned round **and** no FILL-able form needs the list any more (next `syncRequiredLookups`); when the server answers 403/404 for it; and at sign-out (`clearAllLookups`, form lists and round lists together) plus the `requiredFormLookups` key, the offline-session lock and a wipe — personal data. Drafts, queued finals and signature blobs are not in these stores |
+| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Failed finals: never unless the unsynced switch is on. A dirty draft and an unsynced final are also kept when history is merged |
 | Plant reference data from round bundles (assets, classes, field definitions, locations, templates, units) | never removed; each bundle overwrites what it carries |
 | The inbox snapshot | replaced by every inbox pull; cleared at sign-out, the offline-session lock, a user switch and a wipe |
 | The session (`authSession`) | online: when the server says it ended (401), when its expiry passes on the server's clock, or when the device-status check finds this device revoked with enrolment on; offline: kept — until the offline-session lock, if the plant switched it on; sign-out and a wipe |
@@ -999,7 +1017,7 @@ it into the live round. Until the owner comes back, it stays.
 
 | Event | What goes | What stays |
 |---|---|---|
-| Sign-out | the session, the bound user id, the inbox snapshot, reference lists, the last server contact | every round, file, report, archive and setting — a shared tablet's next operator must not destroy the last one's unsent work |
+| Sign-out | the session, the bound user id, the inbox snapshot, reference lists (`clearAllLookups` — form lists and round lists), the `requiredFormLookups` lease key, the last server contact | every round, form draft, queued final, signature blob, other file, report, archive and setting — a shared tablet's next operator must not destroy the last one's unsent work |
 | **The offline-session lock** (backend V28) | the same as sign-out | the same as sign-out |
 | **A revoke found by the device-status check** (backend V28, enrolment on) | the same as sign-out | the same as sign-out — and the device key, which a new enrolment replaces |
 | **A wipe ordered by the server** (backend V28) | everything above, **unsent rounds included** | the server address; the device key only until the confirmation lands |
@@ -1107,18 +1125,28 @@ The operator's sheets: assigned plus claimable pool.
 
 ### Reference lists (backend roadmap §31 Phase 2)
 
-Right after the inbox merge, `syncRequiredLookups(requiredFromBundles(assigned))` brings the
-device's lists in line with what the **assigned** rounds declared in `context.requiredLookups` —
-which is exactly the server's grant. It never throws: a list problem must not stop the inbox, and a
-lookup field always has code-only entry to fall back on.
+Right after the inbox merge — which does not wait for this — `syncRequiredLookups` is called
+with `loginLookupLease(requiredFromBundles(assigned), requiredFormLookups)`. That is the
+assigned rounds' `context.requiredLookups` **union** the bootstrap lease of lists FILL-able
+forms use. Nothing else: not every catalog on the server, and not a list no open round and no
+fillable form named. The helper set-diffs, so passing only the rounds would drop the form
+lists, and passing only the form lease would drop the rounds. It never throws: a list problem
+must not stop the inbox, and a lookup field always has code-only entry to fall back on. Login
+writes `requiredFormLookups` before the session is published; the inbox waits for that
+in-flight bootstrap only when it is about to read the lease.
 
 | Situation | What it does |
 |---|---|
-| A list no assigned round needs | dropped (set difference) |
-| Never fetched, a pass unfinished, a revision behind the round's, or past half its lease | fetched page by page (500) from the stored `(updatedAt, id)` cursor — so an interrupted pass resumes and a held list fetches only what changed. The revision recorded is the **first** page's (backend AGENTS.md #217) |
+| A list no assigned round and no FILL-able form needs | dropped (set difference) |
+| Never fetched, a pass unfinished, a revision behind the lease, or past half its lease | fetched page by page (500) from the stored `(updatedAt, id)` cursor — so an interrupted pass resumes and a held list fetches only what changed. The revision recorded is the **first** page's (backend AGENTS.md #217) |
 | Current and within half its lease | nothing — each page is a row in the server's download log |
 | 403 / 404 | the grant is gone: dropped |
 | Network failure | kept as it is; tried again at the next pull |
+
+Sign-out deletes every copy with `clearAllLookups` — form lists and round lists are the same
+`lookupLists` / `lookupItems` stores — and deletes the `requiredFormLookups` key. The next
+sign-in does not treat a previous operator's lease as already downloaded. Drafts, queued finals
+and signature bytes stay; a recorded answer keeps its own `{code, label}`.
 
 A copy is searched only while **usable** — a full pass reached the end, the lease runs, and the
 device clock is not behind the last server time seen (`lookupStore.isUsable`). Otherwise the field

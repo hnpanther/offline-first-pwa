@@ -700,7 +700,7 @@ rounds included ([sync.md](sync.md), «Wipe on revoke»).
 device on the server, so a revoke does not end it and no 401 comes. The tablet therefore asks about
 its own device while signed in (`useDeviceStatusWatch`, at most every 30 minutes while online): a
 **wipe order** is carried out whatever the switch says; a **plain revoke** signs the operator out —
-keeping every round, and never over an open asset form — but only while enrolment is **on**. With it
+keeping every round, form draft, queued final and signature blob, and clearing lookup lists, and never over an open asset form — but only while enrolment is **on**. With it
 off a revoked tablet can still sign in (off means the server reads no device field at login), so
 signing it out would achieve nothing, and the server does not say. [sync.md](sync.md), «Wipe on
 revoke».

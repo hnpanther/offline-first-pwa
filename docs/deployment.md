@@ -795,7 +795,7 @@ Check one tablet before walking away.
 
 > **A rollback is not symmetric with a deploy.** Reinstalling an older build on a tablet whose
 > IndexedDB was written by a newer one leaves the app unable to open its database; it refuses to
-> start rather than delete unsynced readings. See
+> start rather than delete unsynced readings (rounds and form drafts alike). See
 > [docs/storage.md](storage.md#changing-the-schema).
 
 ---

@@ -1084,10 +1084,11 @@ The price is that **uninstalling deletes IndexedDB**, and IndexedDB is the app. 
 exists because of that one fact:
 
 - log sheets filled but not yet synced
+- form drafts and queued finals, and signature blobs still only on the device
 - photographs, voice notes and video still in the upload queue
 - `logSheetUserArchives`, which is exempt from every retention rule and is the **only copy in
   existence** of work belonging to an operator whose round was reassigned
-- locally-filed NFC fault reports, and every signed-in session
+- locally-filed NFC fault reports, lookup lists, and every signed-in session
 
 None of it is recoverable, and none of it leaves a trace on the server.
 

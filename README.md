@@ -85,8 +85,8 @@ The backend has the same arrangement — see its `README.md`, `AGENTS.md` and `d
 - **Log sheet inbox (kartabl)** — assigned work, pickup pool, supervisor team view
 - **Selective reference data** — only per-log-sheet bundles (~open assigned work), not full plant master data
 - **Automatic pre-provisioning** — assigned bundles (entries + assets + hierarchy slice) stored on inbox sync
-- **Background sync** — submitted log sheets, plus locally-filed NFC fault reports when the role permits, push when online
-- **Ad-hoc field forms (carrier 3)** — fillable forms outside scheduled rounds (`/forms`, with سوابق فرم‌ها for submitted / approved / voided); draft upsert, then media (including a signature) while the server copy is still a draft, then immutable final submit; lookup lists for those forms leased at login alongside round lists
+- **Background sync** — submitted log sheets and, when the role permits, NFC fault reports. Form drafts and form finals travel on their own lanes and do not reorder the log-sheet batch or a round's photo upload. See [Synchronization](#synchronization)
+- **Ad-hoc field forms (carrier 3)** — fillable forms outside scheduled rounds. `/forms` is open drafts and finals still waiting to sync; `/forms/history` (سوابق فرم‌ها) is submitted, approved, voided, and a final the server refused. The card and the fill heading show the Persian title only (`persianFormTitle`) — a stored `CODE / English / عنوان` keeps the Persian segment, and an English-only title falls back to the generic label. The code is not shown. A draft is upserted (`POST /api/forms/drafts`), then that form's media, signature included, is uploaded while the server copy is still a draft, then the final submit (`POST /api/forms/submit`). Unsent media holds that form back. Login leases only the lookups FILL-able forms use, unioned with the assigned rounds' lists — not every catalog. Sign-out runs `clearAllLookups` on those shared stores and drops the lease key; drafts, queued finals and signature blobs stay. The list shows the signed-in author's rows whose filing unit is accessible (plant-wide skips the unit filter). Local retention uses the same `deviceRetention` windows as rounds; open drafts and pending finals are never purged. The fill page scrolls the window; the end-of-form jump is suppressed (fixed combobox, delayed lookup hint, signature aspect-ratio box, `overflow-anchor: none` on that page only). Log-sheet sync order is unchanged.
 - **Recording ceilings that stop cleanly** — a voice note or video that reaches the site's duration or size limit is stopped, the microphone released and the clip **saved automatically**, with a message naming which limit was reached. The counter shows the ceiling rather than climbing past it
 - **Live progress reporting** — an open round tells the server what it has recorded as the operator walks it, so a supervisor sees «N از M دارایی» without waiting for the final submit, and a reassigned round arrives with the previous operator's readings in it (see below)
 - **History & archives** — completed work plus per-user snapshots on shared tablets, with a per-asset restore back into a sheet that was reassigned and came back; the round's own answers («پرسش‌های این کار») are archived and restorable the same way
@@ -178,7 +178,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 | UI | React 18 + TypeScript |
 | Build | Vite 5 + `vite-plugin-pwa` (Workbox `generateSW`) |
 | Components | MUI v5, full RTL via `@emotion/cache` + `stylis-plugin-rtl` |
-| Local storage | Dexie 4 (IndexedDB), schema version **1** (single version) |
+| Local storage | Dexie 4 (IndexedDB), schema version **5** (`version(1)` closed; `version(4)` lookup lists; `version(5)` form carrier) |
 | Global state | Zustand |
 | Forms | React Hook Form |
 | QR / barcode decoding | `zxing-wasm` 3.1.6 (`zxing-cpp` as WebAssembly) — one decoder for both deliveries, reading QR and nine linear symbologies. `zxing_reader.wasm` is 925 KB and **must stay in the workbox `globPatterns`**, or scanning dies as soon as a tablet is offline. The platform `BarcodeDetector` is deliberately unused |
@@ -196,7 +196,7 @@ $env:PATH = "C:\Program Files\nodejs;$env:PATH"
 │  React UI                                                    │
 │    ↕ Zustand store                                           │
 │  IndexedDB (Dexie)  ← local source of truth                  │
-│    • authSession, settings, per-sheet bundles, log sheets, …  │
+│    • authSession, settings, per-sheet bundles, log sheets, form drafts, …  │
 │  Service Worker (Workbox)  ← precached app shell (dist/)     │
 └─────────────────────────────────────────────────────────────┘
          │ online                              │ offline
@@ -244,6 +244,8 @@ src/
 │   ├── Dashboard.tsx
 │   ├── LogSheetListPage.tsx    Inbox (active) + history
 │   ├── LogSheetFillPage.tsx    Fill log sheet + NFC
+│   ├── FormListPage.tsx        Open forms and سوابق فرم‌ها
+│   ├── FormFillPage.tsx        Ad-hoc form fill (window scroll)
 │   ├── NfcInspectPage.tsx      Admin + online only — raw tag JSON, asset lookup,
 │   │                           bind the scanned chip UID to the asset
 │   └── SettingsPage.tsx        Admin only
@@ -251,9 +253,13 @@ src/
 │   ├── api/            client.ts + all endpoints (index.ts)
 │   ├── auth/           Session in IndexedDB + sessionContext (shared tablet isolation)
 │   ├── nfc/            Web NFC abstraction
-│   ├── storage/        Dexie db (single version 1), repository, fieldDefinitions,
+│   ├── storage/        Dexie db (schema version 5; version 1 closed), repository,
+│   │                   fieldDefinitions, formDefinitions, formSubmissions,
 │   │                   inboxCache, logSheetArchive, nfcFaultReports
-│   └── sync/           SyncManager, pullBootstrap, pullInbox, mergeLogSheetBundle, logSheetSync, cleanup
+│   ├── forms/          form lookup lease (`requiredFormLookups`)
+│   ├── lookups/        lookup store; `clearAllLookups` on sign-out
+│   └── sync/           SyncManager, pullBootstrap, pullInbox, mergeLogSheetBundle,
+│                       logSheetSync, formDraftSync, formSubmitSync, formHistorySync, cleanup
 ├── store/              Zustand
 ├── types/              Domain types + auth + sync
 ├── utils/              logSheetStatus, fieldValidation, ids, scopeLabels, fieldOptions
@@ -598,8 +604,10 @@ Login returns JWT + roles + permissions + `expiresAt`. Stored in IndexedDB `sync
 4. **Offline** + expired JWT → session still accepted (offline-first) — **unless the plant switched on
    the offline-session lock** (backend V28, panel Settings, off by default): a session the server has
    not answered for that many hours, or whose device clock reads earlier than the last answer, locks
-   and asks for the password again (which needs the network). Nothing is deleted; unsent rounds are
-   sent after the next sign-in. The app warns hours before, and never locks over an open asset form.
+   and asks for the password again (which needs the network). The lock is a sign-out: lookup lists
+   go (`clearAllLookups`, form lists and round lists) and the form lease key goes with them.
+   Unsent rounds, form drafts, queued finals and signature blobs stay and are sent after the next
+   sign-in. The app warns hours before, and never locks over an open asset form.
    See [docs/sync.md](docs/sync.md) «The offline-session ceiling».
 5. **Login** always redirects to `/` (never restores a previous user’s deep link).
 6. The login form submits through its button or the keyboard’s **Enter / Go** action.
@@ -641,10 +649,14 @@ Helpers in `src/types/auth.ts`: `hasPlantWideScope()`, `canManageNfcSerial()`, `
 | `/logsheets/active` | All — inbox + my work |
 | `/logsheets/history` | All — completed / failed / archived snapshots (see below) |
 | `/logsheets/:localId` | All — fill page |
+| `/forms` | `canFillForms` — `GET:/api/forms` or draft or submit permission. Open drafts |
+| `/forms/history` | Same gate — سوابق فرم‌ها (submitted / approved / voided) |
+| `/forms/new/:formId` | Same gate — start a draft |
+| `/forms/:localId` | Same gate — continue a draft or open a filing |
 | `/nfc-inspect` | Gated on `POST:/api/asset-entries/{id}/nfc-serial` (`PermissionRoute` + sidebar) — online-only NFC tag inspector |
 | `/settings` | Gated on `CAP:SCOPE_PLANT_WIDE` (`PermissionRoute` + sidebar) — server URL, sync interval, screen orientation, and a read-only **Server policy** card listing the switches the server owns: chip-serial scan check, manual NFC tag entry, and image annotation |
 
-Operators see Dashboard and Log Sheets only.
+Operators see Dashboard and Log Sheets. Forms appear when the session holds a forms permission (`canFillForms`).
 
 The removed admin routes `/master-data/*`, `/logsheet-templates`, `/admin` and `/records` all redirect to `/`, so old bookmarks and PWA shortcuts land somewhere sensible instead of a blank screen. Those surfaces live in the web admin panel; the PWA only ever consumes reference data through log-sheet bundles.
 
@@ -1405,8 +1417,12 @@ Two ways to deal with an item added since the tablet's last pull (backend roadma
 
 How the lists arrive, how long they stay and when they go: [docs/sync.md](docs/sync.md) «Reference
 lists» and [docs/storage.md](docs/storage.md) `version(4)`. In short — only the lists the user's
-assigned open rounds need, only the columns marked for devices, for the list's lease after the last
-sync, and **cleared at sign-out**. `src/services/lookups/lookups.test.ts` covers it.
+assigned open rounds need **union** the lists FILL-able forms use (`requiredFormLookups` from
+bootstrap). Not every catalog. Only the columns marked for devices, for the list's lease after
+the last sync, and **cleared at sign-out** by `clearAllLookups` (form lists and round lists are
+the same stores; the lease key goes too). A recorded `{code, label}`, a form draft, a queued
+final and a signature blob stay. `src/services/lookups/lookups.test.ts` and
+`src/services/auth/formLookupLogout.test.ts` cover it.
 
 ### An entry limit — what a number may be at all (backend roadmap §40)
 
@@ -1703,12 +1719,16 @@ Three separate paths:
 
 ```
 GET /api/bootstrap
-  → Response includes serverTime, userId, operationalUnits, accessibleUnitIds, supervisorScopeUnitIds, primaryUnitId
-  → Client persists: operationalUnits (bulkPut) + syncMeta.lastBootstrapAt = serverTime
-  → Unit scope for inbox/API is enforced on the server via JWT; scope ids in bootstrap are not stored locally today
+  → Response includes serverTime, userId, operationalUnits, accessibleUnitIds, supervisorScopeUnitIds, primaryUnitId,
+    and, when the server sends it, requiredFormLookups (lists FILL-able forms use — not every catalog)
+  → Client persists: operationalUnits + syncMeta.lastBootstrapAt
+  → Also, when present: requiredFormLookups, primaryUnitId, accessibleUnitIds (form pickers and list visibility)
+  → An older server that omits requiredFormLookups leaves the last lease
+  → Unit scope for the API is still enforced on the server via JWT
 ```
 
-**No full plant hierarchy or assets** are downloaded. Reference data arrives per log sheet bundle only.
+**No full plant hierarchy or assets** are downloaded. Round reference data arrives per log sheet
+bundle. Lookup lists arrive only for assigned rounds union FILL-able forms.
 
 ### B. Inbox pull (kartabl)
 
@@ -1718,7 +1738,10 @@ GET /api/bootstrap
 GET /api/log-sheets/inbox
   → assigned[] as LogSheetBundleDto (sheet + entries + scoped context)
   → pullBootstrapIfStale
-  → mergeInboxIntoLocalSheets(assigned)   — server-wins merge for each bundle
+  → mergeInboxIntoLocalSheets(assigned)   — server-wins merge; does not wait on forms
+  → pullFillableForms + pullOwnFormHistory   — neither writes log-sheet rows
+  → wait for the in-flight bootstrap, then syncRequiredLookups of
+    round requiredLookups UNION requiredFormLookups (nothing wider)
   → reconcile revocations + save inbox snapshot
 ```
 
@@ -1730,15 +1753,24 @@ Opening a draft sheet online also refreshes via `GET /api/log-sheets/{id}/bundle
 
 ```
 SyncManager.sync()
-  → mark expired submitted sheets
+  → progress for open rounds (permission; never writes submit fields)
+  → form draft upserts (permission; best-effort, isolated the same way)
   → getPendingLogSheets()  — submitted + pending where assigneeUserId = session user,
                              PLUS this user's archived completions the server never saw
                              (see "Archived completions still reach the server" below)
-  → POST /api/log-sheets/batch  (owner queue only)
+  → POST /api/log-sheets/batch  (owner queue only — this step is unchanged)
   → POST /api/nfc-fault-reports/batch  (only reports this user filed, if permission)
-  → cleanupLocalLogSheets()
+  → form finals: upload that form's files, signature included, while the server row is DRAFT,
+    then POST /api/forms/submit. Unsent media holds that form. A transport miss here does not
+    skip the log-sheet purge or the shared attachment pass. A dead link on the batch still
+    stops the pass before fault reports and form finals
+  → cleanupLocalLogSheets() then cleanupLocalFormSubmissions() (same deviceRetention windows;
+    open form drafts and pending finals are never purged)
+  → shared attachment pass for a round's photos (still after the log-sheet batch)
   → on success: refresh inbox (remove submitted work from assigned list)
 ```
+
+The device does not mark a queued completion expired before sending it. The server decides.
 
 On user switch, `activateUserSession()` marks another user’s submitted (unsynced) sheets as `failed` + `REVOKED` locally. They re-enter the outbound queue only when that assignee logs back in and inbox revival runs. See [Shared Tablets and Enterprise Sync Policy](#shared-tablets-and-enterprise-sync-policy).
 
@@ -1765,9 +1797,13 @@ disappearing. Rules that keep this safe:
 
 ### Local cleanup / history retention (`cleanupLocalLogSheets`)
 
-Runs after every successful sync pass. It only deletes rows from the local `logSheets`
-table — **nothing is ever deleted on the server**, and rows are only removed once they
-are in a terminal state.
+Runs after every successful sync pass. The round purge deletes rows from the local `logSheets`
+table only. The same pass then runs `cleanupLocalFormSubmissions`, which deletes eligible
+`formSubmissions` rows under the same windows. **Nothing is ever deleted on the server**, and
+rows are only removed once they are in a terminal state. Open form drafts and finals still
+waiting to sync are never purged. Synced submitted, approved and voided filings age out on the
+synced window. A failed final is purged only when the unsynced switch is on. Sign-out does not
+run either purge: drafts, queued finals and signature blobs stay.
 
 **How long is set on the server**, not in the app (backend roadmap §41, V24): the panel's
 «تنظیمات» → «نگهداری راند روی تبلت» has three values that reach every tablet on bootstrap.
@@ -1813,7 +1849,16 @@ synced (`removeArchivedLogSheet`).
 
 ## IndexedDB Schema
 
-Dexie version **2** — main tables:
+Current schema version: **5**. The full store list, indexes and upgrade rules are in
+[docs/storage.md](docs/storage.md).
+
+| Version | What |
+|---------|------|
+| 1 | Operational baseline — **closed**. Do not edit that block |
+| 2 | No new store. Stamps `locallyEditedAt` on entries written before the marker |
+| 3 | No new store. Stamps `createdByUserId` on attachments |
+| 4 | `lookupLists` + `lookupItems`. Cleared at sign-out (`clearAllLookups`) |
+| 5 | `formDefinitions` + `formSubmissions`; attachment indexes `formSubmissionLocalId`, `formSubmissionId` |
 
 | Table | Purpose |
 |-------|---------|
@@ -1824,10 +1869,13 @@ Dexie version **2** — main tables:
 | `logSheetTemplates` | Log sheet template slices carried by bundles |
 | `logSheets` | Local log sheets + entries + sync state + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots on shared tablets (history / view-only; never auto-purged) |
-| `attachments` | Captured photos / voice notes as native `Blob`s + upload state |
+| `formDefinitions` | Fillable ad-hoc form catalog. Indexes `id, code` only — sort titles in memory |
+| `formSubmissions` | Form drafts and finals. `createdByUserId` scopes outbound sync. Not purged while draft or pending |
+| `attachments` | Photos, voice notes and signatures as native `Blob`s. Owner is a log sheet **or** a form submission |
 | `nfcFaultReports` | Locally-filed NFC fault reports (unlock manual entry per asset; `createdByUserId` scopes outbound sync) |
 | `operationalUnits` | From bootstrap |
-| `settings` | App settings (server URL, operator name, manual-entry and chip-serial policies, …) |
+| `lookupLists`, `lookupItems` | Reference lists for rounds and FILL-able forms. Not every catalog. Cleared at sign-out |
+| `settings` | App settings (server URL, sync interval, manual-entry and chip-serial policies, server-owned ceilings and retention, …) |
 | `syncMeta` | Key/value store (see below) |
 
 **`syncMeta` keys:**
@@ -1839,28 +1887,27 @@ Dexie version **2** — main tables:
 | `lastSessionUsername` | Previous login username (user switch detection) |
 | `lastBootstrapAt` | Timestamp of last successful bootstrap pull |
 | `inboxSnapshot` | Cached assigned / available / teamOpen lists |
+| `requiredFormLookups` | Lease of lists FILL-able forms use. Deleted at sign-out |
+| `primaryUnitId` | The operator's unit from bootstrap, for the filing-unit picker |
+| `accessibleUnitIds` | Units this session may see a form row against |
 
-`db.ts` declares `this.version(1)` with every store, and **that block is closed.** It is the
-operational baseline: it is on tablets in the field, IndexedDB cannot open a database at a
+`db.ts` declares `this.version(1)` with every store that existed then, and **that block is closed.**
+It is the operational baseline: it is on tablets in the field, IndexedDB cannot open a database at a
 version below the one that created it, and Dexie compares the declared stores against what is on
 disk. Editing a line in it does not migrate those devices — it makes their database unopenable,
 `openDatabase()` then refuses to start rather than delete, and every tablet holding unsynced
 readings is stranded until a build ships that can open it again.
 
-**Every schema change from here is a new version block**, repeating the full store list
+**Every schema change is a new version block**, repeating the full store list
 verbatim (Dexie requires it, and a store omitted from a later version is dropped). A version that
 only adds stores or indexes needs no `.upgrade()` callback; one that reshapes existing rows does,
 and it will run on a device holding real work. Adding a plain non-indexed property to a stored
 object needs no version bump at all — only new stores and new indexes do.
 
-**`version(2)` is the only one above the baseline, and it changes no schema.** It repeats the
-identical store list and exists for a single data migration: stamping `locallyEditedAt` on entries
-that hold work but were written before that marker existed. The sync merge now decides ownership
-from the marker alone — no question about `formData` can separate a reading the operator typed
-from one the server sent — so those entries would otherwise lose to the server on the next sync.
-It stamps only entries that hold real values, only in sheets that are not already delivered, and
-never over a marker already present; it is idempotent, so an interrupted upgrade can just run
-again. See `docs/storage.md` § Changing the schema and `docs/sync.md` § Bundle merge.
+`version(2)` changes no schema. It stamps `locallyEditedAt` on entries that hold work but were
+written before that marker existed. The sync merge decides ownership from the marker alone.
+`version(4)` and `version(5)` are additive. The next change is `this.version(6).stores({...})`
+with the full store list, not an edit to any existing block.
 
 `dbSchema.test.ts` pins the store list, the indexes the sync loops select on, each store's
 primary key, and the expected version number — so adding a version is a deliberate edit rather
@@ -1869,10 +1916,6 @@ than a silent side effect.
 `openDatabase()` catches a `VersionError`, and **refuses to start** rather than delete when the
 device holds unsynced work; only a database with nothing at stake is recreated. Any other failure
 is rethrown untouched.
-
-When the schema next changes, **add** `this.version(3).stores({...})` with the full store
-list rather than editing either existing block. Note that adding a plain, non-indexed property to
-a stored object needs no version bump at all — only new stores and new indexes do.
 
 ---
 
@@ -1888,7 +1931,7 @@ Backend: `backend-offline-first`, default port **8081**.
 |--------|------|---------|
 | GET | `/api/health` | Health check |
 | POST | `/api/auth/login` | Login → JWT |
-| GET | `/api/bootstrap` | Operational units + user context JSON (client stores units only; see [Synchronization](#synchronization)) |
+| GET | `/api/bootstrap` | Operational units, accessible units, and `requiredFormLookups` when the server sends it |
 | GET | `/api/log-sheets/inbox` | Inbox (`assigned` = full bundles) |
 | GET | `/api/log-sheets/{id}/bundle` | Single sheet bundle (entries + scoped context) |
 | POST | `/api/log-sheets/{id}/claim` | Pick up work → returns bundle |
@@ -1900,6 +1943,10 @@ Backend: `backend-offline-first`, default port **8081**.
 | POST | `/api/asset-entries/{id}/nfc-serial` | Bind a scanned chip UID to an asset (admin NFC inspector) |
 | POST | `/api/log-sheets/batch` | Push submitted log sheets |
 | POST | `/api/nfc-fault-reports/batch` | Push locally-filed NFC fault reports |
+| GET | `/api/forms` | Fillable ad-hoc forms for this user |
+| POST | `/api/forms/drafts` | Upsert an open form draft |
+| POST | `/api/forms/submit` | Final submit after that form's media, signature included, is uploaded |
+| GET | `/api/form-submissions` | This user's filings, for سوابق فرم‌ها |
 
 ### Inbox bundle shape (`LogSheetBundleDto`)
 

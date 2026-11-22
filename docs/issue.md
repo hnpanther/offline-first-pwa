@@ -610,6 +610,10 @@ tablet — it must name the site's server (one build per site already) or stay b
 
 # Not reviewed
 
+This review predates the ad-hoc form carrier (Dexie `version(5)`). Form draft-then-media-then-submit,
+the FILL-able lookup lease, sign-out via `clearAllLookups`, form history, and form retention are
+described in `docs/sync.md` and `docs/storage.md`. They are not covered by the bullets below.
+
 - `LogSheetFillPage.tsx` and the form components beyond the lines cited;
 - `mergeLogSheetBundle.ts` and `logSheetWorkflow.ts` in detail — the merge rules were read at
   the level of `applyLogSheetBundle`, not proved;

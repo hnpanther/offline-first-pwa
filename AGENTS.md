@@ -83,10 +83,10 @@ Service Worker (Workbox) precaches dist/ — offline shell only after build + in
 
 ### Data sync model (no full master pull)
 
-1. **`GET /api/bootstrap`** — lightweight; client **persists only** `operationalUnits` + `syncMeta.lastBootstrapAt`. Scope enforcement is server-side (JWT).
-2. **`GET /api/log-sheets/inbox`** — `assigned[]` are full **`LogSheetBundleDto`**; merge with **server-wins** into IndexedDB.
+1. **`GET /api/bootstrap`** — lightweight. The client persists `operationalUnits` and `syncMeta.lastBootstrapAt`, and, when the server sends them, `requiredFormLookups` (the lists FILL-able forms use — not every catalog), `primaryUnitId` and `accessibleUnitIds`. An older server that omits `requiredFormLookups` leaves the last lease. Scope enforcement stays server-side (JWT). This is not a plant dump.
+2. **`GET /api/log-sheets/inbox`** — `assigned[]` are full **`LogSheetBundleDto`**; merge with **server-wins** into IndexedDB **before** any form catalog, form history or lookup wait. Then the fillable-form catalog and the caller's own form history, then `syncRequiredLookups` of the rounds' `requiredLookups` **union** the form lease. Handing that helper any wider set downloads catalogs nobody's open round or fillable form named; handing it only one side drops the other.
 3. **`GET /api/log-sheets/{id}/bundle`** / **`POST .../claim`** — same bundle shape for one sheet.
-4. **Push** — `SyncManager`: `POST /api/log-sheets/batch` for submitted sheets owned by current user, plus `POST /api/nfc-fault-reports/batch` for locally-filed fault reports when the session holds that permission.
+4. **Push** — log-sheet order is unchanged: progress (open rounds only), then `POST /api/log-sheets/batch` for submitted sheets owned by the current user, then `POST /api/nfc-fault-reports/batch` when the session holds that permission, then the shared attachment pass for a round's photos. Form drafts are best-effort and sit with progress, outside the submit try. Form finals run after fault reports and upload **that form's** files, signature included, while the server row is still a draft, then `POST /api/forms/submit`. A transport failure in the form lane leaves that form pending and does not skip the log-sheet purge or the shared attachment pass. A dead link on the log-sheet batch still stops the pass.
 
 There is **no** `pullMasterData` / full plant dump in the current design. Do not reintroduce without explicit product approval.
 
@@ -104,6 +104,7 @@ There is **no** `pullMasterData` / full plant dump in the current design. Do not
 
 - Outbound sync sends **only** log sheets where `assigneeUserId` matches **logged-in** user (`isLogSheetOutboundOwnedByUser`).
 - Outbound sync sends **only** NFC fault reports whose `createdByUserId` matches **logged-in** user (`isNfcFaultReportOutboundOwnedByUser` in `services/storage/nfcFaultReports.ts`).
+- Outbound form drafts and finals send **only** rows whose `createdByUserId` matches the logged-in user. The list and a deep link use the same author check, and also require `reporterUnitId` or `subjectUnitId` in bootstrap `accessibleUnitIds` unless the session is plant-wide (`isFormSubmissionVisibleToSession`). An empty accessible set (before bootstrap) keeps the operator's own rows.
 - **Never** sync another user’s pending submissions when someone else is logged in (audit + server rejection).
 - User switch: clear inbox snapshot, isolate/archive other users’ local rows, mark others’ unsynced submitted as `REVOKED` locally until assignee returns.
 - Do not “helpfully” push all pending rows on any login.
@@ -379,6 +380,8 @@ src/
   pages/
     LogSheetListPage.tsx    active | history inbox
     LogSheetFillPage.tsx    NFC, fill, submit, revert/recheck
+    FormListPage.tsx        /forms and /forms/history — Persian title only
+    FormFillPage.tsx        draft, then local final; window scroll (overflow-anchor off)
     Dashboard.tsx           open sheets / submitted today / pending sync;
                             links to logsheets
     LoginPage.tsx           username + password → JWT session
@@ -391,7 +394,11 @@ src/
     api/client.ts           serverUrl vs window.origin → relative /api
     settings/deliveryServerUrl.ts  which server a device uses: browser → its own origin;
                             APK / npm run dev → stored, then VITE_SERVER_URL
-    storage/db.ts           Dexie v2 schema + openDatabase()
+    storage/db.ts           Dexie schema v5 (v1 closed) + openDatabase()
+    storage/formDefinitions.ts   fillable catalog; sort titles in memory
+    storage/formSubmissions.ts   drafts and finals; createdByUserId
+    forms/formLookups.ts    requiredFormLookups lease + loginLookupLease
+    lookups/lookupStore.ts  clearAllLookups on sign-out
     storage/index.ts        log sheets, settings, reference-data slices, …
     storage/inboxCache.ts   syncMeta inboxSnapshot
     storage/logSheetArchive.ts  logSheetUserArchives
@@ -404,6 +411,11 @@ src/
       mergeLogSheetBundle.ts
       logSheetSync.ts       ensureLocalLogSheet, applyLogSheetBundle, batch payload
       attachmentSync.ts     separate one-at-a-time media upload queue
+      formDraftSync.ts      POST /api/forms/drafts — never writes submit fields
+      formSubmitSync.ts     form media while DRAFT, then POST /api/forms/submit
+      formCatalogSync.ts    GET /api/forms
+      formHistorySync.ts    GET /api/form-submissions — terminal rows only
+      cleanupFormSubmissions.ts  same deviceRetention windows as rounds
       index.ts              SyncManager singleton
     auth/sessionContext.ts  shared tablet isolation
   hooks/
@@ -435,7 +447,7 @@ Path alias: `@/*` → `src/*`.
 | `attachments` | Captured photos / voice notes as native `Blob`s, plus upload state. Owner XOR: log-sheet keys **or** form-submission keys. The row **outlives the blob**: bytes are reclaimed 7 days after upload, metadata stays |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
-| `lookupLists` / `lookupItems` | Offline reference lists (v4); cleared at sign-out |
+| `lookupLists` / `lookupItems` | Offline reference lists (v4). Sign-out calls `clearAllLookups` — form lists and round lists are these same two stores — and deletes `requiredFormLookups`. Drafts, queued finals and signature blobs are other stores and stay |
 | `settings` | `serverUrl`, `syncIntervalMs`, `allowManualEntry`, `nfcStrictSerialMatch` |
 | `syncMeta` | `authSession`, `sessionUserId`, `inboxSnapshot`, `lastBootstrapAt`, `requiredFormLookups`, … |
 
@@ -443,13 +455,39 @@ Path alias: `@/*` → `src/*`.
 `requiredLookups` before `syncRequiredLookups` — that helper set-diffs and will drop whichever
 side you omit. The union is only those two sets (FILL-able form lists and open-round lists).
 Login persists the form lease from the bootstrap it already fetched, before the inbox sync
-reads it. Do not download every lookup catalog.
+reads it. Do not download every lookup catalog. Sign-out (`clearUserSessionContext`) calls
+`clearAllLookups` and `clearRequiredFormLookups`. A lookup answer keeps its own `{code, label}`
+on the submission. Drafts, queued finals and signature blobs stay, so the next operator does
+not inherit the previous lease and does not lose the previous operator's unsent form.
 
 **Form media before final submit:** upload a form's pending files, signature included, while
 the server row is still `DRAFT`, then `POST /api/forms/submit`. Submitting first gets
 `409 Submitted form cannot be edited` on `POST /api/attachments`. A retry must not delete the
 signature row or clear its ids. This lane must not reorder log-sheet batch vs log-sheet
 attachment upload, and a transport failure in it must not skip either.
+
+**Form history and the title on screen.** `GET /api/form-submissions` merges submitted,
+approved and voided filings for `/forms/history` (سوابق فرم‌ها). A draft with unsynced edits,
+and a final the server has not accepted, are not overwritten. Cards and the fill heading use
+`persianFormTitle`: the Persian segment only, no code and no English. An English-only title
+falls back to the generic Persian label (`t.forms.title`).
+
+**End-of-form scroll.** Form fill scrolls the **window**. At the bottom, an `absolute` combobox
+list, a lookup hint that appears and then vanishes, or a 640×320 signature bitmap changes the
+document height and the browser's scroll anchoring jumps the page. The combobox popper is
+`fixed` (`COMBOBOX_POPPER_STRATEGY`); the hint waits until the lease read answers
+(`showLookupAvailabilityHint`); the pad and its preview sit in an aspect-ratio box with the
+bitmap out of flow; while `FormFillPage` is mounted, `overflow-anchor` is `none` on the
+document and is restored on leave. Log-sheet fill scrolls inside a dialog and does not set
+that. Last inputs and buttons have `scroll-margin` so focus does not land under the fixed app
+bar.
+
+**Form retention** uses `cleanupLocalFormSubmissions` and the same `deviceRetention` windows as
+rounds. Open drafts and pending or syncing finals are never purged. Synced `SUBMITTED`,
+`APPROVED` and synced `VOIDED` age out on the synced window. A failed final is purged only when
+the unsynced switch is on. Synced form attachments drop with the row
+(`deleteSyncedAttachmentsForFormSubmission`). The log-sheet purge is a separate call and is
+not reordered.
 
 ### Late work (backend V25 — issues P-01, P-02, P-03)
 
@@ -460,7 +498,7 @@ attachment upload, and a transport failure in it must not skip either.
 
 ### Local retention (`services/sync/cleanupLogSheets.ts`)
 
-Runs after every successful sync pass; deletes from `logSheets` only, never from the
+Runs after every successful sync pass; the round purge deletes from `logSheets` only, never from the
 server. **The windows are the server's** (backend roadmap §41, V24): `settings.deviceRetention`,
 mirrored from bootstrap and turned into windows by `resolveRetentionWindows` in
 `services/sync/deviceRetention.ts`; the per-row decision is the pure `isEligibleForLocalPurge`.
@@ -478,6 +516,9 @@ The numbers below are the server's defaults — check the panel before quoting t
 | `logSheetUserArchives` | **never** — not touched by cleanup at all | — |
 | `attachments` (bytes) | **7d after upload** (`ATTACHMENT_RETENTION_MS`, in `storage/attachments.ts`); the row survives and the file re-fetches on demand | `uploadedAt` → `createdAt` |
 | `attachments` (rows) | dropped with their sheet — but **only the synced ones** (`deleteSyncedAttachmentsForLogSheet`); anything still queued keeps its own `logSheetServerId` and is still delivered | — |
+| Form submission, open draft or pending/syncing final | **never** (`cleanupLocalFormSubmissions`) | — |
+| Form submission, synced `SUBMITTED` / `APPROVED` / synced `VOIDED` | the same synced window as a delivered round | `syncedAt` → `submittedAt` → `updatedAt` → `createdAt` |
+| Form submission, failed final | **never** unless `unsyncedPurgeEnabled`; then the unsynced window | `submittedAt` → `updatedAt` → `createdAt` |
 
 Three traps in the §41 code, each of which a tidy-up would reintroduce:
 **(a)** `deviceRetention` is optional with **no default in `DEFAULT_SETTINGS`** — its absence is
@@ -506,13 +547,17 @@ Types and functions: **`src/services/api/index.ts`**.
 | Endpoint | Use |
 |----------|-----|
 | `POST /api/auth/login` | JWT + roles + permissions |
-| `GET /api/bootstrap` | Units (+ JSON context not all stored client-side) |
+| `GET /api/bootstrap` | Units, `requiredFormLookups` when sent, primary and accessible unit ids (+ JSON context not all stored client-side) |
 | `GET /api/log-sheets/inbox` | Kartabl |
 | `GET /api/log-sheets/{id}/bundle` | Refresh one sheet |
 | `POST /api/log-sheets/{id}/claim` | Pickup → bundle |
 | `POST /api/log-sheets/batch` | Push completed sheets |
 | `POST /api/log-sheets/progress` | Report what an **open** round has recorded so far — never completes anything |
 | `POST /api/nfc-fault-reports/batch` | Push locally-filed NFC fault reports |
+| `GET /api/forms` | Fillable ad-hoc form catalog (carrier 3) |
+| `POST /api/forms/drafts` | Upsert an open form draft — never completes it |
+| `POST /api/forms/submit` | Immutable final submit, after that form's media is on the server |
+| `GET /api/form-submissions` | The caller's own filings, for سوابق فرم‌ها |
 | `GET /api/asset-entries/nfc/{nfcTagId}` | Admin NFC inspect page — online asset lookup |
 | `POST /api/asset-entries/{id}/nfc-serial` | Admin NFC inspect page — bind scanned chip UID to an asset |
 
@@ -582,9 +627,9 @@ By role, the resulting UI is unchanged:
 | Putting a sign-out reason in router location state | `ProtectedRoute`'s own `<Navigate>` overwrites it; use the `sessionEnded` store flag |
 | Declaring one PNG `purpose: "any maskable"` | Android crops it to its own mask — ship a separate maskable file, see README **App Icon** |
 | Gating what may be **typed** on a field's warning/danger range | Ranges decide severity, nothing else. Tying the minus sign to "does some range have a negative minimum" made sub-zero readings unrecordable unless a threshold happened to be configured. Every `type === 'number'` field is signed, full stop |
-| Keeping a reference list past sign-out, past its lease, or after no assigned round needs it | It may be personal data (backend roadmap §31). `clearUserSessionContext` clears it; `lookupStore` deletes an expired copy the moment anything reads it and at startup; `lookupSync` drops what the inbox no longer needs. The one reference store that does **not** survive logout |
+| Keeping a reference list past sign-out, past its lease, or after no assigned round **and** no FILL-able form needs it | It may be personal data (backend roadmap §31). `clearUserSessionContext` calls `clearAllLookups` and deletes `requiredFormLookups`. Form lists and round lists are the same stores; clearing one source and leaving the other keeps the next operator's colleague's names, and leaving the lease key makes the next sign-in treat it as already downloaded. Drafts, queued finals and signature blobs stay. `lookupStore` deletes an expired copy the moment anything reads it and at startup. `syncRequiredLookups` drops a list in neither the round set nor the form lease |
 | Showing a lookup field with an empty list and no explanation | Silence is the bug (backend AGENTS.md #177). Absent, syncing or expired → the field says so and takes a code, which the server resolves |
-| Painting that hint before the lease read returns, or opening the list with an `absolute` popper | The hint is removed a moment later when the list is ready, and an absolute list hangs past the end of the page. Form fill scrolls the **window** (the asset form scrolls inside a dialog), so either change at the bottom jumps the scroll. The hint waits (`showLookupAvailabilityHint`); the popper is `fixed` (`COMBOBOX_POPPER_STRATEGY`) |
+| Painting that hint before the lease read returns, opening the list with an `absolute` popper, or letting the signature bitmap set layout height | The hint is removed a moment later when the list is ready, an absolute list hangs past the end of the page, and a 640×320 canvas inserts a tall box that then shrinks. Form fill scrolls the **window** (the asset form scrolls inside a dialog), so any of those at the bottom jumps the scroll. The hint waits (`showLookupAvailabilityHint`); the popper is `fixed` (`COMBOBOX_POPPER_STRATEGY`); the pad stays in an aspect-ratio box; `FormFillPage` sets `overflow-anchor: none` for its own lifetime |
 | Offering «use this code» beside search results, or on Enter | Only as an explicit row, only when the search found nothing, only on a field with `lookupAcceptsUnlistedCode` (`unlistedCodeFor`). A name that matched somebody is a choice from the list; a code recorded by accident is an `UNKNOWN` someone must review |
 | Calling `syncRequiredLookups` to refresh one list | It drops every list not in the set it is given. The field's button uses `refreshLookup`, which touches only the one list |
 | Re-reading a recorded lookup answer's label from the list | The record shows the label it was given; the item may since be renamed, retired, or gone from the device. Display `lookupChoiceText(value)`, never a fresh lookup |
@@ -601,6 +646,7 @@ By role, the resulting UI is unchanged:
 | Saving a server address the device cannot reach | Settings sits behind a login that goes to the stored address, so a dead address strands the tablet — only clearing app data gets out, and that destroys unsynced work. `applyServerUrlChange` probes the new address first and changes nothing if it does not answer |
 | Redirecting the old domain to the new one during a move | Each origin has its own IndexedDB: a tablet's unsynced work under the old name can only sync from the old name, and a redirected `/api/` call is cross-origin, which the CSP refuses. Serve both names until every tablet has synced |
 | `orderBy('title')` on `formDefinitions` | Dexie v5 indexes only `id, code`. Ordering by an unindexed path throws (Dexie warns), `FormListPage`'s catch leaves the catalog at `[]`, and `/forms` looks empty while `/forms/new/{id}` still works via `get(id)`. Sort in memory in `getAllFormDefinitions`; adding a `title` index needs a new Dexie version. Regression: `formDefinitions.test.ts` |
+| Showing a form's stored title raw | Definitions are often `CODE / English / عنوان فارسی`. `persianFormTitle` keeps the Persian segment and drops the code and the English. An English-only string becomes the generic label. The code is not a second line |
 
 ---
 
