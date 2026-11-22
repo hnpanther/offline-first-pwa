@@ -4,6 +4,7 @@
  */
 
 import { clearAllLookups } from '@/services/lookups/lookupStore'
+import { clearRequiredFormLookups } from '@/services/forms/formLookups'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
 import { getAllLogSheets, getLogSheet, updateLogSheet } from '@/services/storage'
@@ -258,6 +259,7 @@ export async function clearUserSessionContext(): Promise<void> {
   // reference store on a shared tablet — they do not stay for the next user (backend roadmap
   // §31, «the device lease»). Nothing recorded is lost: each answer carries its own label.
   await clearAllLookups()
+  await clearRequiredFormLookups()
 }
 
 export function isLogSheetAccessibleToUser(

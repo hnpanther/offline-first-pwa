@@ -16,6 +16,11 @@ export async function loadRequiredFormLookups(): Promise<RequiredLookup[]> {
   return row.value as RequiredLookup[]
 }
 
+/** Drop the form lease on sign-out so the next operator does not inherit it. */
+export async function clearRequiredFormLookups(): Promise<void> {
+  await db.syncMeta.delete(REQUIRED_FORM_LOOKUPS_KEY)
+}
+
 export async function saveBootstrapUnitContext(input: {
   primaryUnitId?: string | null
   accessibleUnitIds?: string[]
@@ -37,6 +42,22 @@ export async function loadAccessibleUnitIds(): Promise<string[]> {
   const row = await db.syncMeta.get(ACCESSIBLE_UNIT_IDS_KEY)
   if (!Array.isArray(row?.value)) return []
   return (row.value as unknown[]).map(String)
+}
+
+/**
+ * The lookup set downloaded on login / inbox sync.
+ *
+ * Round lists (`requiredLookups` on assigned bundles) unioned with the bootstrap lease of
+ * lists that FILL-able forms actually use (`requiredFormLookups`). Nothing else — not every
+ * catalog on the server, and not lists no open round and no fillable form named.
+ *
+ * `syncRequiredLookups` set-diffs: calling it with only one source would drop the other.
+ */
+export function loginLookupLease(
+  roundLookups: RequiredLookup[],
+  formLookups: RequiredLookup[]
+): RequiredLookup[] {
+  return mergeRequiredLookups(roundLookups, formLookups)
 }
 
 /**

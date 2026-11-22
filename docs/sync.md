@@ -23,6 +23,7 @@ step fails.
   GET /api/forms        ── fillable forms                                      at a time
                                             POST /api/nfc-fault-reports/batch
                                             POST /api/forms/drafts        ── form drafts
+                                            POST /api/attachments         ── form media while DRAFT
                                             POST /api/forms/submit        ── form finals
 ```
 
@@ -412,13 +413,32 @@ if (hasPermission(session, PERM_FORMS_DRAFT)) {
 - Once the server answers `OK` with a `submissionId`, `bindAttachmentsToServerForm` stamps
   form-owned media so the attachment queue can upload.
 
-Final submit (`POST /api/forms/submit`) runs later in the same pass with fault reports / sheet
-batch — idempotent via `clientActionId` (`DUPLICATE` = accepted). Schema freeze is server-side on
-first draft save; the device keeps `fieldDefinitionsSnapshot` on the local row from create time.
+Final submit (`POST /api/forms/submit`) runs later in the same pass, after fault reports and
+the log-sheet batch — idempotent via `clientActionId` (`DUPLICATE` = accepted). It does **not**
+run while that form still has unsent media. Schema freeze is server-side on first draft save;
+the device keeps `fieldDefinitionsSnapshot` on the local row from create time.
 
-**Lookup lease:** bootstrap's `requiredFormLookups` is stored and **unioned** with inbox
-`requiredLookups` before `syncRequiredLookups` — that helper set-diffs, so calling it with only
-one source would drop the other's lists.
+**Attachments before final submit.** The server accepts a file on a form only while it is a
+`DRAFT` (a later upload is `409 Submitted form cannot be edited` unless the stored answers
+already name that id). The final lane therefore upserts a draft if the server does not have
+one yet, uploads pending form files — signature included — and only then calls
+`POST /api/forms/submit`. A file that is still pending holds that form back; the pass does not
+mark the signature lost (the row, its bytes and the ids in `formData` stay). This lane does
+not upload log-sheet photos and does not move the shared attachment pass, which still runs
+after the log-sheet batch. A transport failure inside the form lane does not cancel that
+pass or the log-sheet purge.
+
+**Lookup lease:** login stores bootstrap's `requiredFormLookups` before the session is
+published. The inbox path then **unions** that lease with the assigned rounds'
+`requiredLookups` and passes only that set to `syncRequiredLookups`. The helper set-diffs, so
+calling it with only one source would drop the other's lists, and handing it any wider catalog
+would download lists nobody's open round or fillable form uses. Offline fill of a form stays
+closed until that form's own lists are on the device.
+
+**History:** `GET /api/form-submissions` is merged into local rows the operator can already
+see. Submitted, approved and voided filings are listed under سوابق فرم‌ها, separate from open
+drafts. A draft with unsynced edits, and a final the server has not accepted, are not
+overwritten by that merge.
 
 **Fillable catalog list:** `getAllFormDefinitions` reads with `toArray()` and sorts by title in
 memory. Dexie v5 indexes only `id, code` — `orderBy('title')` throws a SchemaError, and

@@ -254,15 +254,16 @@ class SyncManager {
         ? {}
         : await this.submitFaultReports(pendingFaultReports, tally)
 
-      const formsOutcome =
-        sheetsOutcome.transientError || reportsOutcome.transientError
-          ? {}
-          : await this.submitFormFinals(pendingFormFinals, tally)
+      // Form finals upload their own media (signature included) while the server row is
+      // still a draft, inside the form lane. Log-sheet submit stays ahead of this. A
+      // transport miss in the form lane leaves that form pending and must not skip the
+      // log-sheet purge or the shared attachment pass below, which still delivers a
+      // round's photos.
+      if (!sheetsOutcome.transientError && !reportsOutcome.transientError) {
+        await this.submitFormFinals(pendingFormFinals, tally)
+      }
 
-      const transientError =
-        sheetsOutcome.transientError ??
-        reportsOutcome.transientError ??
-        formsOutcome.transientError
+      const transientError = sheetsOutcome.transientError ?? reportsOutcome.transientError
       if (transientError) {
         await this.emitTransientFailure(transientError, tally)
         return

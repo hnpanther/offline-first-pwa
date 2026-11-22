@@ -35,6 +35,11 @@ const logSheetSubItems = [
   { path: '/logsheets/history', label: t.nav.logSheetHistory, icon: <HistoryIcon fontSize="small" /> },
 ]
 
+const formSubItems = [
+  { path: '/forms', label: t.nav.formActive, icon: <DescriptionIcon fontSize="small" /> },
+  { path: '/forms/history', label: t.nav.formHistory, icon: <HistoryIcon fontSize="small" /> },
+]
+
 interface SidebarProps {
   open: boolean
   onClose: () => void
@@ -56,10 +61,15 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   const isFormsRoute = location.pathname.startsWith('/forms')
 
   const [logSheetOpen, setLogSheetOpen] = useState(isLogSheetRoute)
+  const [formsOpen, setFormsOpen] = useState(isFormsRoute)
 
   useEffect(() => {
     if (isLogSheetRoute) setLogSheetOpen(true)
   }, [isLogSheetRoute])
+
+  useEffect(() => {
+    if (isFormsRoute) setFormsOpen(true)
+  }, [isFormsRoute])
 
   const handleNav = (path: string) => {
     navigate(path)
@@ -168,19 +178,44 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </Collapse>
 
         {showForms && (
-          <ListItemButton
-            selected={isFormsRoute}
-            onClick={() => handleNav('/forms')}
-            sx={groupItemSx(isFormsRoute)}
-          >
-            <ListItemIcon sx={{ minWidth: 40 }}>
-              <DescriptionIcon color={isFormsRoute ? 'inherit' : 'action'} />
-            </ListItemIcon>
-            <ListItemText
-              primary={t.nav.forms}
-              primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isFormsRoute ? 600 : 400 }}
-            />
-          </ListItemButton>
+          <>
+            <ListItemButton
+              onClick={() => setFormsOpen(v => !v)}
+              selected={isFormsRoute}
+              sx={groupItemSx(isFormsRoute)}
+            >
+              <ListItemIcon sx={{ minWidth: 40 }}>
+                <DescriptionIcon color={isFormsRoute ? 'inherit' : 'action'} />
+              </ListItemIcon>
+              <ListItemText
+                primary={t.nav.forms}
+                primaryTypographyProps={{ fontSize: '0.95rem', fontWeight: isFormsRoute ? 600 : 400 }}
+              />
+              {formsOpen ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            </ListItemButton>
+            <Collapse in={formsOpen} timeout="auto" unmountOnExit>
+              <List disablePadding sx={{ pr: 1 }}>
+                {formSubItems.map(item => (
+                  <ListItemButton
+                    key={item.path}
+                    selected={isSelected(item.path)}
+                    onClick={() => handleNav(item.path)}
+                    sx={subItemSx(isSelected(item.path))}
+                  >
+                    <ListItemIcon sx={{ minWidth: 34 }}>{item.icon}</ListItemIcon>
+                    <ListItemText
+                      primary={item.label}
+                      primaryTypographyProps={{
+                        fontSize: '0.82rem',
+                        fontWeight: isSelected(item.path) ? 600 : 400,
+                        sx: { whiteSpace: 'normal', overflowWrap: 'anywhere' }
+                      }}
+                    />
+                  </ListItemButton>
+                ))}
+              </List>
+            </Collapse>
+          </>
         )}
 
         {showAdmin && (

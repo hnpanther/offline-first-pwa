@@ -13,6 +13,10 @@ import {
   reviveOwnedSubmittedQueueOnLogin
 } from '@/services/auth/sessionContext'
 import { fetchBootstrap } from '@/services/api'
+import {
+  saveBootstrapUnitContext,
+  saveRequiredFormLookups
+} from '@/services/forms/formLookups'
 import { gateOf, loginWithDevice, type DeviceGate } from '@/services/device/deviceAuth'
 import { setUnauthorizedHandler } from '@/services/api/client'
 import { useAppStore } from '@/store'
@@ -47,6 +51,18 @@ async function bindSessionUserContext(username: string): Promise<void> {
   try {
     const bootstrap = await fetchBootstrap()
     userId = toIdString(bootstrap.userId)
+    // The inbox sync that follows reads this lease and unions it with round lists.
+    // Saving it here — before the session is published — is what downloads personnel
+    // (and every other FILL-able form list) without a manual catalog refresh.
+    // An older server omits the field; leave whatever lease is already stored.
+    if (bootstrap.requiredFormLookups) {
+      await saveRequiredFormLookups(bootstrap.requiredFormLookups)
+    }
+    await saveBootstrapUnitContext({
+      primaryUnitId:
+        bootstrap.primaryUnitId != null ? toIdString(bootstrap.primaryUnitId) : null,
+      accessibleUnitIds: (bootstrap.accessibleUnitIds ?? []).map(id => toIdString(id))
+    })
   } catch {
     // Same user returning to this device: their id is already on disk and still correct.
     const lastUsername = await getLastSessionUsername()

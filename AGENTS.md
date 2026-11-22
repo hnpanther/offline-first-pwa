@@ -441,7 +441,15 @@ Path alias: `@/*` → `src/*`.
 
 **Form lookup lease:** bootstrap's `requiredFormLookups` must be **unioned** with inbox
 `requiredLookups` before `syncRequiredLookups` — that helper set-diffs and will drop whichever
-side you omit.
+side you omit. The union is only those two sets (FILL-able form lists and open-round lists).
+Login persists the form lease from the bootstrap it already fetched, before the inbox sync
+reads it. Do not download every lookup catalog.
+
+**Form media before final submit:** upload a form's pending files, signature included, while
+the server row is still `DRAFT`, then `POST /api/forms/submit`. Submitting first gets
+`409 Submitted form cannot be edited` on `POST /api/attachments`. A retry must not delete the
+signature row or clear its ids. This lane must not reorder log-sheet batch vs log-sheet
+attachment upload, and a transport failure in it must not skip either.
 
 ### Late work (backend V25 — issues P-01, P-02, P-03)
 

@@ -8,6 +8,7 @@ import {
   markAttachmentSynced,
   purgeSyncedAttachmentBlobs
 } from '@/services/storage/attachments'
+import { db } from '@/services/storage/db'
 import { getLogSheet, getLogSheetByServerId } from '@/services/storage'
 import { getFormSubmission } from '@/services/storage/formSubmissions'
 import { getSessionUserId } from '@/services/auth/sessionContext'
@@ -131,6 +132,38 @@ function isFormAttachmentUploadableByUser(
 /** Files this operator still has to deliver — the number the pending badge is built from. */
 export async function getOwnPendingAttachments(): Promise<LocalAttachment[]> {
   return ownWork(await getPendingAttachments(), await getSessionUserId())
+}
+
+/**
+ * Uploads one form's pending files and nothing else.
+ *
+ * Used by the form final lane while the server copy is still a DRAFT. It does not drain
+ * log-sheet deletions or purge blobs — those stay on the shared attachment pass, so a form
+ * upload cannot change when a round's photos go up.
+ *
+ * @returns `aborted` when the link died mid-file; the row is left exactly as it was.
+ */
+export async function syncPendingFormAttachments(
+  formSubmissionLocalId: string,
+  signal?: AbortSignal
+): Promise<'ok' | 'aborted'> {
+  const userId = await getSessionUserId()
+  const rows = await db.attachments.where('formSubmissionLocalId').equals(formSubmissionLocalId).toArray()
+  const pending = rows.filter(
+    r =>
+      r.blob != null &&
+      !!r.formSubmissionId &&
+      !r.pendingDelete &&
+      r.permanentFailure !== true &&
+      r.syncStatus !== 'synced'
+  )
+  const owned = await ownWork(pending, userId)
+  for (const attachment of owned) {
+    if (signal?.aborted) return 'aborted'
+    const outcome = await uploadOne(attachment, signal)
+    if (outcome === 'aborted') return 'aborted'
+  }
+  return 'ok'
 }
 
 export async function syncPendingAttachments(signal?: AbortSignal): Promise<AttachmentSyncResult> {

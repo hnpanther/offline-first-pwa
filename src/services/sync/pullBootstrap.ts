@@ -50,6 +50,16 @@ function normalizeOperationalUnits(
 }
 
 export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
+  const job = pullBootstrapBody(signal)
+  bootstrapInflight.add(job)
+  try {
+    return await job
+  } finally {
+    bootstrapInflight.delete(job)
+  }
+}
+
+async function pullBootstrapBody(signal?: AbortSignal): Promise<PullResult> {
   try {
     const data = await fetchBootstrap(signal)
     const units = normalizeOperationalUnits(data.operationalUnits ?? [])
@@ -135,6 +145,23 @@ export async function pullBootstrap(signal?: AbortSignal): Promise<PullResult> {
 }
 
 const DEFAULT_MAX_AGE_MS = 60 * 60 * 1000
+
+/**
+ * Bootstrap fetches currently in flight.
+ *
+ * Login starts one (`pullBootstrapIfStale(0)`) and the inbox starts another on its own
+ * schedule. The form-lookup union has to read the lease the freshest of those writes, so the
+ * inbox waits for whatever is already running. Log-sheet merge does not wait on this.
+ */
+const bootstrapInflight = new Set<Promise<PullResult>>()
+
+export async function waitForBootstrapInFlight(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    const pending = [...bootstrapInflight]
+    if (pending.length === 0) return
+    await Promise.allSettled(pending)
+  }
+}
 
 /**
  * @param maxAgeMs how old the last pull may be before this one actually fetches. **Zero means

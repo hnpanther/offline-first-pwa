@@ -14,7 +14,7 @@ import {
   markFormSubmissionLocallyFinal,
   saveLocalFormDraft
 } from '@/services/storage/formSubmissions'
-import { mergeRequiredLookups } from '@/services/forms/formLookups'
+import { loginLookupLease, mergeRequiredLookups } from '@/services/forms/formLookups'
 import {
   describeFormSubmitBlockingIssues,
   findFormSubmitBlockingIssues
@@ -162,6 +162,15 @@ describe('form final idempotency', () => {
 })
 
 describe('lookup lease merge', () => {
+  it('login downloads only round lists unioned with FILL-able form lists', () => {
+    const lease = loginLookupLease(
+      [{ code: 'PUMP', name: 'پمپ', revision: 2 }],
+      [{ code: 'STAFF', name: 'پرسنل', revision: 4 }]
+    )
+    expect(lease.map(l => l.code).sort()).toEqual(['PUMP', 'STAFF'])
+    expect(lease.map(l => l.code)).not.toContain('EVERY_CATALOG')
+  })
+
   it('unions round and form lookups keeping the higher revision', () => {
     const merged = mergeRequiredLookups(
       [{ code: 'STAFF', name: 'پرسنل', revision: 3 }],

@@ -23,19 +23,30 @@ import { getFormSubmissionsForUser } from '@/services/storage/formSubmissions'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import { loadAccessibleUnitIds } from '@/services/forms/formLookups'
 import { pullFillableForms } from '@/services/sync/formCatalogSync'
+import { pullOwnFormHistory } from '@/services/sync/formHistorySync'
+import { isActiveFormSubmission, isHistoryFormSubmission } from '@/utils/formHistory'
+import { persianFormDescription, persianFormTitle } from '@/utils/persianFormTitle'
 import { canReachServer } from '@/utils/connectivity'
 import { syncManager } from '@/services/sync'
 import { hasPlantWideScope } from '@/types/auth'
 import type { CachedFormDefinition, LocalFormSubmission } from '@/types'
 
 function statusChip(row: LocalFormSubmission): { label: string; color: 'default' | 'warning' | 'success' | 'error' | 'primary' } {
+  if (row.serverStatus === 'APPROVED') return { label: t.forms.statusApproved, color: 'success' }
+  if (row.serverStatus === 'VOIDED') return { label: t.forms.statusVoided, color: 'default' }
   if (row.status === 'draft') return { label: t.forms.statusDraft, color: 'warning' }
-  if (row.syncStatus === 'synced') return { label: t.forms.statusSynced, color: 'success' }
+  if (row.syncStatus === 'synced') return { label: t.forms.statusSubmitted, color: 'success' }
   if (row.syncStatus === 'failed') return { label: t.forms.statusFailed, color: 'error' }
   return { label: t.forms.statusPending, color: 'primary' }
 }
 
-export function FormListPage() {
+function cardTitle(title?: string | null): string {
+  return persianFormTitle(title) || t.forms.title
+}
+
+const titleSx = { whiteSpace: 'normal', overflowWrap: 'anywhere' } as const
+
+export function FormListPage({ mode = 'active' }: { mode?: 'active' | 'history' }) {
   const navigate = useNavigate()
   const isOnline = useAppStore(s => s.isOnline)
   const serverReachable = useAppStore(s => s.serverReachable)
@@ -54,6 +65,7 @@ export function FormListPage() {
     try {
       if (canUseServer) {
         await pullFillableForms()
+        await pullOwnFormHistory()
       }
       const [userId, accessibleUnitIds] = await Promise.all([
         getSessionUserId(),
@@ -76,14 +88,15 @@ export function FormListPage() {
     void reload()
   }, [reload])
 
-  const drafts = mine.filter(r => r.status === 'draft')
-  const submitted = mine.filter(r => r.status === 'submitted')
+  const drafts = mine.filter(r => isActiveFormSubmission(r) && r.status === 'draft')
+  const pendingFinals = mine.filter(r => isActiveFormSubmission(r) && r.status === 'submitted')
+  const history = mine.filter(r => isHistoryFormSubmission(r))
 
   return (
     <Box sx={{ p: 2, maxWidth: 900, mx: 'auto' }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-        <Typography variant="h5" fontWeight={700}>
-          {t.forms.title}
+        <Typography variant="h5" fontWeight={700} sx={titleSx}>
+          {mode === 'history' ? t.forms.historyTitle : t.forms.title}
         </Typography>
         <Button
           size="small"
@@ -115,118 +128,126 @@ export function FormListPage() {
         </Box>
       ) : (
         <Stack spacing={3}>
-          <Box>
-            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
-              {t.forms.fillable}
-            </Typography>
-            {forms.length === 0 ? (
-              <Alert severity="info">{t.forms.emptyCatalog}</Alert>
-            ) : (
-              <Stack spacing={1}>
-                {forms.map(form => (
-                  <Card key={form.id} variant="outlined">
-                    <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                      <DescriptionIcon color="action" />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography fontWeight={600} noWrap>
-                          {form.title}
-                        </Typography>
-                        {form.description && (
-                          <Typography variant="body2" color="text.secondary" noWrap>
-                            {form.description}
-                          </Typography>
-                        )}
-                        <Typography variant="caption" color="text.secondary">
-                          {form.code}
-                        </Typography>
-                      </Box>
-                      <Button
-                        variant="contained"
-                        size="small"
-                        startIcon={<AddIcon />}
-                        onClick={() => navigate(`/forms/new/${form.id}`)}
-                      >
-                        {t.forms.newDraft}
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
-              </Stack>
-            )}
-          </Box>
-
-          <Divider />
-
-          <Box>
-            <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
-              {t.forms.myDrafts}
-            </Typography>
-            {drafts.length === 0 ? (
-              <Typography variant="body2" color="text.secondary">
-                {t.forms.emptyDrafts}
-              </Typography>
-            ) : (
-              <Stack spacing={1}>
-                {drafts.map(row => {
-                  const chip = statusChip(row)
-                  return (
-                    <Card key={row.localId} variant="outlined">
-                      <CardActionArea onClick={() => navigate(`/forms/${row.localId}`)}>
-                        <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                          <Stack direction="row" alignItems="center" spacing={1}>
+          {mode === 'active' && (
+            <>
+              <Box>
+                <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
+                  {t.forms.fillable}
+                </Typography>
+                {forms.length === 0 ? (
+                  <Alert severity="info">{t.forms.emptyCatalog}</Alert>
+                ) : (
+                  <Stack spacing={1}>
+                    {forms.map(form => {
+                      const description = persianFormDescription(form.description)
+                      return (
+                        <Card key={form.id} variant="outlined">
+                          <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                            <DescriptionIcon color="action" />
                             <Box sx={{ flex: 1, minWidth: 0 }}>
-                              <Typography fontWeight={600} noWrap>
-                                {row.formTitle ?? row.formCode ?? row.formDefinitionId}
+                              <Typography fontWeight={600} sx={titleSx}>
+                                {cardTitle(form.title)}
                               </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {new Date(row.updatedAt).toLocaleString('fa-IR')}
-                              </Typography>
+                              {description && (
+                                <Typography variant="body2" color="text.secondary" sx={titleSx}>
+                                  {description}
+                                </Typography>
+                              )}
                             </Box>
-                            <Chip size="small" label={chip.label} color={chip.color} />
-                          </Stack>
-                        </CardContent>
-                      </CardActionArea>
-                    </Card>
-                  )
-                })}
-              </Stack>
-            )}
-          </Box>
+                            <Button
+                              variant="contained"
+                              size="small"
+                              startIcon={<AddIcon />}
+                              onClick={() => navigate(`/forms/new/${form.id}`)}
+                            >
+                              {t.forms.newDraft}
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </Stack>
+                )}
+              </Box>
 
-          {submitted.length > 0 && (
+              <Divider />
+
+              <Box>
+                <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
+                  {t.forms.myDrafts}
+                </Typography>
+                {drafts.length === 0 && pendingFinals.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    {t.forms.emptyDrafts}
+                  </Typography>
+                ) : (
+                  <Stack spacing={1}>
+                    {[...drafts, ...pendingFinals].map(row => {
+                      const chip = statusChip(row)
+                      return (
+                        <Card key={row.localId} variant="outlined">
+                          <CardActionArea onClick={() => navigate(`/forms/${row.localId}`)}>
+                            <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                              <Stack direction="row" alignItems="center" spacing={1}>
+                                <Box sx={{ flex: 1, minWidth: 0 }}>
+                                  <Typography fontWeight={600} sx={titleSx}>
+                                    {cardTitle(row.formTitle)}
+                                  </Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {new Date(row.updatedAt).toLocaleString('fa-IR')}
+                                  </Typography>
+                                </Box>
+                                <Chip size="small" label={chip.label} color={chip.color} />
+                              </Stack>
+                            </CardContent>
+                          </CardActionArea>
+                        </Card>
+                      )
+                    })}
+                  </Stack>
+                )}
+              </Box>
+            </>
+          )}
+
+          {mode === 'history' && (
             <Box>
               <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1 }}>
                 {t.forms.mySubmitted}
               </Typography>
-              <Stack spacing={1}>
-                {submitted.map(row => {
-                  const chip = statusChip(row)
-                  return (
-                    <Card key={row.localId} variant="outlined">
-                      <CardActionArea onClick={() => navigate(`/forms/${row.localId}`)}>
-                        <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
-                          <Stack direction="row" alignItems="center" spacing={1}>
-                            <Box sx={{ flex: 1, minWidth: 0 }}>
-                              <Typography fontWeight={600} noWrap>
-                                {row.formTitle ?? row.formCode ?? row.formDefinitionId}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {new Date(row.submittedAt ?? row.updatedAt).toLocaleString('fa-IR')}
-                              </Typography>
-                              {row.syncError && (
-                                <Typography variant="caption" color="error" display="block">
-                                  {row.syncError}
+              {history.length === 0 ? (
+                <Alert severity="info">{t.forms.historyEmpty}</Alert>
+              ) : (
+                <Stack spacing={1}>
+                  {history.map(row => {
+                    const chip = statusChip(row)
+                    return (
+                      <Card key={row.localId} variant="outlined">
+                        <CardActionArea onClick={() => navigate(`/forms/${row.localId}`)}>
+                          <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                            <Stack direction="row" alignItems="center" spacing={1}>
+                              <Box sx={{ flex: 1, minWidth: 0 }}>
+                                <Typography fontWeight={600} sx={titleSx}>
+                                  {cardTitle(row.formTitle)}
                                 </Typography>
-                              )}
-                            </Box>
-                            <Chip size="small" label={chip.label} color={chip.color} />
-                          </Stack>
-                        </CardContent>
-                      </CardActionArea>
-                    </Card>
-                  )
-                })}
-              </Stack>
+                                <Typography variant="caption" color="text.secondary">
+                                  {new Date(row.submittedAt ?? row.updatedAt).toLocaleString('fa-IR')}
+                                </Typography>
+                                {row.syncError && (
+                                  <Typography variant="caption" color="error" display="block" sx={titleSx}>
+                                    {row.syncError}
+                                  </Typography>
+                                )}
+                              </Box>
+                              <Chip size="small" label={chip.label} color={chip.color} />
+                            </Stack>
+                          </CardContent>
+                        </CardActionArea>
+                      </Card>
+                    )
+                  })}
+                </Stack>
+              )}
             </Box>
           )}
         </Stack>

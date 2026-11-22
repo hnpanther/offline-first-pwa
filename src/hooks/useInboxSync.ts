@@ -4,9 +4,10 @@ import { pullInbox } from '@/services/sync/pullInbox'
 import { ensureSessionUserId } from '@/services/auth/sessionContext'
 import { mergeInboxIntoLocalSheets } from '@/services/sync/logSheetSync'
 import { syncManager } from '@/services/sync'
-import { pullBootstrapIfStale } from '@/services/sync/pullBootstrap'
+import { pullBootstrapIfStale, waitForBootstrapInFlight } from '@/services/sync/pullBootstrap'
 import { pullFillableForms } from '@/services/sync/formCatalogSync'
-import { loadRequiredFormLookups, mergeRequiredLookups } from '@/services/forms/formLookups'
+import { pullOwnFormHistory } from '@/services/sync/formHistorySync'
+import { loadRequiredFormLookups, loginLookupLease } from '@/services/forms/formLookups'
 import { saveInboxSnapshot, loadInboxSnapshot } from '@/services/storage/inboxCache'
 import { useAppStore } from '@/store'
 import { isTransientNetworkError } from '@/utils/networkError'
@@ -41,12 +42,18 @@ export async function pullAndMergeInbox(setInbox: SetInbox): Promise<void> {
   if (sessionUserId) {
     await mergeInboxIntoLocalSheets(assigned)
     // Fillable form catalog (carrier 3) — best-effort; offline create uses the cached copy.
+    // History of the caller's own submitted/approved/voided filings. Neither call touches
+    // log-sheet rows.
     await pullFillableForms()
-    // Union of round + form lookup leases. syncRequiredLookups set-diffs: calling it with only
-    // one source would drop the other's lists (and break offline form fill).
+    await pullOwnFormHistory()
+    // A fresh sign-in forces its own bootstrap (`pullBootstrapIfStale(0)`). Wait for that
+    // write before reading the form lease, then union it with this inbox's round lists.
+    // Only those two sets — syncRequiredLookups drops anything else, and we must not hand it
+    // a wider catalog. Log-sheet merge above does not wait on this.
+    await waitForBootstrapInFlight()
     const formLookups = await loadRequiredFormLookups()
     await syncRequiredLookups(
-      mergeRequiredLookups(requiredFromBundles(assigned), formLookups)
+      loginLookupLease(requiredFromBundles(assigned), formLookups)
     )
   }
   const syncAt = Date.now()

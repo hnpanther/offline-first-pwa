@@ -64,7 +64,15 @@ export function App() {
                     index
                     element={
                       <PermissionRoute allow={canFillForms}>
-                        <FormListPage />
+                        <FormListPage mode="active" />
+                      </PermissionRoute>
+                    }
+                  />
+                  <Route
+                    path="history"
+                    element={
+                      <PermissionRoute allow={canFillForms}>
+                        <FormListPage mode="history" />
                       </PermissionRoute>
                     }
                   />

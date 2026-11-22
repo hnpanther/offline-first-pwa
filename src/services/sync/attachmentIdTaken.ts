@@ -19,7 +19,7 @@ import { db } from '@/services/storage/db'
 import { attachmentIdsOf, buildAttachmentRef } from '@/services/storage/attachments'
 import { isArchivedSessionSnapshot } from '@/utils/logSheetStatus'
 import { toIdString } from '@/utils/ids'
-import type { LocalAttachment, LogSheet, LogSheetEntryData } from '@/types'
+import type { LocalAttachment, LocalFormSubmission, LogSheet, LogSheetEntryData } from '@/types'
 
 /** The stable code the server sends; never reworded. */
 export const ATTACHMENT_ID_TAKEN = 'ATTACHMENT_ID_TAKEN'
@@ -43,6 +43,23 @@ export function canStillCarryNewReference(
   if (!sheet || isArchivedSessionSnapshot(sheet)) return false
   if (sheet.status === 'draft') return true
   return sheet.syncStatus !== 'synced' && sheet.syncStatus !== 'failed'
+}
+
+/**
+ * A form can still point its answers at a new file id while the server copy is a draft
+ * (or not yet accepted). A submitted, approved or voided filing cannot — re-minting there
+ * would orphan the drawing the operator already signed, which is how a retry marked a
+ * signature lost.
+ */
+export function formCanStillCarryAttachmentReference(
+  form: Pick<LocalFormSubmission, 'serverStatus' | 'syncStatus'> | undefined
+): boolean {
+  if (!form) return false
+  if (form.serverStatus === 'SUBMITTED' || form.serverStatus === 'APPROVED' || form.serverStatus === 'VOIDED') {
+    return false
+  }
+  if (form.syncStatus === 'synced') return false
+  return true
 }
 
 /** The form value with one attachment id replaced, or the value unchanged when it does not name it. */
@@ -108,7 +125,7 @@ export async function remintTakenAttachment(
         .where('localId')
         .equals(attachment.formSubmissionLocalId!)
         .first()
-      if (!form || form.status !== 'draft') return null
+      if (!form || !formCanStillCarryAttachmentReference(form)) return null
 
       const newId = uuidv4()
       const reminted: LocalAttachment = {

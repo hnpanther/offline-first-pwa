@@ -26,11 +26,7 @@ import {
   saveLocalFormDraft
 } from '@/services/storage/formSubmissions'
 import { db } from '@/services/storage/db'
-import {
-  loadAccessibleUnitIds,
-  loadPrimaryUnitId,
-  loadRequiredFormLookups
-} from '@/services/forms/formLookups'
+import { loadAccessibleUnitIds, loadPrimaryUnitId } from '@/services/forms/formLookups'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import { syncManager } from '@/services/sync'
 import {
@@ -40,6 +36,8 @@ import {
 import { isFormSubmissionVisibleToSession } from '@/utils/formSubmissionVisibility'
 import { FORM_OWNER } from '@/utils/signatureVerdict'
 import { listKey } from '@/services/lookups/lookupStore'
+import { offlineFormFillBlocked } from '@/utils/formFillGate'
+import { persianFormTitle } from '@/utils/persianFormTitle'
 import { useAppStore } from '@/store'
 import { hasPlantWideScope } from '@/types/auth'
 import type { CachedFormDefinition, LocalFormSubmission, OperationalUnit } from '@/types'
@@ -63,8 +61,9 @@ export function FormFillPage() {
   const [reporterUnitId, setReporterUnitId] = useState('')
   const [subjectUnitId, setSubjectUnitId] = useState('')
   const [lookupsReady, setLookupsReady] = useState(true)
+  const [fillBlocked, setFillBlocked] = useState(false)
 
-  const readOnly = submission?.status === 'submitted'
+  const readOnly = submission?.status === 'submitted' || fillBlocked
 
   const form = useForm<Record<string, unknown>>({
     defaultValues: {},
@@ -89,21 +88,12 @@ export function FormFillPage() {
     setLoading(true)
     setError(null)
     try {
-      const [allUnits, primary, accessible, required] = await Promise.all([
+      const [allUnits, primary, accessible] = await Promise.all([
         db.operationalUnits.toArray(),
         loadPrimaryUnitId(),
-        loadAccessibleUnitIds(),
-        loadRequiredFormLookups()
+        loadAccessibleUnitIds()
       ])
       setUnits(allUnits)
-
-      // Lookup readiness: every required form list should have a meta row (lease may still refresh).
-      if (required.length > 0) {
-        const metas = await Promise.all(required.map(r => db.lookupLists.get(listKey(r.code))))
-        setLookupsReady(metas.every(m => m != null && m.complete))
-      } else {
-        setLookupsReady(true)
-      }
 
       const defaultReporter =
         primary ??
@@ -131,6 +121,7 @@ export function FormFillPage() {
         form.reset(row.formData ?? {})
         const def = await getFormDefinition(row.formDefinitionId)
         setDefinition(def ?? null)
+        await noteLookupGate(def?.requiredLookups)
       } else if (formId) {
         const def = await getFormDefinition(formId)
         if (!def) {
@@ -138,6 +129,8 @@ export function FormFillPage() {
           return
         }
         setDefinition(def)
+        const blocked = await noteLookupGate(def.requiredLookups)
+        if (blocked) return
         const firstSubject = def.subjectUnitIds[0] ?? ''
         setReporterUnitId(defaultReporter)
         setSubjectUnitId(firstSubject)
@@ -165,6 +158,28 @@ export function FormFillPage() {
       setLoading(false)
     }
   }, [form, formId, localId, mode, plantWide])
+
+  /** This form's own lists, not every leased catalog. Offline fill waits until they are here. */
+  async function noteLookupGate(
+    required: Array<{ code: string }> | undefined
+  ): Promise<boolean> {
+    const codes = required ?? []
+    const metas = codes.length
+      ? await Promise.all(codes.map(r => db.lookupLists.get(listKey(r.code))))
+      : []
+    const completeCodes = codes
+      .filter((_, i) => metas[i] != null && metas[i]!.complete)
+      .map(r => r.code)
+    const ready = codes.length === 0 || completeCodes.length === codes.length
+    const blocked = offlineFormFillBlocked({
+      requiredLookups: codes,
+      completeCodes,
+      offline: typeof navigator !== 'undefined' && navigator.onLine === false
+    })
+    setLookupsReady(ready)
+    setFillBlocked(blocked)
+    return blocked
+  }
 
   useEffect(() => {
     void load()
@@ -245,7 +260,8 @@ export function FormFillPage() {
     )
   }
 
-  const title = submission?.formTitle ?? definition?.title ?? t.forms.title
+  const title =
+    persianFormTitle(submission?.formTitle ?? definition?.title) || t.forms.title
 
   return (
     <Box sx={{ p: 2, maxWidth: 720, mx: 'auto' }}>
@@ -257,7 +273,11 @@ export function FormFillPage() {
         {t.forms.backToList}
       </Button>
 
-      <Typography variant="h5" fontWeight={700} sx={{ mb: 2 }}>
+      <Typography
+        variant="h5"
+        fontWeight={700}
+        sx={{ mb: 2, whiteSpace: 'normal', overflowWrap: 'anywhere' }}
+      >
         {title}
       </Typography>
 
