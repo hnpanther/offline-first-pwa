@@ -420,6 +420,26 @@ first draft save; the device keeps `fieldDefinitionsSnapshot` on the local row f
 `requiredLookups` before `syncRequiredLookups` — that helper set-diffs, so calling it with only
 one source would drop the other's lists.
 
+**Fillable catalog list:** `getAllFormDefinitions` reads with `toArray()` and sorts by title in
+memory. Dexie v5 indexes only `id, code` — `orderBy('title')` throws a SchemaError, and
+`FormListPage`'s catch left the `/forms` catalog empty while `get(id)` deep-links still worked.
+
+**Unit isolation on the tablet list:** `getFormSubmissionsForUser` keeps only the signed-in
+operator's rows whose `reporterUnitId` or `subjectUnitId` intersects bootstrap
+`accessibleUnitIds` (plant-wide scope skips the unit filter). Cross-unit filing is allowed; a
+third unit on a shared tablet must not see the row. Deep-links use the same predicate.
+
+**Signatures on forms:** `SignatureFieldInput` writes attachment owner keys with
+`formSubmissionLocalId` / `formSubmissionId` (XOR with log-sheet keys) — never aliases the form
+local id into `logSheetLocalId`. `FormFillPage` passes `signatureContext={{ owner: FORM_OWNER }}`
+so the soft “out of date” warning runs when covered answers change after signing (same as log
+sheets; never blocks draft or final submit).
+
+**Local retention:** after a successful sync pass (and when coming online with a session),
+`cleanupLocalFormSubmissions` applies the same `deviceRetention` windows as rounds. Open drafts
+and pending finals are never purged. Synced `SUBMITTED` / `APPROVED` (and synced `VOIDED`) age
+out after `syncedRetentionHours`. Failed finals follow the unsynced purge switch.
+
 **An expired draft with edits is reported too, once (backend V25, issue P-01).** It used to be
 excluded — «a progress report is about a round still being walked» — and an operator who walked
 most of a round offline and reconnected after the deadline then had no route left: no progress,
@@ -888,8 +908,8 @@ bootstrap as `deviceRetention`, stored in `settings.deviceRetention`, and turned
 
 | Trigger | What runs |
 |---|---|
-| The end of every sync pass that reached the server | the round purge (`purgeLocalLogSheets`, over the one read of the table the pass makes), then the attachment queue, which ends by dropping the bytes of files uploaded more than 7 days ago (`purgeSyncedAttachmentBlobs`) |
-| The app comes online (or starts online) **with a session** | the round purge (`useSyncManager` → `cleanupLocalLogSheets`) |
+| The end of every sync pass that reached the server | the round purge (`purgeLocalLogSheets`, over the one read of the table the pass makes), then the form-submission purge (`cleanupLocalFormSubmissions`, same `deviceRetention` windows), then the attachment queue, which ends by dropping the bytes of files uploaded more than 7 days ago (`purgeSyncedAttachmentBlobs`) |
+| The app comes online (or starts online) **with a session** | the round purge (`useSyncManager` → `cleanupLocalLogSheets`) then the form purge (`cleanupLocalFormSubmissions`) |
 | Start-up with a session, and sign-in — **online or not** | reference lists whose lease ended (`expireLookups`) — the only expiry that runs offline |
 | Opening a lookup field | that one list, if its lease ended |
 

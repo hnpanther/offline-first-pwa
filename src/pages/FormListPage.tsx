@@ -21,9 +21,11 @@ import { useAppStore } from '@/store'
 import { getAllFormDefinitions } from '@/services/storage/formDefinitions'
 import { getFormSubmissionsForUser } from '@/services/storage/formSubmissions'
 import { getSessionUserId } from '@/services/auth/sessionContext'
+import { loadAccessibleUnitIds } from '@/services/forms/formLookups'
 import { pullFillableForms } from '@/services/sync/formCatalogSync'
 import { canReachServer } from '@/utils/connectivity'
 import { syncManager } from '@/services/sync'
+import { hasPlantWideScope } from '@/types/auth'
 import type { CachedFormDefinition, LocalFormSubmission } from '@/types'
 
 function statusChip(row: LocalFormSubmission): { label: string; color: 'default' | 'warning' | 'success' | 'error' | 'primary' } {
@@ -37,7 +39,9 @@ export function FormListPage() {
   const navigate = useNavigate()
   const isOnline = useAppStore(s => s.isOnline)
   const serverReachable = useAppStore(s => s.serverReachable)
+  const authSession = useAppStore(s => s.authSession)
   const canUseServer = canReachServer(isOnline, serverReachable)
+  const plantWide = hasPlantWideScope(authSession)
 
   const [loading, setLoading] = useState(true)
   const [forms, setForms] = useState<CachedFormDefinition[]>([])
@@ -51,10 +55,13 @@ export function FormListPage() {
       if (canUseServer) {
         await pullFillableForms()
       }
-      const userId = await getSessionUserId()
+      const [userId, accessibleUnitIds] = await Promise.all([
+        getSessionUserId(),
+        loadAccessibleUnitIds()
+      ])
       const [catalog, rows] = await Promise.all([
         getAllFormDefinitions(),
-        getFormSubmissionsForUser(userId)
+        getFormSubmissionsForUser(userId, { accessibleUnitIds, plantWide })
       ])
       setForms(catalog.filter(f => f.active))
       setMine(rows)
@@ -63,7 +70,7 @@ export function FormListPage() {
     } finally {
       setLoading(false)
     }
-  }, [canUseServer])
+  }, [canUseServer, plantWide])
 
   useEffect(() => {
     void reload()

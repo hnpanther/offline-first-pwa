@@ -2,7 +2,12 @@ import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import type { FieldDefinition } from '@/types/sync'
-import type { LocalFormSubmission, SyncStatus } from '@/types'
+import {
+  coerceFormSubmissionServerStatus,
+  type LocalFormSubmission,
+  type SyncStatus
+} from '@/types'
+import { isFormSubmissionVisibleToSession } from '@/utils/formSubmissionVisibility'
 
 /**
  * Whether this form submission may be pushed under the signed-in user.
@@ -51,11 +56,36 @@ export async function getFormSubmissionById(id: string): Promise<LocalFormSubmis
   return db.formSubmissions.get(id)
 }
 
+/**
+ * Personal list for the signed-in operator, scoped to accessible units.
+ *
+ * Unit filter is load-bearing on a shared tablet: IndexedDB holds every operator's
+ * rows, and cross-unit filing stores a foreign `subjectUnitId` without granting
+ * that other unit's operators a view of the row on this device.
+ */
 export async function getFormSubmissionsForUser(
-  userId: string | null
+  userId: string | null,
+  opts?: {
+    accessibleUnitIds?: ReadonlySet<string> | Iterable<string>
+    plantWide?: boolean
+  }
 ): Promise<LocalFormSubmission[]> {
   const all = await db.formSubmissions.orderBy('createdAt').reverse().toArray()
-  return all.filter(r => isFormSubmissionOutboundOwnedByUser(r, userId))
+  const accessibleUnitIds = opts?.accessibleUnitIds ?? []
+  const plantWide = opts?.plantWide === true
+  return all.filter(r =>
+    isFormSubmissionVisibleToSession(r, { userId, accessibleUnitIds, plantWide })
+  )
+}
+
+export async function getAllFormSubmissions(): Promise<LocalFormSubmission[]> {
+  return db.formSubmissions.toArray()
+}
+
+export async function deleteFormSubmission(localId: string): Promise<void> {
+  const row = await getFormSubmission(localId)
+  if (!row) return
+  await db.formSubmissions.delete(row.id)
 }
 
 export async function getPendingFormDrafts(userId: string | null): Promise<LocalFormSubmission[]> {
@@ -219,10 +249,16 @@ export async function applyFormFinalSyncResult(
 
   const accepted = result.outcome === 'OK' || result.outcome === 'DUPLICATE'
   if (accepted) {
+    // Prefer the server's status when present (SUBMITTED today; APPROVED/VOIDED later)
+    // so a review/void API does not leave the local row disagreeing with the wire.
+    const serverStatus =
+      coerceFormSubmissionServerStatus(result.status) ??
+      existing.serverStatus ??
+      'SUBMITTED'
     await db.formSubmissions.put({
       ...existing,
       serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
-      serverStatus: 'SUBMITTED',
+      serverStatus,
       status: 'submitted',
       syncStatus: 'synced',
       syncedAt: Date.now(),

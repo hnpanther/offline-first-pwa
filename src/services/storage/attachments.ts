@@ -308,6 +308,23 @@ export async function deleteSyncedAttachmentsForLogSheet(
     .delete()
 }
 
+/**
+ * Drop already-uploaded (or permanently parked, non-403) attachments for a form submission
+ * the local retention pass is retiring. Pending uploads stay — they carry `formSubmissionId`.
+ */
+export async function deleteSyncedAttachmentsForFormSubmission(
+  formSubmissionLocalId: string
+): Promise<number> {
+  return db.attachments
+    .where('formSubmissionLocalId')
+    .equals(formSubmissionLocalId)
+    .filter(
+      row =>
+        row.syncStatus === 'synced' || (row.permanentFailure === true && row.failedStatus !== 403)
+    )
+    .delete()
+}
+
 /** Stamps the server id onto a sheet's attachments once the sheet itself has one. */
 export async function bindAttachmentsToServerSheet(
   logSheetLocalId: string,

@@ -31,6 +31,13 @@ export type SignatureVerdict = 'valid' | 'stale' | 'not-bound' | 'unknown'
 /** Bundle key for a round-level question — `"sheet:<fieldKey>"`; an asset's is `"<assetId>:<fieldKey>"`. */
 export const SHEET_OWNER = 'sheet'
 
+/**
+ * Owner key for an ad-hoc form signature (carrier 3) — `"form:<fieldKey>"`.
+ * Forms are flat (no per-asset owner); FormFillPage passes this so
+ * `SignatureFieldWithVerdict` can show the soft stale warning after answers change.
+ */
+export const FORM_OWNER = 'form'
+
 export function signatureKey(owner: string, fieldKey: string): string {
   return `${owner}:${fieldKey}`
 }

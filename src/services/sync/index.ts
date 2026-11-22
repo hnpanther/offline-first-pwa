@@ -52,6 +52,7 @@ import type { LogSheet, NfcFaultReport } from '@/types'
 import { toIdString } from '@/utils/ids'
 import { clearLocalEditMarkers } from '@/utils/logSheetLocalData'
 import { purgeLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { cleanupLocalFormSubmissions } from '@/services/sync/cleanupFormSubmissions'
 import { reportUndeliveredBacklogIfChanged } from '@/services/sync/backlogReport'
 import {
   payloadBytes,
@@ -270,6 +271,8 @@ class SyncManager {
       const remaining = await this.refreshPendingCount()
       // The pass's one read of the whole table (issue P-08): purged, and the survivors handed on.
       const survivors = await purgeLocalLogSheets(await getAllLogSheets())
+      // Same deviceRetention windows as rounds — never touches undelivered form drafts.
+      await cleanupLocalFormSubmissions()
       this.emit({ type: 'complete', syncedCount: tally.synced, failedCount: tally.failed, pendingCount: remaining })
       this.noteRefusals(
         sheetsOutcome.refusedError ?? reportsOutcome.refusedError,

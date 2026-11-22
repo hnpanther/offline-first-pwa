@@ -31,12 +31,17 @@ import {
   loadPrimaryUnitId,
   loadRequiredFormLookups
 } from '@/services/forms/formLookups'
+import { getSessionUserId } from '@/services/auth/sessionContext'
 import { syncManager } from '@/services/sync'
 import {
   describeFormSubmitBlockingIssues,
   findFormSubmitBlockingIssues
 } from '@/utils/formSubmissionValidation'
+import { isFormSubmissionVisibleToSession } from '@/utils/formSubmissionVisibility'
+import { FORM_OWNER } from '@/utils/signatureVerdict'
 import { listKey } from '@/services/lookups/lookupStore'
+import { useAppStore } from '@/store'
+import { hasPlantWideScope } from '@/types/auth'
 import type { CachedFormDefinition, LocalFormSubmission, OperationalUnit } from '@/types'
 
 type Mode = 'new' | 'edit'
@@ -45,6 +50,8 @@ export function FormFillPage() {
   const navigate = useNavigate()
   const { formId, localId } = useParams<{ formId?: string; localId?: string }>()
   const mode: Mode = localId ? 'edit' : 'new'
+  const authSession = useAppStore(s => s.authSession)
+  const plantWide = hasPlantWideScope(authSession)
 
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -106,7 +113,15 @@ export function FormFillPage() {
 
       if (mode === 'edit' && localId) {
         const row = await getFormSubmission(localId)
-        if (!row) {
+        const sessionUserId = await getSessionUserId()
+        if (
+          !row ||
+          !isFormSubmissionVisibleToSession(row, {
+            userId: sessionUserId,
+            accessibleUnitIds: accessible,
+            plantWide
+          })
+        ) {
           setError('پیش‌نویس یافت نشد.')
           return
         }
@@ -149,7 +164,7 @@ export function FormFillPage() {
     } finally {
       setLoading(false)
     }
-  }, [form, formId, localId, mode])
+  }, [form, formId, localId, mode, plantWide])
 
   useEffect(() => {
     void load()
@@ -333,6 +348,10 @@ export function FormFillPage() {
                 }
               : undefined
           }
+          // Same soft stale path as log sheets: SignatureFieldWithVerdict needs an owner
+          // key so it can compare localFingerprint / baselines to live answers. Never blocks
+          // draft or final submit.
+          signatureContext={{ owner: FORM_OWNER }}
         />
       )}
 

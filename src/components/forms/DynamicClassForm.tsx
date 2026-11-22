@@ -325,17 +325,15 @@ function SignatureFieldWithVerdict({
         current: fingerprint()
       })
     : undefined
-  // Signatures currently bind to log-sheet attachment storage; form-owned signatures reuse
-  // the form local id as the attachment owner key via AttachmentFieldInput's form props.
-  const sheetLocalId =
-    attachmentContext.logSheetLocalId ?? attachmentContext.formSubmissionLocalId ?? ''
   return (
     <SignatureFieldInput
       label={label}
       value={value}
       readOnly={readOnly}
-      logSheetLocalId={sheetLocalId}
+      logSheetLocalId={attachmentContext.logSheetLocalId}
       logSheetServerId={attachmentContext.logSheetServerId}
+      formSubmissionLocalId={attachmentContext.formSubmissionLocalId}
+      formSubmissionId={attachmentContext.formSubmissionId}
       assetId={attachmentContext.assetId}
       fieldKey={def.key}
       onChange={onChange}

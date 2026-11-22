@@ -5,6 +5,7 @@ import {
   applyFormDraftSyncResult,
   applyFormFinalSyncResult,
   createLocalFormDraft,
+  getFormSubmissionsForUser,
   getPendingFormDrafts,
   getPendingFormFinals,
   isFormDraftOwnedByUser,
@@ -185,5 +186,66 @@ describe('form final validation', () => {
     expect(issues).toHaveLength(1)
     expect(describeFormSubmitBlockingIssues(issues)).toContain('یادداشت')
     expect(findFormSubmitBlockingIssues([field()], { note: 'ok' })).toHaveLength(0)
+  })
+})
+
+describe('form list unit isolation', () => {
+  it('does not list a row whose units are outside the session scope', async () => {
+    const visible = await createLocalFormDraft({
+      formDefinitionId: '10',
+      reporterUnitId: '1',
+      subjectUnitId: '2',
+      fieldDefinitionsSnapshot: [field()]
+    })
+    const leaked = await createLocalFormDraft({
+      formDefinitionId: '10',
+      reporterUnitId: '90',
+      subjectUnitId: '91',
+      fieldDefinitionsSnapshot: [field()]
+    })
+    const listed = await getFormSubmissionsForUser('user-1', {
+      accessibleUnitIds: ['1', '2']
+    })
+    const ids = listed.map(r => r.localId)
+    expect(ids).toContain(visible.localId)
+    expect(ids).not.toContain(leaked.localId)
+  })
+})
+
+describe('form final approve/void forward-compat', () => {
+  it('stores APPROVED from the wire without breaking the synced lane', async () => {
+    const row = await createLocalFormDraft({
+      formDefinitionId: '10',
+      reporterUnitId: '1',
+      subjectUnitId: '2',
+      fieldDefinitionsSnapshot: [field()]
+    })
+    await markFormSubmissionLocallyFinal(row.localId, { note: 'done' })
+    await applyFormFinalSyncResult(row.localId, {
+      serverId: '7',
+      outcome: 'OK',
+      status: 'APPROVED'
+    })
+    const after = (await db.formSubmissions.get(row.id))!
+    expect(after.syncStatus).toBe('synced')
+    expect(after.serverStatus).toBe('APPROVED')
+  })
+
+  it('ignores an unknown future status string and still marks synced', async () => {
+    const row = await createLocalFormDraft({
+      formDefinitionId: '10',
+      reporterUnitId: '1',
+      subjectUnitId: '2',
+      fieldDefinitionsSnapshot: [field()]
+    })
+    await markFormSubmissionLocallyFinal(row.localId, { note: 'done' })
+    await applyFormFinalSyncResult(row.localId, {
+      serverId: '8',
+      outcome: 'OK',
+      status: 'SOMETHING_NEW'
+    })
+    const after = (await db.formSubmissions.get(row.id))!
+    expect(after.syncStatus).toBe('synced')
+    expect(after.serverStatus).toBe('SUBMITTED')
   })
 })

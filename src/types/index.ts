@@ -771,8 +771,31 @@ export interface NfcFaultReport {
 // Ad-hoc field forms (carrier 3) — separate from log sheets
 // ---------------------------------------------------------------------------
 
-/** Server statuses for a form submission. Do not overload log-sheet IN_PROGRESS. */
-export type FormSubmissionServerStatus = 'DRAFT' | 'SUBMITTED'
+/**
+ * Server statuses for a form submission. Do not overload log-sheet IN_PROGRESS.
+ *
+ * `APPROVED` / `VOIDED` are forward-compatible with a future review/void API (not in V29).
+ * Readers that mean «delivered / closed» must use `isCompletedFormServerStatus` so an
+ * unhandled status does not leave a stale editable draft the way log-sheet APPROVED once did.
+ */
+export type FormSubmissionServerStatus = 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'VOIDED'
+
+/** Delivered form submission — SUBMITTED or a later APPROVED review. */
+export function isCompletedFormServerStatus(
+  status?: FormSubmissionServerStatus | string | null
+): boolean {
+  return status === 'SUBMITTED' || status === 'APPROVED'
+}
+
+/** Maps a wire status into the known set; unknown future values are ignored (sync stays intact). */
+export function coerceFormSubmissionServerStatus(
+  raw?: string | null
+): FormSubmissionServerStatus | undefined {
+  if (raw == null) return undefined
+  const s = String(raw).trim().toUpperCase()
+  if (s === 'DRAFT' || s === 'SUBMITTED' || s === 'APPROVED' || s === 'VOIDED') return s
+  return undefined
+}
 
 /**
  * A fillable form definition cached on the device so offline create still has a schema.

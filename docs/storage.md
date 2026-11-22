@@ -44,7 +44,7 @@ Refetched by `pullBootstrap` (and form catalog pull); safe to lose because the n
 | `logSheetTemplates` | `id, scopeType, scopeId` | Templates |
 | `fieldDefinitions` | `id, classId, order` | Form schemas (per-class fallback) |
 | `operationalUnits` | `id, code, parentId` | Org chart |
-| `formDefinitions` | `id, code` | Fillable ad-hoc form catalog (carrier 3) — live fields for a *new* draft |
+| `formDefinitions` | `id, code` | Fillable ad-hoc form catalog (carrier 3) — live fields for a *new* draft. **`title` is not indexed** — `getAllFormDefinitions` sorts in memory; `orderBy('title')` throws and empties `/forms` while `get(id)` deep-links still work |
 
 **`assetEntries` indexes both `nfcTagId` and `nfcSerial`** because a scan resolves on either
 one, and it has to resolve instantly while the operator holds a phone against a pipe.
@@ -59,7 +59,7 @@ This is the data that matters. Losing it loses field readings.
 | Store | Key + indexes | Holds |
 |---|---|---|
 | `logSheets` | `id, localId, serverId, templateId, status, createdAt` | Sheets and their drafts. Backend V25 added four plain, non-indexed fields (no Dexie version bump): `serverKeptAt` (a refused submission the server kept), and `lateProgressSentMarker` / `lateProgressKeptMarker` / `lateProgressKeptAt` (an expired draft's edits sent once, and kept) — see [sync.md](sync.md) «Deadlines, offline». Backend V26 added `serverKeepRefusedAt` (a refusal answered `kept: false`), also plain. The sync tick reads the queue and the progress lane through the **`status`** index (`getLogSheetsByStatus`, issue P-08) |
-| `formSubmissions` | `id, localId, serverId, formDefinitionId, status, syncStatus, createdByUserId, createdAt` | Ad-hoc form drafts / finals (carrier 3). Separate from log sheets — never counted in round compliance. `draftSyncStatus` / `locallyEditedAt` are plain properties for the draft-upsert lane (like progress); `syncStatus` is the final-submit lane. `createdByUserId` scopes outbound sync on a shared tablet |
+| `formSubmissions` | `id, localId, serverId, formDefinitionId, status, syncStatus, createdByUserId, createdAt` | Ad-hoc form drafts / finals (carrier 3). Separate from log sheets — never counted in round compliance. `draftSyncStatus` / `locallyEditedAt` are plain properties for the draft-upsert lane (like progress); `syncStatus` is the final-submit lane. `createdByUserId` scopes outbound sync on a shared tablet. List/deep-link visibility also requires `reporterUnitId` or `subjectUnitId` in bootstrap `accessibleUnitIds` (plant-wide skips the unit filter). Synced rows follow the same `deviceRetention` windows as rounds via `cleanupFormSubmissions.ts` |
 | `attachments` | `id, logSheetLocalId, logSheetServerId, formSubmissionLocalId, formSubmissionId, assetId, fieldKey, syncStatus, createdAt` | Media blobs. Owner is XOR: log-sheet keys **or** form-submission keys. `createdByUserId` is a **plain, unindexed** property — see below; so is `idRemintedFrom` (issue P-06) |
 | `nfcFaultReports` | `id, logSheetServerId, assetId, syncStatus, createdAt` | Reported broken chips |
 | `logSheetUserArchives` | `id, serverId, userId` | Completed sheets, per user |

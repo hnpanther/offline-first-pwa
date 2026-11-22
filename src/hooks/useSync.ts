@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { syncManager, type SyncEvent } from '@/services/sync'
 import { cleanupLocalLogSheets } from '@/services/sync/cleanupLogSheets'
+import { cleanupLocalFormSubmissions } from '@/services/sync/cleanupFormSubmissions'
 import { expireLookups } from '@/services/lookups/lookupStore'
 import { pullAndMergeInbox } from '@/hooks/useInboxSync'
 import { useAppStore } from '@/store'
@@ -24,9 +25,11 @@ export function useSyncManager(): void {
 
   useEffect(() => {
     if (!isOnline || !authSession) return
-    void cleanupLocalLogSheets().then(() => {
-      setLastSyncAt(Date.now())
-    })
+    void cleanupLocalLogSheets()
+      .then(() => cleanupLocalFormSubmissions())
+      .then(() => {
+        setLastSyncAt(Date.now())
+      })
   }, [isOnline, authSession, setLastSyncAt])
 
   useEffect(() => {

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   coveredFingerprint,
+  FORM_OWNER,
   scopeOfField,
   scopeOfValue,
   signatureBaselines,
+  signatureKey,
   signatureVerdict
 } from './signatureVerdict'
 import type { FieldDefinition } from '@/types/sync'
@@ -63,6 +65,32 @@ describe('signatureVerdict', () => {
 
   it('claims nothing it does not know', () => {
     expect(signatureVerdict({ scope: 'FORM', current: 'x' })).toBe('unknown')
+  })
+
+  /**
+   * Ad-hoc forms (FormFillPage → signatureContext owner FORM_OWNER): same soft stale path as
+   * a log-sheet asset form. Without the context the verdict is never computed; with it, a
+   * covered answer changed after signing shows stale and must not be treated as a submit block.
+   */
+  it('ad-hoc form owner: fingerprint goes stale when a covered answer changes after signing', () => {
+    const keys = ['note', 'status']
+    const atSign = coveredFingerprint('FORM', { note: 'was', status: 'ok' }, keys)
+    const afterEdit = coveredFingerprint('FORM', { note: 'now', status: 'ok' }, keys)
+    expect(signatureKey(FORM_OWNER, 'operatorSig')).toBe('form:operatorSig')
+    expect(
+      signatureVerdict({
+        scope: 'FORM',
+        localFingerprint: atSign,
+        current: afterEdit
+      })
+    ).toBe('stale')
+    expect(
+      signatureVerdict({
+        scope: 'FORM',
+        localFingerprint: atSign,
+        current: coveredFingerprint('FORM', { note: 'was', status: 'ok' }, keys)
+      })
+    ).toBe('unknown')
   })
 })
 

@@ -23,14 +23,22 @@ import { getSessionUserId } from '@/services/auth/sessionContext'
 import { t } from '@/i18n'
 import { formatJalaliDateTime } from '@/utils/formatDate'
 import { buildSignatureValue, signatureIdOf, signedAtOf, type SignatureValue } from '@/utils/signatureValue'
+import {
+  hasSignatureAttachmentOwner,
+  signatureAttachmentOwner
+} from '@/utils/signatureAttachmentOwner'
 import type { SignatureScope, SignatureVerdict } from '@/utils/signatureVerdict'
 
 interface Props {
   label: string
   value: unknown
   readOnly?: boolean
-  logSheetLocalId: string
+  /** Log-sheet owner — XOR with `formSubmissionLocalId`. */
+  logSheetLocalId?: string
   logSheetServerId?: string
+  /** Form-submission owner (carrier 3) — XOR with `logSheetLocalId`. Never alias into log-sheet ids. */
+  formSubmissionLocalId?: string
+  formSubmissionId?: string
   /** Absent for a round-level question: the drawing then belongs to the sheet, not to an asset. */
   assetId?: string
   fieldKey: string
@@ -58,6 +66,8 @@ export function SignatureFieldInput({
   readOnly,
   logSheetLocalId,
   logSheetServerId,
+  formSubmissionLocalId,
+  formSubmissionId,
   assetId,
   fieldKey,
   onChange,
@@ -172,12 +182,20 @@ export function SignatureFieldInput({
       if (!blob) throw new Error(t.signature.saveFailed)
       const attachmentId = uuidv4()
       const capturedBy = await getSessionUserId()
+      const ownerCtx = {
+        logSheetLocalId,
+        logSheetServerId,
+        formSubmissionLocalId,
+        formSubmissionId,
+        assetId
+      }
+      if (!hasSignatureAttachmentOwner(ownerCtx)) {
+        throw new Error(t.signature.saveFailed)
+      }
       await saveAttachment({
         id: attachmentId,
         ...(capturedBy ? { createdByUserId: capturedBy } : {}),
-        logSheetLocalId,
-        logSheetServerId,
-        assetId,
+        ...signatureAttachmentOwner(ownerCtx),
         fieldKey,
         // An image as far as storage, upload and the server's sniffing are concerned.
         kind: 'IMAGE',

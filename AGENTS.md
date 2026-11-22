@@ -430,8 +430,8 @@ Path alias: `@/*` → `src/*`.
 | `logSheets` | Local work + entries + sync fields + `assigneeUserId` |
 | `logSheetUserArchives` | Per-user archived snapshots (shared tablet history) |
 | `nfcFaultReports` | Locally-filed NFC fault reports (`logSheetServerId`, `assetId`, sync fields, `createdByUserId` for shared-tablet outbound scoping) |
-| `formDefinitions` | Fillable ad-hoc form catalog (carrier 3, Dexie v5) |
-| `formSubmissions` | Ad-hoc form drafts / finals — fourth outbound-owned table (`createdByUserId`); draft lane vs final-submit lane |
+| `formDefinitions` | Fillable ad-hoc form catalog (carrier 3, Dexie v5; indexes `id, code` only — list via in-memory title sort, never `orderBy('title')`) |
+| `formSubmissions` | Ad-hoc form drafts / finals — fourth outbound-owned table (`createdByUserId`); draft lane vs final-submit lane; list filtered by accessible units; retained via `deviceRetention` like rounds |
 | `attachments` | Captured photos / voice notes as native `Blob`s, plus upload state. Owner XOR: log-sheet keys **or** form-submission keys. The row **outlives the blob**: bytes are reclaimed 7 days after upload, metadata stays |
 | `operationalUnits` | From bootstrap |
 | `assetClasses`, `assetEntries`, `fieldDefinitions`, hierarchy tables | **Per-sheet bundle slices**, not full plant |
@@ -591,6 +591,7 @@ By role, the resulting UI is unchanged:
 | Making the browser "follow its origin" without excluding the APK | Inside the app the page origin is `https://localhost`, Capacitor's asset server: the login would go there. Native detection is `isNativeApp() \|\| hasCapacitorGlobal()` on purpose |
 | Saving a server address the device cannot reach | Settings sits behind a login that goes to the stored address, so a dead address strands the tablet — only clearing app data gets out, and that destroys unsynced work. `applyServerUrlChange` probes the new address first and changes nothing if it does not answer |
 | Redirecting the old domain to the new one during a move | Each origin has its own IndexedDB: a tablet's unsynced work under the old name can only sync from the old name, and a redirected `/api/` call is cross-origin, which the CSP refuses. Serve both names until every tablet has synced |
+| `orderBy('title')` on `formDefinitions` | Dexie v5 indexes only `id, code`. Ordering by an unindexed path throws (Dexie warns), `FormListPage`'s catch leaves the catalog at `[]`, and `/forms` looks empty while `/forms/new/{id}` still works via `get(id)`. Sort in memory in `getAllFormDefinitions`; adding a `title` index needs a new Dexie version. Regression: `formDefinitions.test.ts` |
 
 ---
 

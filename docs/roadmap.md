@@ -1188,7 +1188,9 @@ signal an operator has that work has not reached the server.
 
 *Backend V29 + PWA Dexie v5.* Separate submission carrier from log sheets: `formDefinitions` /
 `formSubmissions`, draft upsert lane (`POST /api/forms/drafts`) vs final submit
-(`POST /api/forms/submit`), attachment XOR via `formSubmissionId`, bootstrap
-`requiredFormLookups` unioned with round lookup leases. UI at `/forms`. Still deferred:
-void/reopen, review triage, fixed CBM/HSE templates, Kafka handoff. Contract:
-project store `docs/form-mobile-api.md`.
+(`POST /api/forms/submit`), attachment XOR via `formSubmissionId` (including signatures),
+bootstrap `requiredFormLookups` unioned with round lookup leases, unit-scoped list visibility,
+and post-sync retention via the same `deviceRetention` windows as rounds. UI at `/forms`. Still
+deferred: void/reopen (client already coerces `APPROVED`/`VOIDED` if the wire grows), review
+triage, fixed CBM/HSE templates, Kafka handoff. Contract: project store
+`docs/form-mobile-api.md`.
