@@ -17,7 +17,7 @@ import { ApiError } from '@/services/api/client'
 
 export interface SubmitLimits {
   maxItems: number
-  /** Serialised UTF-8 bytes per request — well under nginx's 32 MB `client_max_body_size`. */
+  /** Serialised UTF-8 bytes per request — well under nginx's 64 MB `client_max_body_size`. */
   maxBytes: number
 }
 

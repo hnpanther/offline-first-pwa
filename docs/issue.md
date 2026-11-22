@@ -31,7 +31,7 @@ marked `Fixed` with the commit, not deleted.
 | [D-02](#d-02--no-hsts-lowmedium) | Low–Medium | Deployment | No HSTS | **Fixed in 1.0.2** |
 | [D-03](#d-03--the-cipher-list-is-nginxs-default-low) | Low | Deployment | Default cipher list (CBC on TLS 1.2) | **Fixed in 1.0.2** |
 | [D-04](#d-04--the-upstream-is-clear-text-when-the-hosts-differ-medium-conditional) | Medium (conditional) | Deployment | nginx → backend is clear text across hosts | Open — a firewall rule on the backend host |
-| [D-05](#d-05--body-size-disagrees-with-the-backend-low) | Low | Deployment | Body size disagrees with the backend | Open (needs P-04) |
+| [D-05](#d-05--body-size-disagrees-with-the-backend-low) | Low | Deployment | Body size disagrees with the backend | **Fixed (2026-11-22)** — both 64 MB, documented as a pair |
 | [D-06](#d-06--pinned-by-tag-default-tag-latest-low) | Low | Deployment | Base pinned by tag; compose defaults to `latest` | **Fixed in 1.0.2** |
 | [D-07](#d-07--the-cas-private-key-is-the-root-of-trust-for-every-tablet-info) | Info → **High on the server** | Deployment | The CA's private key | **Open — found on the PWA server** by the security unit (report 6-4) |
 | [D-08](#d-08--modules-and-packages-the-site-never-uses-low) | Low | Deployment | nginx modules and packages the site never uses | **Fixed in 1.0.2** |
@@ -210,7 +210,7 @@ nothing is marked, nothing is shown, and the same body is sent again in thirty s
 ways to reach it:
 
 - more than 500 pending items → the server's `400` for the whole batch;
-- a body over nginx's `client_max_body_size` (32 MB; the backend allows 64 MB — D-05, backend B-16) →
+- a body over nginx's `client_max_body_size` (32 MB then; both are 64 MB since D-05 / backend B-16) →
   `413`;
 - any server fault that is deterministic for this payload.
 
@@ -483,6 +483,12 @@ condition in `docker/DEPLOY.md`.
 
 `PWA_MAX_BODY_SIZE=32m`; the backend parses JSON up to 64 MB. See P-04 / B-16. **Fix:** chunk
 the batch; until then set both to the same number and document them as a pair.
+
+*Fixed (2026-11-22).* `PWA_MAX_BODY_SIZE` defaults to `64m` in the Dockerfile, `docker-compose.yml`
+and `.env.example`, and the template, `.env.example` and `docker/DEPLOY.md` say it is paired with
+the backend's `app.http.max-json-body-bytes`; the backend's `application.properties` says the same
+from its side. The chunking half is P-04's (8 MB a request), so a normal sync never comes near
+either number. An installation with its own `.env` still carrying `32m` keeps it — change it there.
 
 ## D-06 — pinned by tag, default tag `latest` (Low)
 

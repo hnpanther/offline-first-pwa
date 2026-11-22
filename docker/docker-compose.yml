@@ -28,7 +28,7 @@ services:
     environment:
       PWA_SERVER_NAME: ${PWA_SERVER_NAME:-_}
       PWA_BACKEND_UPSTREAM: ${PWA_BACKEND_UPSTREAM:-http://host.docker.internal:8081}
-      PWA_MAX_BODY_SIZE: ${PWA_MAX_BODY_SIZE:-32m}
+      PWA_MAX_BODY_SIZE: ${PWA_MAX_BODY_SIZE:-64m}
       # Sign-in rate limit per client address, and how long browsers remember "HTTPS only".
       # DEPLOY.md §5 says when to change them.
       PWA_LOGIN_RATE: ${PWA_LOGIN_RATE:-60r/m}

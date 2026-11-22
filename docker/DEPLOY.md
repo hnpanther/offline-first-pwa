@@ -183,7 +183,7 @@ mkcert names its output `<name>+N.pem` and `<name>+N-key.pem`; rename or copy th
 | `PWA_HTTPS_PORT` | `443` | Host port for HTTPS. **Keep 443**: the HTTP→HTTPS redirect assumes it |
 | `PWA_SERVER_NAME` | `_` | The name(s) or IP tablets type, space-separated; `_` accepts any. Informational with the shipped template: it has one `server` block per port, and nginx hands a request whose name matches none to that block anyway, so this restricts nothing |
 | `PWA_BACKEND_UPSTREAM` | `http://host.docker.internal:8081` | Spring Boot, as seen **from inside the container**. Scheme, host, port; no `/api`, no trailing slash |
-| `PWA_MAX_BODY_SIZE` | `32m` | Largest request forwarded. Must stay above the backend's 25 MB attachment limit |
+| `PWA_MAX_BODY_SIZE` | `64m` | Largest request forwarded. Must stay above the backend's 25 MB attachment limit, and is **paired with the backend's `app.http.max-json-body-bytes` (64 MB)** — change one, change the other: lower here and nginx answers 413 to a body the backend would accept (backend B-16) |
 | `PWA_LOGIN_RATE` | `60r/m` | How often **one client address** may call the four endpoints that need no session — sign-in, the device challenge, both enrolment calls. nginx syntax (`r/m`, `r/s`) |
 | `PWA_LOGIN_BURST` | `30` | How many of those may arrive at once before the rate applies. A sign-in is 2 requests from a browser, 4 from the APK (each call has a CORS preflight) |
 | `PWA_HSTS_MAX_AGE` | `31536000` | Seconds a browser remembers "HTTPS only" for this name. `0` tells browsers that remember it to forget |
@@ -619,7 +619,7 @@ Docker Desktop runs Linux containers fine, with two differences worth knowing:
 | Container healthy, but the host's port 80/443 refuses connections | A `docker-compose.yml` older than the image, still publishing the container's 80/443 | Use the compose file from the same release: `80:8080`, `443:8443` (§7) |
 | Log: `host not found in upstream` | `PWA_BACKEND_UPSTREAM` unresolvable | §5 |
 | `502 Bad Gateway` on `/api/` | Backend down or wrong port | `curl` the upstream from the host; check the WinSW service |
-| `413 Request Entity Too Large` on an upload | Above `PWA_MAX_BODY_SIZE` | Raise it (and the backend's limit) |
+| `413 Request Entity Too Large` on an upload | Above `PWA_MAX_BODY_SIZE` | Raise it **and** the backend's `app.http.max-json-body-bytes` — the two are a pair |
 | Tablets: «ارتباط با سرور برقرار نشد», browser shows a certificate error | Certificate not from the plant CA, expired, or address missing from SAN | §4 checks |
 | APK fails, Chrome on the same tablet works | APK bundles a different CA | [docs/apk.md §5](../docs/apk.md) |
 | Browser tablets still run the old version | A cached `sw.js` somewhere in between | `curl -sI …/sw.js` must say `no-cache`; check no other proxy caches it |

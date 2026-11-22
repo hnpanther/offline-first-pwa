@@ -5,7 +5,8 @@
 #   PWA_SERVER_NAME       the name or IP tablets type (default: _ = any)
 #   PWA_BACKEND_UPSTREAM  where Spring Boot listens, scheme + host + port, no path
 #                         (default: http://host.docker.internal:8081)
-#   PWA_MAX_BODY_SIZE     largest request body nginx forwards (default: 32m)
+#   PWA_MAX_BODY_SIZE     largest request body nginx forwards (default: 64m — paired with the
+#                         backend's app.http.max-json-body-bytes, 64 MB; change both together)
 #   PWA_LOGIN_RATE         sustained rate one client address may call the sign-in and enrolment
 #                         endpoints, nginx syntax (default: 60r/m)
 #   PWA_LOGIN_BURST        how many such requests may arrive at once before the rate applies
@@ -108,7 +109,9 @@ server {
                       image/svg+xml application/manifest+json application/wasm;
 
     # A single attachment may be up to 25 MB (app.attachments.max-file-size-bytes). nginx's
-    # default is 1 MB and its 413 reads to an operator as "upload failed".
+    # default is 1 MB and its 413 reads to an operator as "upload failed". The value is PAIRED
+    # with the backend's app.http.max-json-body-bytes (64 MB): lower here and nginx refuses a
+    # body the backend would accept (backend issue B-16). Change both together.
     client_max_body_size ${PWA_MAX_BODY_SIZE};
 
     location / {

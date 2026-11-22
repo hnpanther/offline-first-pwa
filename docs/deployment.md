@@ -351,7 +351,8 @@ server {
     # default is 1 MB, and it rejects the rest with a 413 that the operator reads as "upload
     # failed" and nobody reads as a proxy limit. Only /api/ passes through here — the admin
     # panel's Excel import talks to 8081 directly and is bounded by its own multipart limit.
-    client_max_body_size 32m;
+    # Paired with the backend's app.http.max-json-body-bytes (64 MB): change both together.
+    client_max_body_size 64m;
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -600,8 +601,9 @@ http {
         gzip_types        text/plain text/css application/javascript application/json
                           image/svg+xml application/manifest+json;
 
-        # See the Linux block above: 25 MB attachments against nginx's 1 MB default.
-        client_max_body_size 32m;
+        # See the Linux block above: 25 MB attachments against nginx's 1 MB default, and the
+        # pairing with the backend's app.http.max-json-body-bytes (64 MB).
+        client_max_body_size 64m;
 
         location / {
             try_files $uri $uri/ /index.html;
