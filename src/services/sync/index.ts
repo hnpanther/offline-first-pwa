@@ -22,6 +22,7 @@ import { getOwnPendingAttachments, syncPendingAttachments } from '@/services/syn
 import { pushPendingLogSheetProgress } from '@/services/sync/progressSync'
 import { pushPendingFormDrafts } from '@/services/sync/formDraftSync'
 import { pushPendingFormFinals } from '@/services/sync/formSubmitSync'
+import { pullOwnFormHistory } from '@/services/sync/formHistorySync'
 import { bindAttachmentsToServerSheet } from '@/services/storage/attachments'
 import { getPendingFormFinals } from '@/services/storage/formSubmissions'
 import { getAuthSession } from '@/services/auth'
@@ -561,6 +562,13 @@ class SyncManager {
       const result = await pushPendingFormFinals(this.abortController?.signal)
       tally.synced += result.synced
       tally.failed += result.failed
+      if (result.synced > 0) {
+        try {
+          await pullOwnFormHistory(this.abortController?.signal)
+        } catch (err) {
+          console.warn('Form history pull after submit failed', err)
+        }
+      }
       if (result.transientError) return { transientError: result.transientError }
       return {}
     } catch (err) {
