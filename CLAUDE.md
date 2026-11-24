@@ -63,6 +63,7 @@ person — or the next agent — will trust it.
 - **Assume no network.** Code that requires a `serverId` to exist will break on exactly the path
   this app is built for.
 - **All UI text is Persian and lives in `src/i18n/fa.ts`.** No hardcoded strings in components.
+- **Every UI change stays inside the CSP** in `docker/nginx/snippets/security-headers.conf` (`script-src 'self' 'wasm-unsafe-eval'`). No inline script, no `eval`, no asset or request to another origin. Styles may be inline. Do not widen `script-src` to accommodate a library.
 - **One codebase, two deliveries.** `dist/` for nginx and the APK are the same app. A change ships
   to both or the tablets and the browsers are running different versions.
 - **One NFC decoder.** The native plugin normalises a tag's payload exactly as Web NFC does and

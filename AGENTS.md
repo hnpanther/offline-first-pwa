@@ -13,7 +13,7 @@ This file is conventions and traps. The references below are kept current with t
 | **[docs/deployment.md](docs/deployment.md)** | nginx as a service (WinSW / systemd), TLS with mkcert or openssl, tablet CA install, and why TLS is not optional here. |
 | **[docs/device-features.md](docs/device-features.md)** | NFC, camera, GPS, screen orientation — requirements and fallbacks. |
 | **[docs/apk.md](docs/apk.md)** | The packaged Android app: the native NFC plugin and its payload contract, manifest permissions, CA trust, and what to rebuild when what changes. |
-| **[docs/roadmap.md](docs/roadmap.md)** | **Deferred, not built.** Hardening what nginx serves (no CSP today, no SRI), noticing an odd session, and why proving a tablet runs the real app cannot be done from the device. Also the UI text still outside `fa.ts`, the dependency state, an index of open items recorded elsewhere, a wrong tablet clock deleting drafts, a deploy reloading browser tablets mid-form, and the absence of any remote signal from a failing tablet. Each entry carries the established facts; do not re-derive them. |
+| **[docs/roadmap.md](docs/roadmap.md)** | **Deferred, not built.** Hardening what nginx serves (SRI is still absent; the CSP itself is enforced in `docker/nginx/snippets/security-headers.conf`), noticing an odd session, and why proving a tablet runs the real app cannot be done from the device. Also the UI text still outside `fa.ts`, the dependency state, an index of open items recorded elsewhere, a wrong tablet clock deleting drafts, a deploy reloading browser tablets mid-form, and the absence of any remote signal from a failing tablet. Each entry carries the established facts; do not re-derive them. |
 | **[README.md](README.md)** | Setup, mobile testing, deployment, troubleshooting. |
 | **[CLAUDE.md](CLAUDE.md)** | The short entry point, and the rule below. |
 
@@ -615,6 +615,7 @@ By role, the resulting UI is unchanged:
 6. **Tests** — colocate `*.test.ts`; run `npm test`. App build excludes tests from `tsconfig.json`.
 7. **No commits** unless the user explicitly asks.
 8. **Backend changes** — belong in `backend-offline-first`; keep API contract in sync with `src/services/api/index.ts`.
+9. **CSP** — nginx sends `script-src 'self' 'wasm-unsafe-eval'` (`docker/nginx/snippets/security-headers.conf`). A new screen stays inside that: no inline script, no `eval`, no font or image or request to another origin. `'unsafe-inline'` is allowed for styles only. The wasm token exists for the barcode decoder; do not widen `script-src` for a library. The panel's header is a different policy in the backend.
 
 ### Common pitfalls
 
@@ -664,6 +665,7 @@ By role, the resulting UI is unchanged:
 | Auth/session | `sessionContext.ts`, `useAuth.ts`, shared tablet tests |
 | Manual NFC policy | `auth.ts`, `LogSheetFillPage.tsx`, Settings + `fa.ts` |
 | New field data type | `DynamicClassForm.tsx` (editable **and** read-only branches), `buildValidationRules`, backend `FormDataValidationSupport` + the field-type dropdown in `field-definitions.html` |
+| Any UI (a screen, a picker, a script) | The nginx CSP in `docker/nginx/snippets/security-headers.conf`: same-origin scripts only, styles may be inline, no new `connect-src` / `font-src` / `img-src` host. The backend panel has its own header — see that repo's `docs/security.md` |
 | Attachment behaviour | `storage/attachments.ts`, `sync/attachmentSync.ts`, `utils/mediaCapture.ts`, and the mirror-image rules in the backend’s `AttachmentService` |
 | Recording ceilings | `utils/mediaCapture.ts` (`beginRecording`), `AttachmentFieldInput`'s auto-save effect, `recordingLimits.test.ts`, and the server's `AttachmentService.enforceDuration` — the two must agree or a capped clip is refused |
 | Progress reporting | `sync/progressSync.ts`, the `progress*` fields on `LogSheet`, `LogSheetFillPage`'s save handler, and the backend's `LogSheetService.saveProgressBatch`. **Never write `status` / `syncStatus` / `syncError` from that path** |
