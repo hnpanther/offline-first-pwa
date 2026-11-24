@@ -621,3 +621,92 @@ described in `docs/sync.md` and `docs/storage.md`. They are not covered by the b
 - the Android project beyond the manifest and the network security config;
 - dependency advisories — run `npm audit --omit=dev` on a machine with internet;
 - anything that needs a device: storage eviction, behaviour under a real weak link, timings.
+
+
+## Form review and implementation checkpoint — 2026-11-24
+
+This section supersedes the read-only scope statement above for the new F-* findings.
+No commit or branch is created. The companion repository tracks the same identifiers.
+
+| Id | Severity | Finding | Status |
+|---|---|---|---|
+| F-01 | Critical | Local read/put race overwrites a newer answer | Partly fixed: local mutation transactions; history merge concurrency remains open |
+| F-02 | Critical | Offline schema differs from the first server snapshot | Open |
+| F-03 | High | Interrupted final remains syncing and is never retried | Fixed in working tree: interrupted finals remain retryable |
+| F-04 | High | PWA filing unit does not match server contract | Open |
+| F-05 | High | Attachment remint submits stale ids; parked media bypasses delivery gate | Partly fixed: remint reload and parked-file gate; correction UX/reference reconciliation remains open |
+| F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Open |
+| F-07 | High | Server mutations have neither row lock nor optimistic version | Open |
+| F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Open |
+| F-09 | High | Omitting reporterUnitId bypasses fill gate on an existing draft | Fixed in working tree: effective filing unit always checked |
+| F-10 | Medium | History is unbounded; catalog performs per-form queries | Open |
+| F-11 | High | Failed form retention may delete the only copy | Open |
+| F-12 | Medium | Rejected final may commit a changed filing unit | Fixed in working tree: unit mutation follows validation |
+
+### F-01: Local read/put race overwrites a newer answer
+
+Source: `formSubmissions.ts`. Remediation and acceptance: Serialize read-modify-write in Dexie transactions; test overlapping save and acknowledgement.
+
+### F-02: Offline schema differs from the first server snapshot
+
+Source: `FormSubmissionService / FormFieldService`. Remediation and acceptance: Version form definitions on the server; carry a trusted version in requests; never silently discard stale-schema answers.
+
+### F-03: Interrupted final remains syncing and is never retried
+
+Source: `formSubmitSync.ts`. Remediation and acceptance: Keep interrupted work eligible using the same action id; test restart recovery.
+
+### F-04: PWA filing unit does not match server contract
+
+Source: `FormFillPage.tsx`. Remediation and acceptance: Choose from form units intersected with user scope before creating the draft; subject mirrors reporter.
+
+### F-05: Attachment remint submits stale ids; parked media bypasses delivery gate
+
+Source: `formSubmitSync.ts / attachments.ts`. Remediation and acceptance: Reload answers after uploads and block final delivery while referenced local media is unconfirmed.
+
+### F-06: Rejected finals cannot be corrected; reopened server drafts are ignored
+
+Source: `FormFillPage.tsx / formHistorySync.ts`. Remediation and acceptance: Implement explicit correction and reopened lifecycle without overwriting local unsent work.
+
+### F-07: Server mutations have neither row lock nor optimistic version
+
+Source: `FormSubmission entity / repository`. Remediation and acceptance: Serialize state transitions and answer changes; test competing database transactions.
+
+### F-08: Reopen erases deduplication history; duplicate lookup lacks owner binding
+
+Source: `FormSubmissionService`. Remediation and acceptance: Persist action receipts across reopen and bind them to author/submission/cycle.
+
+### F-09: Omitting reporterUnitId bypasses fill gate on an existing draft
+
+Source: `FormSubmissionService.submitFinalInternal`. Remediation and acceptance: Always authorize the effective filing unit, including inactive definitions and removed links.
+
+### F-10: History is unbounded; catalog performs per-form queries
+
+Source: `FormApiController / formHistorySync.ts`. Remediation and acceptance: Cursor pagination, incremental sync, batch catalog queries and IndexedDB writes.
+
+### F-11: Failed form retention may delete the only copy
+
+Source: `cleanupFormSubmissions.ts`. Remediation and acceptance: Never purge undelivered forms without evidence of server preservation, including missing-policy fallback.
+
+### F-12: Rejected final may commit a changed filing unit
+
+Source: `FormSubmissionService.submitFinalInternal`. Remediation and acceptance: Validate detached inputs before mutating managed state; test rollback/unchanged state.
+
+### Implementation checkpoint (no commit)
+
+First bounded delivery: F-01 local storage mutation transaction coverage, F-03 interrupted
+final retry, F-05 reload after attachment remint and refusal gate, F-09 mandatory effective
+filing-unit authorization, F-12 validate before mutating the unit. No schema migration,
+external UI asset, CDN, dependency, commit or branch was introduced.
+
+Remaining work, in order: F-02 trusted schema versioning (requires a new migration and a
+coordinated wire contract), finish F-01 history merge concurrency, F-04 filing-unit picker,
+finish F-05 correction UX/reference reconciliation, F-06 lifecycle, F-07 database concurrency,
+F-08 durable idempotency, F-11 retention safety, F-10 bounded history/catalog performance.
+Do not mark the whole review resolved or deploy assuming complete data-loss protection.
+
+Validation: PWA focused tests: 29 passing across formSync, formMediaOrder, formHistorySync,
+cleanupFormSubmissions. Five new regressions cover overlapping save/ack, a stationary clock,
+interrupted retry with ownership, reminted attachment ids, and permanent upload refusal.
+Backend: `FormSubmissionServiceTest` passed (2 tests, no failures/errors/skips).
+PWA: `tsc --noEmit` passed. No PostgreSQL integration run, browser/device run or load test
+was performed in this checkpoint. Backend `git diff --check` passed.

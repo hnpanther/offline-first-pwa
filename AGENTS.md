@@ -1553,3 +1553,12 @@ callback new on reconnect) and one reserved empty interface in the store.
   at JDK 25 (likely if it is the most recently installed one), point the build at a JDK 21 install
   instead — per-command (`$env:JAVA_HOME = "..."; npm run build:apk`) or permanently if APK builds
   are routine on that machine. See `docs/apk.md` §2.2.
+
+
+### Form saves and delivery acknowledgements (review F-01/F-03/F-05)
+
+Read/check/put must share one Dexie transaction; an edit-stamp comparison outside it cannot
+stop an acknowledgement from putting an old answer over a new save. Dirty stamps must
+advance even within the same millisecond. After uploading media, reload the entire final
+payload because collision recovery can rewrite attachment ids. A parked upload is not a
+delivered upload. Keep persisted `syncing` forms retryable with the original action id.

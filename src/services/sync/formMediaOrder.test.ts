@@ -144,3 +144,38 @@ describe('form final waits for signature and other media', () => {
     ).toBe(false)
   })
 })
+
+
+describe('form final media failure recovery', () => {
+  it('submits the updated reference after an attachment id collision', async () => {
+    uploadAttachment.mockRejectedValueOnce(new ApiError(409, 'taken', { code: 'ATTACHMENT_ID_TAKEN' }))
+    const row = await createLocalFormDraft({
+      formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+    })
+    await saveAttachment(signature(row.localId))
+    await markFormSubmissionLocallyFinal(row.localId, {
+      operatorSig: { type: 'signature', ids: ['sig-1'], signedAt: 1 }
+    })
+    await pushPendingFormFinals()
+    const stored = (await db.formSubmissions.get(row.id))!
+    expect(submitFormFinal).toHaveBeenCalledTimes(1)
+    expect(submitFormFinal.mock.calls[0][0].formData).toEqual(stored.formData)
+    expect(submitFormFinal.mock.calls[0][0].formData.operatorSig.ids).not.toContain('sig-1')
+  })
+
+  it('never treats a permanently refused upload as delivered', async () => {
+    uploadAttachment.mockRejectedValue(new ApiError(413, 'too large'))
+    const row = await createLocalFormDraft({
+      formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+    })
+    await saveAttachment(signature(row.localId))
+    await markFormSubmissionLocallyFinal(row.localId, {
+      operatorSig: { type: 'signature', ids: ['sig-1'], signedAt: 1 }
+    })
+    await pushPendingFormFinals()
+    await pushPendingFormFinals()
+    expect(submitFormFinal).not.toHaveBeenCalled()
+    expect((await db.formSubmissions.get(row.id))!.syncStatus).toBe('pending')
+    expect((await getAttachment('sig-1'))!.blob).toBeTruthy()
+  })
+})

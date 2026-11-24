@@ -1726,3 +1726,21 @@ from any *other* cause restores rather than loses. See `AGENTS.md` for the full 
 - **[device-features.md](device-features.md)** — NFC, camera, GPS, orientation
 - **[../AGENTS.md](../AGENTS.md)** — the traps
 - **Backend repo → `docs/log-sheets.md`** — the endpoints on the other end
+
+
+## Form delivery hardening checkpoint (2026-11-24)
+
+Form saves, finalization and delivery acknowledgements perform their read/modify/write
+inside Dexie read-write transactions. Dirty stamps advance monotonically even when the
+wall clock stalls or moves backwards, so a save cannot share a previously acknowledged
+stamp. Form history merge concurrency remains open (F-01); this is not a cross-tab lock.
+
+The serialized final lane also selects persisted `syncing` forms for their original owner,
+using the original action id. Closing the app during a request no longer strands that row.
+After uploads, the lane reloads the form's answers as well as its server id: attachment id
+collision recovery can rewrite references during upload. Parked failures or missing local
+bytes are still unconfirmed media and block final delivery; upload retry eligibility is
+not proof of delivery. Correction UX and reference reconciliation remain open as F-05/F-06.
+No external assets or runtime internet dependency was added.
+
+Tests: `formSync.test.ts`, `formMediaOrder.test.ts`; review status: `docs/issue.md` F-01/F-03/F-05.

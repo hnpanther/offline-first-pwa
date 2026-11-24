@@ -44,7 +44,8 @@ export function isFormFinalOwnedByUser(
 ): boolean {
   if (!isFormSubmissionOutboundOwnedByUser(row, userId)) return false
   if (row.status !== 'submitted') return false
-  if (row.syncStatus !== 'pending' && row.syncStatus !== 'failed') return false
+  // SyncManager serializes final passes; syncing may survive an interrupted attempt.
+  if (!['pending', 'failed', 'syncing'].includes(row.syncStatus)) return false
   return true
 }
 
@@ -106,9 +107,11 @@ export async function updateFormSubmission(
   localId: string,
   patch: Partial<LocalFormSubmission>
 ): Promise<void> {
-  const existing = await getFormSubmission(localId)
-  if (!existing) return
-  await db.formSubmissions.put({ ...existing, ...patch, updatedAt: Date.now() })
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const existing = await getFormSubmission(localId)
+    if (!existing) return
+    await db.formSubmissions.put({ ...existing, ...patch, updatedAt: Date.now() })
+  })
 }
 
 export async function createLocalFormDraft(input: {
@@ -151,20 +154,22 @@ export async function saveLocalFormDraft(
   localId: string,
   formData: Record<string, unknown>
 ): Promise<LocalFormSubmission | undefined> {
-  const existing = await getFormSubmission(localId)
-  if (!existing || existing.status !== 'draft') return existing
-  const now = Date.now()
-  const next: LocalFormSubmission = {
-    ...existing,
-    formData,
-    locallyEditedAt: now,
-    draftSyncStatus: 'pending',
-    draftSyncError: undefined,
-    updatedAt: now,
-    deviceTimeAt: now
-  }
-  await db.formSubmissions.put(next)
-  return next
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const existing = await getFormSubmission(localId)
+    if (!existing || existing.status !== 'draft') return existing
+    const now = Math.max(Date.now(), (existing.locallyEditedAt ?? 0) + 1, (existing.draftSyncedAt ?? 0) + 1)
+    const next: LocalFormSubmission = {
+      ...existing,
+      formData,
+      locallyEditedAt: now,
+      draftSyncStatus: 'pending',
+      draftSyncError: undefined,
+      updatedAt: now,
+      deviceTimeAt: now
+    }
+    await db.formSubmissions.put(next)
+    return next
+  })
 }
 
 /**
@@ -175,25 +180,27 @@ export async function markFormSubmissionLocallyFinal(
   localId: string,
   formData: Record<string, unknown>
 ): Promise<LocalFormSubmission | undefined> {
-  const existing = await getFormSubmission(localId)
-  if (!existing || existing.status !== 'draft') return existing
-  const now = Date.now()
-  const next: LocalFormSubmission = {
-    ...existing,
-    formData,
-    status: 'submitted',
-    clientActionId: existing.clientActionId ?? uuidv4(),
-    syncStatus: 'pending',
-    syncError: undefined,
-    submittedAt: now,
-    updatedAt: now,
-    deviceTimeAt: now,
-    // Final owns delivery from here; draft lane ignores submitted rows.
-    locallyEditedAt: undefined,
-    draftSyncStatus: existing.draftSyncStatus
-  }
-  await db.formSubmissions.put(next)
-  return next
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const existing = await getFormSubmission(localId)
+    if (!existing || existing.status !== 'draft') return existing
+    const now = Date.now()
+    const next: LocalFormSubmission = {
+      ...existing,
+      formData,
+      status: 'submitted',
+      clientActionId: existing.clientActionId ?? uuidv4(),
+      syncStatus: 'pending',
+      syncError: undefined,
+      submittedAt: now,
+      updatedAt: now,
+      deviceTimeAt: now,
+      // Final owns delivery from here; draft lane ignores submitted rows.
+      locallyEditedAt: undefined,
+      draftSyncStatus: existing.draftSyncStatus
+    }
+    await db.formSubmissions.put(next)
+    return next
+  })
 }
 
 export async function applyFormDraftSyncResult(
@@ -206,32 +213,34 @@ export async function applyFormDraftSyncResult(
     editedAt?: number
   }
 ): Promise<void> {
-  const existing = await getFormSubmission(localId)
-  if (!existing || existing.status !== 'draft') return
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const existing = await getFormSubmission(localId)
+    if (!existing || existing.status !== 'draft') return
 
-  if (result.outcome === 'OK') {
-    // Conditional clear: only clear dirty if no newer edit landed while the request flew.
-    const stillSameEdit =
-      result.editedAt != null &&
-      existing.locallyEditedAt != null &&
-      existing.locallyEditedAt === result.editedAt
+    if (result.outcome === 'OK') {
+      // Conditional clear: only clear dirty if no newer edit landed while the request flew.
+      const stillSameEdit =
+        result.editedAt != null &&
+        existing.locallyEditedAt != null &&
+        existing.locallyEditedAt === result.editedAt
+      await db.formSubmissions.put({
+        ...existing,
+        serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
+        serverStatus: 'DRAFT',
+        draftSyncStatus: 'synced',
+        draftSyncedAt: stillSameEdit ? existing.locallyEditedAt : existing.draftSyncedAt,
+        draftSyncError: undefined,
+        updatedAt: Date.now()
+      })
+      return
+    }
+
     await db.formSubmissions.put({
       ...existing,
-      serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
-      serverStatus: 'DRAFT',
-      draftSyncStatus: 'synced',
-      draftSyncedAt: stillSameEdit ? existing.locallyEditedAt : existing.draftSyncedAt,
-      draftSyncError: undefined,
+      draftSyncStatus: 'failed',
+      draftSyncError: result.message ?? result.outcome,
       updatedAt: Date.now()
     })
-    return
-  }
-
-  await db.formSubmissions.put({
-    ...existing,
-    draftSyncStatus: 'failed',
-    draftSyncError: result.message ?? result.outcome,
-    updatedAt: Date.now()
   })
 }
 
@@ -244,38 +253,40 @@ export async function applyFormFinalSyncResult(
     message?: string | null
   }
 ): Promise<void> {
-  const existing = await getFormSubmission(localId)
-  if (!existing) return
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const existing = await getFormSubmission(localId)
+    if (!existing) return
 
-  const accepted = result.outcome === 'OK' || result.outcome === 'DUPLICATE'
-  if (accepted) {
-    // Prefer the server's status when present (SUBMITTED today; APPROVED/VOIDED later)
-    // so a review/void API does not leave the local row disagreeing with the wire.
-    const serverStatus =
-      coerceFormSubmissionServerStatus(result.status) ??
-      existing.serverStatus ??
-      'SUBMITTED'
+    const accepted = result.outcome === 'OK' || result.outcome === 'DUPLICATE'
+    if (accepted) {
+      // Prefer the server's status when present (SUBMITTED today; APPROVED/VOIDED later)
+      // so a review/void API does not leave the local row disagreeing with the wire.
+      const serverStatus =
+        coerceFormSubmissionServerStatus(result.status) ??
+        existing.serverStatus ??
+        'SUBMITTED'
+      await db.formSubmissions.put({
+        ...existing,
+        serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
+        serverStatus,
+        status: 'submitted',
+        syncStatus: 'synced',
+        syncedAt: Date.now(),
+        lastSubmitOutcome: result.outcome,
+        syncError: undefined,
+        updatedAt: Date.now()
+      })
+      return
+    }
+
+    // Keep the work — never discard. Operator can reopen a VALIDATION_ERROR draft path later.
     await db.formSubmissions.put({
       ...existing,
-      serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
-      serverStatus,
-      status: 'submitted',
-      syncStatus: 'synced',
-      syncedAt: Date.now(),
+      syncStatus: 'failed',
       lastSubmitOutcome: result.outcome,
-      syncError: undefined,
+      syncError: result.message ?? result.outcome,
       updatedAt: Date.now()
     })
-    return
-  }
-
-  // Keep the work — never discard. Operator can reopen a VALIDATION_ERROR draft path later.
-  await db.formSubmissions.put({
-    ...existing,
-    syncStatus: 'failed',
-    lastSubmitOutcome: result.outcome,
-    syncError: result.message ?? result.outcome,
-    updatedAt: Date.now()
   })
 }
 
@@ -284,7 +295,9 @@ export async function setFormSubmissionSyncStatus(
   syncStatus: SyncStatus,
   extra?: Partial<LocalFormSubmission>
 ): Promise<void> {
-  const existing = await getFormSubmission(localId)
-  if (!existing) return
-  await db.formSubmissions.put({ ...existing, syncStatus, ...extra, updatedAt: Date.now() })
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const existing = await getFormSubmission(localId)
+    if (!existing) return
+    await db.formSubmissions.put({ ...existing, syncStatus, ...extra, updatedAt: Date.now() })
+  })
 }

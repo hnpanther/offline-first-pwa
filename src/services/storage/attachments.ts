@@ -341,8 +341,8 @@ export async function bindAttachmentsToServerSheet(
  *
  * Unlike {@link getPendingAttachments} this includes a row that does not yet have
  * `formSubmissionId`: the final-submit lane binds that id while the server copy is still
- * a draft, then uploads, and only then submits. A parked row is excluded — the queue has
- * already decided it will not be sent — but a retryable failure is not parked.
+ * a draft, then uploads, and only then submits. Parked failures and missing bytes still
+ * block delivery: excluding a file from retries does not mean the server has it.
  */
 export async function getUnsentFormAttachments(
   formSubmissionLocalId: string
@@ -353,9 +353,7 @@ export async function getUnsentFormAttachments(
     .toArray()
   return rows.filter(
     r =>
-      r.blob != null &&
       !r.pendingDelete &&
-      r.permanentFailure !== true &&
       r.syncStatus !== 'synced'
   )
 }

@@ -59,18 +59,20 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
     if (ready === 'held') continue
 
     await setFormSubmissionSyncStatus(row.localId, 'syncing')
-    const serverId = (await reloadServerId(row)) ?? row.serverId
+    // Upload may have re-minted a file and rewritten the stored answers.
+    const fresh = await getFormSubmission(row.localId)
+    if (!fresh || fresh.status !== 'submitted' || !fresh.clientActionId) continue
     try {
       const result = await submitFormFinal(
         {
-          submissionId: serverId ?? null,
-          formDefinitionId: row.formDefinitionId,
-          reporterUnitId: row.reporterUnitId,
-          subjectUnitId: row.subjectUnitId,
-          localId: row.localId,
-          clientActionId: row.clientActionId,
-          formData: row.formData,
-          deviceTimeAt: row.deviceTimeAt ?? Date.now()
+          submissionId: fresh.serverId ?? null,
+          formDefinitionId: fresh.formDefinitionId,
+          reporterUnitId: fresh.reporterUnitId,
+          subjectUnitId: fresh.subjectUnitId,
+          localId: fresh.localId,
+          clientActionId: fresh.clientActionId,
+          formData: fresh.formData,
+          deviceTimeAt: fresh.deviceTimeAt ?? Date.now()
         },
         signal
       )
@@ -149,11 +151,6 @@ async function ensureDraftAndUploadMedia(
 
   unsent = await getUnsentFormAttachments(row.localId)
   return unsent.length === 0 ? 'ready' : 'held'
-}
-
-async function reloadServerId(row: LocalFormSubmission): Promise<string | undefined> {
-  const fresh = await getFormSubmission(row.localId)
-  return fresh?.serverId ?? row.serverId
 }
 
 async function settleFinal(row: LocalFormSubmission, result: FormSubmitResult): Promise<void> {

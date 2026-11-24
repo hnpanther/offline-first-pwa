@@ -276,3 +276,13 @@ Form history on the device is the signed-in author's rows, further limited to an
 - **[sync.md](sync.md)** — how this data moves to and from the server
 - **[../AGENTS.md](../AGENTS.md)** — the traps
 - **Backend repo → `docs/schema.md`** — the server side of the same data
+
+
+## Form mutation atomicity (2026-11-24)
+
+`formSubmissions.ts` wraps patch updates, draft saves, local finalization, draft/final
+acknowledgements and sync-status changes in Dexie read-write transactions. Read and write
+must share that transaction: merging an old object with `put` can overwrite a concurrent
+save even when the acknowledgement compares edit stamps. Draft save stamps use the maximum
+of wall clock, previous edit + 1 and previous acknowledgement + 1. No store/schema upgrade
+is needed. Remote history merge atomicity is still tracked under F-01.

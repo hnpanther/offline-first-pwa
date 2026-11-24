@@ -258,3 +258,48 @@ describe('form final approve/void forward-compat', () => {
     expect(after.serverStatus).toBe('SUBMITTED')
   })
 })
+
+
+describe('form delivery regression tests', () => {
+  it('preserves a save racing an older acknowledgement', async () => {
+    const row = await createLocalFormDraft({
+      formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1',
+      fieldDefinitionsSnapshot: [], formData: { note: 'old' }
+    })
+    await Promise.all([
+      saveLocalFormDraft(row.localId, { note: 'new' }),
+      applyFormDraftSyncResult(row.localId, {
+        outcome: 'OK', serverId: '42', editedAt: row.locallyEditedAt
+      })
+    ])
+    const saved = (await db.formSubmissions.get(row.id))!
+    expect(saved.formData).toEqual({ note: 'new' })
+    expect(saved.serverId).toBe('42')
+    expect(isFormDraftOwnedByUser(saved, 'user-1')).toBe(true)
+  })
+
+  it('keeps saves dirty when the clock does not advance', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100)
+    try {
+      const row = await createLocalFormDraft({
+        formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+      })
+      await applyFormDraftSyncResult(row.localId, { outcome: 'OK', editedAt: 100 })
+      const saved = await saveLocalFormDraft(row.localId, { note: 'new' })
+      expect(saved!.locallyEditedAt).toBeGreaterThan(100)
+      expect(isFormDraftOwnedByUser(saved!, 'user-1')).toBe(true)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('requeues interrupted delivery only for the owner with the same action id', async () => {
+    const row = await createLocalFormDraft({
+      formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+    })
+    const final = await markFormSubmissionLocallyFinal(row.localId, { note: 'done' })
+    await db.formSubmissions.update(row.id, { syncStatus: 'syncing' })
+    expect((await getPendingFormFinals('user-1'))[0].clientActionId).toBe(final!.clientActionId)
+    expect(await getPendingFormFinals('user-2')).toHaveLength(0)
+  })
+})
