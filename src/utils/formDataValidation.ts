@@ -4,6 +4,7 @@ import type { FieldDefinition } from '@/types/sync'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 import { entryLimitError } from '@/utils/fieldValidation'
 import { isLookupDataType, lookupChoices } from '@/utils/lookupValue'
+import { isUsableDateTime } from '@/utils/dateTimeValue'
 
 /**
  * A client-side mirror of the server's submit validation.
@@ -46,6 +47,10 @@ export function isFieldValueBlank(value: unknown, dataType: string | undefined):
 
   if (type === 'location') {
     return !isUsableCoordinate(value)
+  }
+
+  if (type === 'datetime') {
+    return !isUsableDateTime(value)
   }
 
   if (type === 'checkbox') {

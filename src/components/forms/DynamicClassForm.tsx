@@ -37,6 +37,13 @@ import { LookupFieldInput } from './LookupFieldInput'
 import { isLookupDataType, isLookupMulti, lookupChoices, lookupDisplayValue } from '@/utils/lookupValue'
 import { scanFieldConfig } from '@/services/scan/scanFieldFill'
 import { formatCoordinate, parseCoordinate } from '@/services/device/geolocation'
+import { DateTimeFieldInput } from './DateTimeFieldInput'
+import {
+  isDateTimeDataType,
+  isUsableDateTime,
+  parseDateTimeEpoch
+} from '@/utils/dateTimeValue'
+import { formatJalaliDateTime } from '@/utils/formatDate'
 import { attachmentIdsOf, attachmentKindForDataType } from '@/services/storage/attachments'
 import type { FieldDefinition } from '@/types/sync'
 import type { FormField, LogSheetEntryData } from '@/types'
@@ -100,6 +107,11 @@ function formatReadOnlyValue(def: FieldDefinition, val: unknown): { value: strin
 
   if (isLocationDataType(def.dataType)) {
     return { value: formatCoordinate(val) || '—' }
+  }
+
+  if (isDateTimeDataType(def.dataType)) {
+    const epoch = parseDateTimeEpoch(val)
+    return { value: epoch == null ? '—' : formatJalaliDateTime(epoch) }
   }
 
   // A reference-list answer reads as the label it was recorded with, plus the server's verdict
@@ -172,6 +184,12 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
   if (isLocationDataType(def.dataType)) {
     return def.required
       ? { validate: value => parseCoordinate(value) != null || 'این فیلد الزامی است' }
+      : {}
+  }
+
+  if (isDateTimeDataType(def.dataType)) {
+    return def.required
+      ? { validate: value => isUsableDateTime(value) || 'این فیلد الزامی است' }
       : {}
   }
 
@@ -559,6 +577,26 @@ export function DynamicClassForm({
               rules={rules}
               render={({ field: f }) => (
                 <LocationFieldInput
+                  label={def.label}
+                  required={def.required}
+                  value={f.value}
+                  onChange={f.onChange}
+                  error={error}
+                />
+              )}
+            />
+          )
+        }
+
+        if (isDateTimeDataType(def.dataType)) {
+          return (
+            <Controller
+              key={fieldName}
+              name={fieldName}
+              control={control}
+              rules={rules}
+              render={({ field: f }) => (
+                <DateTimeFieldInput
                   label={def.label}
                   required={def.required}
                   value={f.value}

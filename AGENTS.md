@@ -484,8 +484,11 @@ bar.
 
 **Form retention** uses `cleanupLocalFormSubmissions` and the same `deviceRetention` windows as
 rounds. Open drafts and pending or syncing finals are never purged. Synced `SUBMITTED`,
-`APPROVED` and synced `VOIDED` age out on the synced window. A failed final is purged only when
-the unsynced switch is on. Synced form attachments drop with the row
+`APPROVED` and synced `VOIDED` age out on the synced window. A failed final ages out on the
+unsynced window when that purge is on (or on the legacy 7-day window when the device never
+received a policy) — **the same rule as a failed round**. Forms have no `kept` receipt: with
+the switch **off** (server default) a failure is kept forever; with it **on**, an aged failure
+is purged because the administrator opted in. Synced form attachments drop with the row
 (`deleteSyncedAttachmentsForFormSubmission`). The log-sheet purge is a separate call and is
 not reordered.
 
@@ -1570,7 +1573,9 @@ The server mirrors subject to reporter: never restore a second observation-unit 
 Intersect cached form links with caller scope before choosing the default filing unit; a
 primary unit may not be linked. Start the draft explicitly before mounting media controls.
 History read/check/put must join the same transactional discipline as local writes. Failed
-form retention never deletes automatically: unlike rounds, forms have no server-kept receipt.
+form retention follows the same `deviceRetention` windows as rounds (unsynced switch / legacy
+7-day window). Forms still have no `kept` receipt — the default switch-off is what keeps a
+refused final on the tablet.
 
 
 ### Frozen form versions and reopened drafts (F-02/F-06)

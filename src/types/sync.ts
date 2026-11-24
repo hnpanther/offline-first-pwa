@@ -56,6 +56,9 @@ export type FieldDataType =
   | 'audio'
   | 'video'
   | 'location'
+  // A calendar instant — Jalali on the tablet, stored as { type, epochMs }
+  // (utils/dateTimeValue.ts). Distinct from any legacy free-text date an older build may carry.
+  | 'datetime'
   // Backend roadmap §32: a drawing that vouches for the other answers of its form. Stored as an
   // IMAGE attachment; the signer and the hash are stamped by the server (utils/signatureValue.ts).
   | 'signature'
@@ -319,6 +322,15 @@ export interface AssetFieldOverride {
    * `integerOnly` is never here: it stays on the class.
    */
   entryRange?: FieldValidationRange | null
+  /**
+   * Which reference list a FULL-added `lookup` / `lookupmulti` draws from — the list's code.
+   * Structure, not a threshold: only meaningful on a field this asset invented (the class's
+   * own lookup already carries the list on its definition). Mirrored from the server's
+   * override so `sheetFieldDefinitions.added` can build a picker that actually has a list.
+   */
+  lookupList?: string
+  /** Whether the picker offers «use this code» when search finds nothing (roadmap §31). */
+  lookupAcceptsUnlistedCode?: boolean
 }
 
 // ---------------------------------------------------------------------------

@@ -229,6 +229,27 @@ describe('sheetFieldDefinitions — per-asset overrides', () => {
     expect(fields.find(f => f.key === 'vibration')?.label).toBe('لرزش')
   })
 
+  it('keeps lookupList on a FULL-added lookup — a picker with no list is unusable', () => {
+    const sheet = sheetWith({
+      '11': {
+        source: 'FULL',
+        fields: {
+          helper: {
+            label: 'اپراتور کمکی',
+            dataType: 'lookup',
+            lookupList: 'staff',
+            lookupAcceptsUnlistedCode: true
+          }
+        }
+      }
+    })
+
+    const helper = sheetFieldDefinitions(sheet, '7', [], '11').find(f => f.key === 'helper')
+    expect(helper?.dataType).toBe('lookup')
+    expect(helper?.validation?.lookupList).toBe('staff')
+    expect(helper?.validation?.lookupAcceptsUnlistedCode).toBe(true)
+  })
+
   // The N-of-M badge on the fill page counts these definitions. It used to resolve them by
   // class, justified as "an override changes a band rather than whether a field must be
   // answered" — true of RANGES_ONLY, false of FULL, whose entire purpose is adding and

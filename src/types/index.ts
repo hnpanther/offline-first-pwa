@@ -71,6 +71,7 @@ export type FormFieldType =
   | 'audio'
   | 'video'
   | 'location'
+  | 'datetime'
   | 'signature'
   // Backend roadmap §31 Phase 2 — rendered by LookupFieldInput, never by DynamicFormField.
   | 'lookup'

@@ -640,7 +640,7 @@ No commit or branch is created. The companion repository tracks the same identif
 | F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Open |
 | F-09 | High | Omitting reporterUnitId bypasses fill gate on an existing draft | Fixed in working tree: effective filing unit always checked |
 | F-10 | Medium | History is unbounded; catalog performs per-form queries | Open |
-| F-11 | High | Failed form retention may delete the only copy | Fixed: failed forms are retained without a server-kept receipt |
+| F-11 | High | Failed form retention may delete the only copy | **Product decision (2026-11-24):** failed forms follow the same `deviceRetention` windows as rounds; default switch-off still keeps them forever |
 | F-12 | Medium | Rejected final may commit a changed filing unit | Fixed in working tree: unit mutation follows validation |
 
 ### F-01: Local read/put race overwrites a newer answer
@@ -685,7 +685,11 @@ Source: `FormApiController / formHistorySync.ts`. Remediation and acceptance: Cu
 
 ### F-11: Failed form retention may delete the only copy
 
-Source: `cleanupFormSubmissions.ts`. Remediation and acceptance: Never purge undelivered forms without evidence of server preservation, including missing-policy fallback.
+Source: `cleanupFormSubmissions.ts`. **Product decision (2026-11-24):** failed finals use the
+same unsynced / legacy windows as refused rounds (`isEligibleForFormLocalPurge`). Forms have no
+`kept` receipt, so the server default (`unsyncedPurgeEnabled: false`) is what keeps a refused
+final on the tablet; turning the switch on is an explicit administrator choice that aged
+failures may leave the device. Regression: `cleanupFormSubmissions.test.ts`.
 
 ### F-12: Rejected final may commit a changed filing unit
 
@@ -725,9 +729,9 @@ The primary unit is preferred only when eligible. Explicit start creates the dra
 media fields mount. Existing drafts may correct the unit; saving mirrors subject to reporter.
 The subject/observation picker is removed; the wire column remains for compatibility.
 
-F-11 completed: failed submissions cannot be purged under either legacy fallback or enabled
-unsynced retention because forms do not have a server-kept receipt. Delivered retention is
-unchanged. Remaining: F-02, F-05 correction/reference reconciliation, F-06, F-07, F-08, F-10.
+F-11 updated (2026-11-24): failed submissions follow the same retention windows as rounds
+(legacy 7-day / unsynced switch). Delivered retention is unchanged. The missing `kept` receipt
+is documented; the default switch-off remains the protection.
 
 Validation: 36 PWA tests passed across formFilingUnits, formSync, formHistorySync,
 cleanupFormSubmissions and formMediaOrder. No live browser/device or database test in this

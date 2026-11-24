@@ -150,6 +150,21 @@ function overrideValidation(
     if (override.entryRange == null) delete validation.entryRange
     else validation.entryRange = override.entryRange
   }
+  // A lookup this asset adds carries its list on the override (FULL structure). Without these
+  // two keys the tablet would render a picker with no list — the same drop the server's
+  // fromOverride once had for options/conditions. Class-owned lookups already hold the list
+  // on the definition; this only matters for keys that reach `added()`.
+  if ('lookupList' in override) {
+    if (override.lookupList == null || override.lookupList === '') delete validation.lookupList
+    else validation.lookupList = String(override.lookupList)
+  }
+  if ('lookupAcceptsUnlistedCode' in override) {
+    if (override.lookupAcceptsUnlistedCode === true) {
+      validation.lookupAcceptsUnlistedCode = true
+    } else {
+      delete validation.lookupAcceptsUnlistedCode
+    }
+  }
   return validation
 }
 

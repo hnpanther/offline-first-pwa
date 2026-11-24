@@ -112,20 +112,35 @@ describe('isEligibleForFormLocalPurge', () => {
     ).toBe(true)
   })
 
-  it('keeps failed forms even with legacy or enabled unsynced retention', () => {
-    const failed = form({
+  it('purges an aged failed form under legacy or enabled unsynced retention — same as a failed round', () => {
+    const aged = form({
       syncStatus: 'failed',
       syncedAt: undefined,
       submittedAt: NOW - 8 * DAY
     })
-    expect(isEligibleForFormLocalPurge(failed, NOW, LEGACY_RETENTION_WINDOWS)).toBe(false)
+    const young = form({
+      syncStatus: 'failed',
+      syncedAt: undefined,
+      submittedAt: NOW - 6 * DAY
+    })
+    expect(isEligibleForFormLocalPurge(aged, NOW, LEGACY_RETENTION_WINDOWS)).toBe(true)
+    expect(isEligibleForFormLocalPurge(young, NOW, LEGACY_RETENTION_WINDOWS)).toBe(false)
+    // Switch off (server default): never purge failed forms.
     expect(
-      isEligibleForFormLocalPurge(failed, NOW, {
+      isEligibleForFormLocalPurge(aged, NOW, {
         syncedMs: 24 * HOUR,
         failedMs: null,
         expiredDraftMs: null
       })
     ).toBe(false)
+    // Switch on: purge after the unsynced window.
+    expect(
+      isEligibleForFormLocalPurge(aged, NOW, {
+        syncedMs: 24 * HOUR,
+        failedMs: 7 * DAY,
+        expiredDraftMs: 7 * DAY
+      })
+    ).toBe(true)
   })
 })
 
