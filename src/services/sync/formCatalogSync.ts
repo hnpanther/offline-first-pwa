@@ -13,6 +13,7 @@ export async function pullFillableForms(signal?: AbortSignal): Promise<CachedFor
     const dtos = await fetchFillableForms(signal)
     const forms: CachedFormDefinition[] = dtos.map(dto => ({
       id: toIdString(dto.id),
+      schemaVersionId: dto.schemaVersionId != null ? toIdString(dto.schemaVersionId) : undefined,
       code: dto.code,
       title: dto.title,
       description: dto.description,

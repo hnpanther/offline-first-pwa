@@ -804,6 +804,7 @@ export function coerceFormSubmissionServerStatus(
  * `fieldDefinitionsSnapshot` wins (server freezes on first draft save).
  */
 export interface CachedFormDefinition {
+  schemaVersionId?: string
   id: string
   code: string
   title: string
@@ -823,6 +824,8 @@ export interface CachedFormDefinition {
  * - `syncStatus` — delivery of a final submit; counted in the pending badge
  */
 export interface LocalFormSubmission {
+  serverUpdatedAt?: number
+  schemaVersionId?: string
   id: string
   /** Device-minted id; matches the server's `localId` for draft upsert / submit. */
   localId: string

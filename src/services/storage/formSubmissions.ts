@@ -115,6 +115,7 @@ export async function updateFormSubmission(
 }
 
 export async function createLocalFormDraft(input: {
+  schemaVersionId?: string
   formDefinitionId: string
   formCode?: string
   formTitle?: string
@@ -130,6 +131,7 @@ export async function createLocalFormDraft(input: {
     id: localId,
     localId,
     formDefinitionId: input.formDefinitionId,
+    schemaVersionId: input.schemaVersionId,
     formCode: input.formCode,
     formTitle: input.formTitle,
     reporterUnitId: input.reporterUnitId,
@@ -302,5 +304,26 @@ export async function setFormSubmissionSyncStatus(
     const existing = await getFormSubmission(localId)
     if (!existing) return
     await db.formSubmissions.put({ ...existing, syncStatus, ...extra, updatedAt: Date.now() })
+  })
+}
+
+
+/** Explicit correction after a definite validation refusal; ambiguous transport failures stay queued. */
+export async function correctRejectedForm(localId: string): Promise<LocalFormSubmission | undefined> {
+  const userId = await getSessionUserId()
+  return db.transaction('rw', db.formSubmissions, async () => {
+    const row = await getFormSubmission(localId)
+    if (!row || !isFormSubmissionOutboundOwnedByUser(row, userId) ||
+        row.status !== 'submitted' || row.syncStatus !== 'failed' ||
+        row.lastSubmitOutcome !== 'VALIDATION_ERROR') return undefined
+    const next: LocalFormSubmission = {
+      ...row, status: 'draft', syncStatus: 'pending', clientActionId: undefined,
+      submittedAt: undefined, syncError: undefined, lastSubmitOutcome: undefined,
+      // Correction alone must not send the rejected payload again. A deliberate save dirties it.
+      locallyEditedAt: undefined, draftSyncedAt: undefined,
+      draftSyncStatus: undefined, draftSyncError: undefined, updatedAt: Date.now()
+    }
+    await db.formSubmissions.put(next)
+    return next
   })
 }

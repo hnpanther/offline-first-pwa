@@ -1758,3 +1758,23 @@ unit to be chosen. Saving an existing draft can correct its unit and mirrors sub
 Failed forms are never automatically purged, even with unsynced purge enabled or missing
 policy fallback: no server-kept receipt proves the answers exist elsewhere. Successfully
 delivered forms retain their configured cleanup window. See F-04/F-11 in `docs/issue.md`.
+
+
+## Pinned form schemas and correction (2026-11-24, backend V34)
+
+Deploy backend V34 before this PWA. Catalog entries carry server-issued schemaVersionId;
+new local drafts copy it once and draft/final requests send it. Catalog refresh never changes
+an existing draft's identity or frozen fields. The backend retains published versions and
+checks form ownership and snapshot consistency. Legacy unversioned drafts remain supported
+but cannot recover old same-key semantics automatically; unknown keys now cause a refusal.
+
+History pulls now accept DRAFT: fresh-device server drafts and reopened delivered submissions
+become editable. Dirty local drafts and unsynced finals stay intact. Older known server
+updatedAt values and another author's rows are ignored. A reopened draft clears the old submit
+action and dirty markers: viewing it must not push an empty/stale payload. A saved/mirrored
+draft may accept server updates; a newer local edit may not.
+
+A failed VALIDATION_ERROR offers explicit correction. It keeps answers, files and pinned schema,
+clears the old final action, and waits for a deliberate save before sending again. Network and
+other ambiguous failures are never treated as safe-to-correct acknowledgements. Server-side
+replay receipts across reopen remain open (F-08), as does media correction UX (F-05).

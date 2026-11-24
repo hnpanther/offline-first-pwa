@@ -67,6 +67,7 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
         {
           submissionId: fresh.serverId ?? null,
           formDefinitionId: fresh.formDefinitionId,
+          schemaVersionId: fresh.schemaVersionId,
           reporterUnitId: fresh.reporterUnitId,
           subjectUnitId: fresh.subjectUnitId,
           localId: fresh.localId,
@@ -122,6 +123,7 @@ async function ensureDraftAndUploadMedia(
         {
           submissionId: null,
           formDefinitionId: row.formDefinitionId,
+          schemaVersionId: row.schemaVersionId,
           reporterUnitId: row.reporterUnitId,
           subjectUnitId: row.subjectUnitId,
           localId: row.localId,

@@ -33,6 +33,7 @@ export async function pushPendingFormDrafts(signal?: AbortSignal): Promise<FormD
         {
           submissionId: row.serverId ?? null,
           formDefinitionId: row.formDefinitionId,
+          schemaVersionId: row.schemaVersionId,
           reporterUnitId: row.reporterUnitId,
           subjectUnitId: row.subjectUnitId,
           localId: row.localId,

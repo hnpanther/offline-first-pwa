@@ -19,6 +19,7 @@ import { DynamicClassForm } from '@/components/forms/DynamicClassForm'
 import { getFormDefinition } from '@/services/storage/formDefinitions'
 import {
   createLocalFormDraft,
+  correctRejectedForm,
   getFormSubmission,
   markFormSubmissionLocallyFinal,
   saveLocalFormDraft
@@ -176,6 +177,7 @@ export function FormFillPage() {
     if (!definition) return null
     const created = await createLocalFormDraft({
       formDefinitionId: definition.id,
+      schemaVersionId: definition.schemaVersionId,
       formCode: definition.code,
       formTitle: definition.title,
       reporterUnitId,
@@ -292,6 +294,20 @@ export function FormFillPage() {
           {info}
         </Alert>
       )}
+      {submission?.syncStatus === 'failed' && submission.lastSubmitOutcome === 'VALIDATION_ERROR' && (
+        <Alert severity="error" sx={{ mb: 2 }} action={
+          <Button disabled={busy} onClick={async () => {
+            setBusy(true)
+            try {
+              const corrected = await correctRejectedForm(submission.localId)
+              if (corrected) { setSubmission(corrected); form.reset(corrected.formData) }
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'خطا در بازکردن فرم برای اصلاح')
+            } finally { setBusy(false) }
+          }}>اصلاح پاسخ‌ها</Button>
+        }>{submission.syncError || 'ارسال فرم نیاز به اصلاح دارد.'}</Alert>
+      )}
+
       {readOnly && (
         <Alert severity="info" sx={{ mb: 2 }}>
           {t.forms.immutable}

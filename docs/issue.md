@@ -631,11 +631,11 @@ No commit or branch is created. The companion repository tracks the same identif
 | Id | Severity | Finding | Status |
 |---|---|---|---|
 | F-01 | Critical | Local read/put race overwrites a newer answer | Fixed: local mutations and per-submission history merges are transactional |
-| F-02 | Critical | Offline schema differs from the first server snapshot | Open |
+| F-02 | Critical | Offline schema differs from the first server snapshot | Partly fixed (V34): pinned server versions and unknown-key refusal; legacy unversioned drafts remain |
 | F-03 | High | Interrupted final remains syncing and is never retried | Fixed in working tree: interrupted finals remain retryable |
 | F-04 | High | PWA filing unit does not match server contract | Fixed: one searchable filing-unit picker, linked units intersect caller scope |
 | F-05 | High | Attachment remint submits stale ids; parked media bypasses delivery gate | Partly fixed: remint reload and parked-file gate; correction UX/reference reconciliation remains open |
-| F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Open |
+| F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Partly fixed: draft/reopen pull and explicit validation correction; unresolved old-action replay depends on F-08 |
 | F-07 | High | Server mutations have neither row lock nor optimistic version | Open |
 | F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Open |
 | F-09 | High | Omitting reporterUnitId bypasses fill gate on an existing draft | Fixed in working tree: effective filing unit always checked |
@@ -732,3 +732,27 @@ unchanged. Remaining: F-02, F-05 correction/reference reconciliation, F-06, F-07
 Validation: 36 PWA tests passed across formFilingUnits, formSync, formHistorySync,
 cleanupFormSubmissions and formMediaOrder. No live browser/device or database test in this
 checkpoint. No dependency/CDN/network asset, migration, commit or branch added.
+
+### Third implementation checkpoint (2026-11-24, no commit)
+
+F-02: V34 adds immutable form_schema_versions. Catalog publishes/reuses a version; new PWA
+local drafts pin it and both push lanes carry it. The server resolves the version within its
+form, freezes it and refuses a different version on an existing draft. Unknown keys are refused
+without a write, and empty snapshots do not fall back to live fields. Compatibility retains
+unversioned requests; legacy same-key semantic changes are still open. Deploy backend first.
+
+F-06: history accepts server DRAFT, including a fresh device and a reopened delivered form.
+Dirty drafts and unsynced finals remain protected; known older server timestamps and other
+operators' DTOs are ignored. Reopen clears the old local action id and does not auto-push answers.
+A definite VALIDATION_ERROR has an explicit correction button that preserves answers/schema,
+clears the failed action and waits for deliberate save. Ambiguous failures and other owners
+cannot use it. F-08 (old requests replaying after server reopen) still requires durable receipts;
+do not treat this checkpoint as full concurrency/idempotency protection.
+
+Validation: 44 PWA tests and TypeScript passed. PostgreSQL Testcontainers applied all 34
+migrations; FormSubmissionIntegrationTest passed 11 tests and FormSubmissionServiceTest passed
+2 tests. Final rerun with the panel render suite is recorded below. No live browser/device/load
+test. No CDN, dependency, commit or branch added. Next: legacy F-02 recovery, remaining F-05,
+F-07/F-08 together, then F-10 performance.
+
+Final verification: rerun passed 22 backend tests (11 submission integration, 9 panel render, 2 service), with zero failures/errors/skips. Backend and PWA diff checks passed. No live deployment performed.

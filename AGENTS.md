@@ -1571,3 +1571,12 @@ Intersect cached form links with caller scope before choosing the default filing
 primary unit may not be linked. Start the draft explicitly before mounting media controls.
 History read/check/put must join the same transactional discipline as local writes. Failed
 form retention never deletes automatically: unlike rounds, forms have no server-kept receipt.
+
+
+### Frozen form versions and reopened drafts (F-02/F-06)
+
+Never repin a local form's schemaVersionId from a refreshed catalog. Backend V34 resolves it
+to a server-owned snapshot. Missing ids on old drafts do not prove their answers match today's
+definition. A DRAFT in history can be a supervisor reopen; clear the old local final action,
+but never replace dirty/unsent work. Correction after validation refusal must be explicit and
+must not auto-send the rejected payload. An ambiguous network error is not a validation refusal.

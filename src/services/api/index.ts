@@ -788,6 +788,7 @@ export async function submitNfcFaultReportsBatch(
 // ===========================================================================
 
 export interface FormDefinitionDto {
+  schemaVersionId?: number | string
   id: number | string
   code: string
   title: string
@@ -829,6 +830,7 @@ export interface FormSubmissionDto {
 }
 
 export interface FormDraftRequest {
+  schemaVersionId?: number | string
   submissionId?: number | string | null
   formDefinitionId: number | string
   reporterUnitId: number | string
@@ -840,6 +842,7 @@ export interface FormDraftRequest {
 }
 
 export interface FormSubmitRequest {
+  schemaVersionId?: number | string
   submissionId?: number | string | null
   formDefinitionId: number | string
   reporterUnitId: number | string

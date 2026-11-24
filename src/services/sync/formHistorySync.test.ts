@@ -74,3 +74,29 @@ it.each([true, false])('serializes history merge and local metadata update (hist
   expect(row?.serverStatus).toBe('VOIDED')
   expect(row?.draftSyncError).toBe('local marker')
 })
+
+
+it('restores a reopened form as editable without reusing the old submit action', async () => {
+  await mergeOwnFormHistory([dto({ status: 'SUBMITTED', updatedAt: 100 })], new Map(), 'user-1')
+  await db.formSubmissions.update('remote-1', { clientActionId: 'old-action' })
+  await mergeOwnFormHistory([dto({ status: 'DRAFT', updatedAt: 200, formData: { note: 'reopened' } })], new Map(), 'user-1')
+  const row = await db.formSubmissions.get('remote-1')
+  expect(row).toMatchObject({ status: 'draft', serverStatus: 'DRAFT', formData: { note: 'reopened' } })
+  expect(row?.clientActionId).toBeUndefined()
+  expect(row?.locallyEditedAt).toBeUndefined()
+  await mergeOwnFormHistory([dto({ status: 'SUBMITTED', updatedAt: 100 })], new Map(), 'user-1')
+  expect((await db.formSubmissions.get('remote-1'))?.status).toBe('draft')
+})
+
+it('downloads a server draft on a fresh device without queuing an empty overwrite', async () => {
+  await mergeOwnFormHistory([dto({ status: 'DRAFT' })], new Map(), 'user-1')
+  const row = await db.formSubmissions.get('remote-1')
+  expect(row?.status).toBe('draft')
+  expect(row?.formData).toEqual({ note: 'from-server' })
+  expect(row?.locallyEditedAt).toBeUndefined()
+})
+
+it('does not import another operator history', async () => {
+  await mergeOwnFormHistory([dto({ reportedByUserId: 'user-2' })], new Map(), 'user-1')
+  expect(await db.formSubmissions.count()).toBe(0)
+})

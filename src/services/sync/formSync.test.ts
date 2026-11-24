@@ -5,6 +5,7 @@ import {
   applyFormDraftSyncResult,
   applyFormFinalSyncResult,
   createLocalFormDraft,
+  correctRejectedForm,
   getFormSubmissionsForUser,
   getPendingFormDrafts,
   getPendingFormFinals,
@@ -315,4 +316,32 @@ it('saves a corrected filing unit and mirrors subject without losing answers', a
   expect(saved.subjectUnitId).toBe('3')
   expect(saved.formData).toEqual({ note: 'preserved' })
   expect(isFormDraftOwnedByUser(saved, 'user-1')).toBe(true)
+})
+
+
+it('explicitly corrects a validation refusal while preserving answers and pinned schema', async () => {
+  const draft = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1',
+    schemaVersionId: '71', fieldDefinitionsSnapshot: []
+  })
+  const final = await markFormSubmissionLocallyFinal(draft.localId, { note: 'keep' })
+  await applyFormFinalSyncResult(draft.localId, { outcome: 'VALIDATION_ERROR' })
+  const corrected = await correctRejectedForm(draft.localId)
+  expect(corrected).toMatchObject({ status: 'draft', schemaVersionId: '71', formData: { note: 'keep' } })
+  expect(corrected?.clientActionId).toBeUndefined()
+  expect(await getPendingFormDrafts('user-1')).toHaveLength(0)
+  await saveLocalFormDraft(draft.localId, { note: 'fixed' })
+  const submitted = await markFormSubmissionLocallyFinal(draft.localId, { note: 'fixed' })
+  expect(submitted?.clientActionId).not.toBe(final?.clientActionId)
+})
+
+it('does not reopen an ambiguous failed request or another operator refusal', async () => {
+  const draft = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+  })
+  await markFormSubmissionLocallyFinal(draft.localId, { note: 'keep' })
+  await applyFormFinalSyncResult(draft.localId, { outcome: 'DENIED' })
+  expect(await correctRejectedForm(draft.localId)).toBeUndefined()
+  await db.formSubmissions.update(draft.id, { createdByUserId: 'other', lastSubmitOutcome: 'VALIDATION_ERROR' })
+  expect(await correctRejectedForm(draft.localId)).toBeUndefined()
 })

@@ -8,7 +8,7 @@ import {
   updateFormSubmission
 } from '@/services/storage/formSubmissions'
 import { db } from '@/services/storage/db'
-import { formHistoryMustKeepLocal, isTerminalFormServerStatus } from '@/utils/formHistory'
+import { formHistoryMustKeepLocal } from '@/utils/formHistory'
 import { toIdString } from '@/utils/ids'
 import { coerceFormSubmissionServerStatus, type LocalFormSubmission } from '@/types'
 
@@ -38,16 +38,23 @@ export async function mergeOwnFormHistory(
   titles: Map<string, { title?: string; code?: string }>,
   userId: string | null
 ): Promise<void> {
+  if (!userId) return
   for (const dto of dtos) {
+    if (dto.reportedByUserId != null && toIdString(dto.reportedByUserId) !== userId) continue
     await db.transaction('rw', db.formSubmissions, async () => {
       const serverStatus = coerceFormSubmissionServerStatus(dto.status)
-      if (!isTerminalFormServerStatus(serverStatus) || !serverStatus) return
+      if (!serverStatus) return
+      const isDraft = serverStatus === 'DRAFT'
       const serverId = toIdString(dto.id)
       const localKey = dto.localId?.trim() || `server-form:${serverId}`
       const named = titles.get(toIdString(dto.formDefinitionId))
       const existing =
         (dto.localId ? await getFormSubmission(dto.localId) : undefined) ??
         (await db.formSubmissions.where('serverId').equals(serverId).first())
+
+      if (existing?.createdByUserId && existing.createdByUserId !== userId) return
+      if (existing?.serverUpdatedAt != null && dto.updatedAt != null &&
+          dto.updatedAt < existing.serverUpdatedAt) return
 
       if (existing && formHistoryMustKeepLocal(existing)) {
         if (!existing.serverId) {
@@ -63,13 +70,21 @@ export async function mergeOwnFormHistory(
           ...existing,
           serverId,
           serverStatus,
-          status: 'submitted',
+          status: isDraft ? 'draft' : 'submitted',
           syncStatus: 'synced',
+          serverUpdatedAt: dto.updatedAt,
+          reporterUnitId: toIdString(dto.reporterUnitId),
+          subjectUnitId: toIdString(dto.subjectUnitId),
+          ...(isDraft ? {
+            clientActionId: undefined, locallyEditedAt: undefined, draftSyncedAt: undefined,
+            draftSyncStatus: 'synced' as const, draftSyncError: undefined,
+            syncError: undefined, lastSubmitOutcome: undefined
+          } : {}),
           formTitle: named?.title ?? existing.formTitle,
           formCode: named?.code ?? existing.formCode,
           formData: dto.formData ?? existing.formData,
           fieldDefinitionsSnapshot: fields.length > 0 ? fields : existing.fieldDefinitionsSnapshot,
-          submittedAt: dto.submittedAt ?? existing.submittedAt,
+          submittedAt: isDraft ? undefined : dto.submittedAt ?? existing.submittedAt,
           syncedAt: existing.syncedAt ?? dto.syncedAt ?? now,
           updatedAt: now
         })
@@ -80,12 +95,13 @@ export async function mergeOwnFormHistory(
         id: localKey,
         localId: localKey,
         serverId,
+        serverUpdatedAt: dto.updatedAt,
         formDefinitionId: toIdString(dto.formDefinitionId),
         formTitle: named?.title,
         formCode: named?.code,
         reporterUnitId: toIdString(dto.reporterUnitId),
         subjectUnitId: toIdString(dto.subjectUnitId),
-        status: 'submitted',
+        status: isDraft ? 'draft' : 'submitted',
         serverStatus,
         formData: dto.formData ?? {},
         fieldDefinitionsSnapshot: fields,

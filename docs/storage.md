@@ -286,3 +286,12 @@ must share that transaction: merging an old object with `put` can overwrite a co
 save even when the acknowledgement compares edit stamps. Draft save stamps use the maximum
 of wall clock, previous edit + 1 and previous acknowledgement + 1. No store/schema upgrade
 is needed. Each remote history merge now reads/checks/writes in a per-submission read-write transaction too (F-01).
+
+
+### Form schema and history metadata (2026-11-24)
+
+CachedFormDefinition and LocalFormSubmission carry optional schemaVersionId. It is copied at
+creation and preserved through saves/finalization/correction. LocalFormSubmission.serverUpdatedAt
+records a received server revision timestamp to ignore older history responses; it is not a
+cross-device optimistic lock. Both additions are ordinary Dexie payload properties, unindexed,
+so no store migration is needed. Legacy rows with no version are not silently upgraded.
