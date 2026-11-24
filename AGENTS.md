@@ -1562,3 +1562,12 @@ stop an acknowledgement from putting an old answer over a new save. Dirty stamps
 advance even within the same millisecond. After uploading media, reload the entire final
 payload because collision recovery can rewrite attachment ids. A parked upload is not a
 delivered upload. Keep persisted `syncing` forms retryable with the original action id.
+
+
+### Form unit and history follow-up (F-01/F-04/F-11)
+
+The server mirrors subject to reporter: never restore a second observation-unit picker.
+Intersect cached form links with caller scope before choosing the default filing unit; a
+primary unit may not be linked. Start the draft explicitly before mounting media controls.
+History read/check/put must join the same transactional discipline as local writes. Failed
+form retention never deletes automatically: unlike rounds, forms have no server-kept receipt.

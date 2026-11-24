@@ -112,13 +112,13 @@ describe('isEligibleForFormLocalPurge', () => {
     ).toBe(true)
   })
 
-  it('purges failed only when unsynced purge is enabled', () => {
+  it('keeps failed forms even with legacy or enabled unsynced retention', () => {
     const failed = form({
       syncStatus: 'failed',
       syncedAt: undefined,
       submittedAt: NOW - 8 * DAY
     })
-    expect(isEligibleForFormLocalPurge(failed, NOW, LEGACY_RETENTION_WINDOWS)).toBe(true)
+    expect(isEligibleForFormLocalPurge(failed, NOW, LEGACY_RETENTION_WINDOWS)).toBe(false)
     expect(
       isEligibleForFormLocalPurge(failed, NOW, {
         syncedMs: 24 * HOUR,

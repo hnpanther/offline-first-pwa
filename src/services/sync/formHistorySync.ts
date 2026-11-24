@@ -39,65 +39,67 @@ export async function mergeOwnFormHistory(
   userId: string | null
 ): Promise<void> {
   for (const dto of dtos) {
-    const serverStatus = coerceFormSubmissionServerStatus(dto.status)
-    if (!isTerminalFormServerStatus(serverStatus) || !serverStatus) continue
-    const serverId = toIdString(dto.id)
-    const localKey = dto.localId?.trim() || `server-form:${serverId}`
-    const named = titles.get(toIdString(dto.formDefinitionId))
-    const existing =
-      (dto.localId ? await getFormSubmission(dto.localId) : undefined) ??
-      (await db.formSubmissions.where('serverId').equals(serverId).first())
+    await db.transaction('rw', db.formSubmissions, async () => {
+      const serverStatus = coerceFormSubmissionServerStatus(dto.status)
+      if (!isTerminalFormServerStatus(serverStatus) || !serverStatus) return
+      const serverId = toIdString(dto.id)
+      const localKey = dto.localId?.trim() || `server-form:${serverId}`
+      const named = titles.get(toIdString(dto.formDefinitionId))
+      const existing =
+        (dto.localId ? await getFormSubmission(dto.localId) : undefined) ??
+        (await db.formSubmissions.where('serverId').equals(serverId).first())
 
-    if (existing && formHistoryMustKeepLocal(existing)) {
-      if (!existing.serverId) {
-        await updateFormSubmission(existing.localId, { serverId })
+      if (existing && formHistoryMustKeepLocal(existing)) {
+        if (!existing.serverId) {
+          await updateFormSubmission(existing.localId, { serverId })
+        }
+        return
       }
-      continue
-    }
 
-    const fields = mapFormFieldSnapshots(dto.fieldDefinitionsSnapshot)
-    const now = Date.now()
-    if (existing) {
-      await putFormSubmission({
-        ...existing,
+      const fields = mapFormFieldSnapshots(dto.fieldDefinitionsSnapshot)
+      const now = Date.now()
+      if (existing) {
+        await putFormSubmission({
+          ...existing,
+          serverId,
+          serverStatus,
+          status: 'submitted',
+          syncStatus: 'synced',
+          formTitle: named?.title ?? existing.formTitle,
+          formCode: named?.code ?? existing.formCode,
+          formData: dto.formData ?? existing.formData,
+          fieldDefinitionsSnapshot: fields.length > 0 ? fields : existing.fieldDefinitionsSnapshot,
+          submittedAt: dto.submittedAt ?? existing.submittedAt,
+          syncedAt: existing.syncedAt ?? dto.syncedAt ?? now,
+          updatedAt: now
+        })
+        return
+      }
+
+      const row: LocalFormSubmission = {
+        id: localKey,
+        localId: localKey,
         serverId,
-        serverStatus,
+        formDefinitionId: toIdString(dto.formDefinitionId),
+        formTitle: named?.title,
+        formCode: named?.code,
+        reporterUnitId: toIdString(dto.reporterUnitId),
+        subjectUnitId: toIdString(dto.subjectUnitId),
         status: 'submitted',
+        serverStatus,
+        formData: dto.formData ?? {},
+        fieldDefinitionsSnapshot: fields,
+        createdByUserId:
+          dto.reportedByUserId != null ? toIdString(dto.reportedByUserId) : userId ?? undefined,
         syncStatus: 'synced',
-        formTitle: named?.title ?? existing.formTitle,
-        formCode: named?.code ?? existing.formCode,
-        formData: dto.formData ?? existing.formData,
-        fieldDefinitionsSnapshot: fields.length > 0 ? fields : existing.fieldDefinitionsSnapshot,
-        submittedAt: dto.submittedAt ?? existing.submittedAt,
-        syncedAt: existing.syncedAt ?? dto.syncedAt ?? now,
-        updatedAt: now
-      })
-      continue
-    }
-
-    const row: LocalFormSubmission = {
-      id: localKey,
-      localId: localKey,
-      serverId,
-      formDefinitionId: toIdString(dto.formDefinitionId),
-      formTitle: named?.title,
-      formCode: named?.code,
-      reporterUnitId: toIdString(dto.reporterUnitId),
-      subjectUnitId: toIdString(dto.subjectUnitId),
-      status: 'submitted',
-      serverStatus,
-      formData: dto.formData ?? {},
-      fieldDefinitionsSnapshot: fields,
-      createdByUserId:
-        dto.reportedByUserId != null ? toIdString(dto.reportedByUserId) : userId ?? undefined,
-      syncStatus: 'synced',
-      syncError: undefined,
-      createdAt: dto.createdAt ?? now,
-      updatedAt: dto.updatedAt ?? now,
-      submittedAt: dto.submittedAt,
-      syncedAt: dto.syncedAt ?? now,
-      deviceTimeAt: dto.deviceTimeAt
-    }
-    await putFormSubmission(row)
+        syncError: undefined,
+        createdAt: dto.createdAt ?? now,
+        updatedAt: dto.updatedAt ?? now,
+        submittedAt: dto.submittedAt,
+        syncedAt: dto.syncedAt ?? now,
+        deviceTimeAt: dto.deviceTimeAt
+      }
+      await putFormSubmission(row)
+    })
   }
 }

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '@/services/storage/db'
-import { createLocalFormDraft, saveLocalFormDraft } from '@/services/storage/formSubmissions'
+import { createLocalFormDraft, saveLocalFormDraft, updateFormSubmission } from '@/services/storage/formSubmissions'
 import { mergeOwnFormHistory } from '@/services/sync/formHistorySync'
 import type { FormSubmissionDto } from '@/services/api'
 
@@ -62,4 +62,15 @@ describe('form history merge', () => {
     expect(stored?.status).toBe('draft')
     expect(stored?.formData).toEqual({ note: 'mine' })
   })
+})
+
+
+it.each([true, false])('serializes history merge and local metadata update (history first: %s)', async historyFirst => {
+  await mergeOwnFormHistory([dto()], new Map(), 'user-1')
+  const merge = () => mergeOwnFormHistory([dto({ status: 'VOIDED' })], new Map(), 'user-1')
+  const patch = () => updateFormSubmission('remote-1', { draftSyncError: 'local marker' })
+  await Promise.all(historyFirst ? [merge(), patch()] : [patch(), merge()])
+  const row = await db.formSubmissions.get('remote-1')
+  expect(row?.serverStatus).toBe('VOIDED')
+  expect(row?.draftSyncError).toBe('local marker')
 })

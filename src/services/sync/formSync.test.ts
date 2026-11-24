@@ -303,3 +303,16 @@ describe('form delivery regression tests', () => {
     expect(await getPendingFormFinals('user-2')).toHaveLength(0)
   })
 })
+
+
+it('saves a corrected filing unit and mirrors subject without losing answers', async () => {
+  const row = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '2', fieldDefinitionsSnapshot: []
+  })
+  await saveLocalFormDraft(row.localId, { note: 'preserved' }, '3')
+  const saved = (await db.formSubmissions.get(row.id))!
+  expect(saved.reporterUnitId).toBe('3')
+  expect(saved.subjectUnitId).toBe('3')
+  expect(saved.formData).toEqual({ note: 'preserved' })
+  expect(isFormDraftOwnedByUser(saved, 'user-1')).toBe(true)
+})

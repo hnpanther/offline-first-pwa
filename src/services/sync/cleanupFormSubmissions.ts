@@ -14,16 +14,12 @@ function syncedRetentionAnchor(row: LocalFormSubmission): number {
   return row.syncedAt ?? row.submittedAt ?? row.updatedAt ?? row.createdAt
 }
 
-function failedRetentionAnchor(row: LocalFormSubmission): number {
-  return row.submittedAt ?? row.updatedAt ?? row.createdAt
-}
-
 /**
  * Whether one local form submission may be deleted under the given windows.
  *
- * Parity with `isEligibleForLocalPurge` for rounds, simplified: forms have no
- * deadline / reopen / late-progress path. Undelivered drafts and pending finals
- * are never purged — the readings exist only here.
+ * Delivered forms follow the synced retention window. Drafts and every unconfirmed
+ * final (including failed deliveries) are never purged: there is no server-kept receipt
+ * for forms, so those readings may exist only here.
  */
 export function isEligibleForFormLocalPurge(
   row: LocalFormSubmission,
@@ -50,14 +46,8 @@ export function isEligibleForFormLocalPurge(
     return now - syncedRetentionAnchor(row) > windows.syncedMs
   }
 
-  // Refused final (`failed`). Only when the server's unsynced purge switch is on —
-  // and never treat a VALIDATION_ERROR awaiting correction as disposable if we have
-  // no proof the server kept a copy. Forms have no `serverKeptAt`, so failed rows
-  // are undelivered: purge only under the unsynced window when that switch is on
-  // (same family as log-sheet failed-with-kept when the admin opts in).
-  if (row.syncStatus === 'failed') {
-    return windows.failedMs != null && now - failedRetentionAnchor(row) > windows.failedMs
-  }
+  // A refusal is not proof of server preservation. Forms have no kept receipt,
+  // so even an opt-in unsynced policy must not delete their only recoverable copy.
 
   return false
 }

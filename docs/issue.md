@@ -630,17 +630,17 @@ No commit or branch is created. The companion repository tracks the same identif
 
 | Id | Severity | Finding | Status |
 |---|---|---|---|
-| F-01 | Critical | Local read/put race overwrites a newer answer | Partly fixed: local mutation transactions; history merge concurrency remains open |
+| F-01 | Critical | Local read/put race overwrites a newer answer | Fixed: local mutations and per-submission history merges are transactional |
 | F-02 | Critical | Offline schema differs from the first server snapshot | Open |
 | F-03 | High | Interrupted final remains syncing and is never retried | Fixed in working tree: interrupted finals remain retryable |
-| F-04 | High | PWA filing unit does not match server contract | Open |
+| F-04 | High | PWA filing unit does not match server contract | Fixed: one searchable filing-unit picker, linked units intersect caller scope |
 | F-05 | High | Attachment remint submits stale ids; parked media bypasses delivery gate | Partly fixed: remint reload and parked-file gate; correction UX/reference reconciliation remains open |
 | F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Open |
 | F-07 | High | Server mutations have neither row lock nor optimistic version | Open |
 | F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Open |
 | F-09 | High | Omitting reporterUnitId bypasses fill gate on an existing draft | Fixed in working tree: effective filing unit always checked |
 | F-10 | Medium | History is unbounded; catalog performs per-form queries | Open |
-| F-11 | High | Failed form retention may delete the only copy | Open |
+| F-11 | High | Failed form retention may delete the only copy | Fixed: failed forms are retained without a server-kept receipt |
 | F-12 | Medium | Rejected final may commit a changed filing unit | Fixed in working tree: unit mutation follows validation |
 
 ### F-01: Local read/put race overwrites a newer answer
@@ -710,3 +710,25 @@ interrupted retry with ownership, reminted attachment ids, and permanent upload 
 Backend: `FormSubmissionServiceTest` passed (2 tests, no failures/errors/skips).
 PWA: `tsc --noEmit` passed. No PostgreSQL integration run, browser/device run or load test
 was performed in this checkpoint. Backend `git diff --check` passed.
+
+### Second implementation checkpoint (2026-11-24, no commit)
+
+F-01 completed: each history row is read, checked and written in one Dexie transaction,
+serializing against local mutations. Regression tests exercise both orderings of a history
+merge and a local metadata patch. This does not provide a multi-tab network lock or fix
+out-of-order server snapshots (separate lifecycle/version work).
+
+F-04 completed: the PWA has a single searchable filing-unit picker. Choices come from
+cached operational units intersected with definition links and caller scope; plant-wide
+access skips only caller scope, never form links. Missing scope fails closed for new filing.
+The primary unit is preferred only when eligible. Explicit start creates the draft before
+media fields mount. Existing drafts may correct the unit; saving mirrors subject to reporter.
+The subject/observation picker is removed; the wire column remains for compatibility.
+
+F-11 completed: failed submissions cannot be purged under either legacy fallback or enabled
+unsynced retention because forms do not have a server-kept receipt. Delivered retention is
+unchanged. Remaining: F-02, F-05 correction/reference reconciliation, F-06, F-07, F-08, F-10.
+
+Validation: 36 PWA tests passed across formFilingUnits, formSync, formHistorySync,
+cleanupFormSubmissions and formMediaOrder. No live browser/device or database test in this
+checkpoint. No dependency/CDN/network asset, migration, commit or branch added.

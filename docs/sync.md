@@ -1004,7 +1004,7 @@ it into the live round. Until the owner comes back, it stays.
 | A file the operator removed | at once if it never reached the server; otherwise kept as «to delete» until the server confirms the delete |
 | **NFC fault reports** | **never** — sent ones stay too; only a wipe or clearing the app's data removes them |
 | **Reference lists** (lookup, backend §31) | when the lease runs out — per list, `device_lease_hours` (default 24) counted from the last sync that refreshed it, checked at every start and sign-in **even offline**; when the device clock reads earlier than the server time it last saw for that list; when no assigned round **and** no FILL-able form needs the list any more (next `syncRequiredLookups`); when the server answers 403/404 for it; and at sign-out (`clearAllLookups`, form lists and round lists together) plus the `requiredFormLookups` key, the offline-session lock and a wipe — personal data. Drafts, queued finals and signature blobs are not in these stores |
-| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Failed finals: never unless the unsynced switch is on. A dirty draft and an unsynced final are also kept when history is merged |
+| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Failed finals: never; without a server-kept receipt this may be the only copy. A dirty draft and an unsynced final are also kept when history is merged |
 | Plant reference data from round bundles (assets, classes, field definitions, locations, templates, units) | never removed; each bundle overwrites what it carries |
 | The inbox snapshot | replaced by every inbox pull; cleared at sign-out, the offline-session lock, a user switch and a wipe |
 | The session (`authSession`) | online: when the server says it ended (401), when its expiry passes on the server's clock, or when the device-status check finds this device revoked with enrolment on; offline: kept — until the offline-session lock, if the plant switched it on; sign-out and a wipe |
@@ -1733,7 +1733,7 @@ from any *other* cause restores rather than loses. See `AGENTS.md` for the full 
 Form saves, finalization and delivery acknowledgements perform their read/modify/write
 inside Dexie read-write transactions. Dirty stamps advance monotonically even when the
 wall clock stalls or moves backwards, so a save cannot share a previously acknowledged
-stamp. Form history merge concurrency remains open (F-01); this is not a cross-tab lock.
+stamp. History merges use a per-submission read-write transaction too; this is not a cross-tab network lock.
 
 The serialized final lane also selects persisted `syncing` forms for their original owner,
 using the original action id. Closing the app during a request no longer strands that row.
@@ -1744,3 +1744,17 @@ not proof of delivery. Correction UX and reference reconciliation remain open as
 No external assets or runtime internet dependency was added.
 
 Tests: `formSync.test.ts`, `formMediaOrder.test.ts`; review status: `docs/issue.md` F-01/F-03/F-05.
+
+
+### Filing unit and undelivered retention (2026-11-24)
+
+The form fill page uses one searchable filing-unit picker, entirely from cached units.
+Eligible units are form links intersected with caller scope; plant-wide users still need
+form links. The observation-unit picker is removed because the server mirrors subject to
+reporter. The preferred unit must be eligible. Start explicitly creates a local draft before
+media controls mount, preventing files without an owner and allowing a different eligible
+unit to be chosen. Saving an existing draft can correct its unit and mirrors subject too.
+
+Failed forms are never automatically purged, even with unsynced purge enabled or missing
+policy fallback: no server-kept receipt proves the answers exist elsewhere. Successfully
+delivered forms retain their configured cleanup window. See F-04/F-11 in `docs/issue.md`.

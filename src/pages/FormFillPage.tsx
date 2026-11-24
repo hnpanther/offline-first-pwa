@@ -3,10 +3,8 @@ import {
   Box,
   Button,
   CircularProgress,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Select,
+  Autocomplete,
+  TextField,
   Stack,
   Typography
 } from '@mui/material'
@@ -36,6 +34,7 @@ import {
 import { isFormSubmissionVisibleToSession } from '@/utils/formSubmissionVisibility'
 import { FORM_OWNER } from '@/utils/signatureVerdict'
 import { listKey } from '@/services/lookups/lookupStore'
+import { formFilingUnits, defaultFilingUnit } from '@/utils/formFilingUnits'
 import { offlineFormFillBlocked } from '@/utils/formFillGate'
 import { persianFormTitle } from '@/utils/persianFormTitle'
 import { useAppStore } from '@/store'
@@ -59,7 +58,6 @@ export function FormFillPage() {
   const [submission, setSubmission] = useState<LocalFormSubmission | null>(null)
   const [units, setUnits] = useState<OperationalUnit[]>([])
   const [reporterUnitId, setReporterUnitId] = useState('')
-  const [subjectUnitId, setSubjectUnitId] = useState('')
   const [lookupsReady, setLookupsReady] = useState(true)
   const [fillBlocked, setFillBlocked] = useState(false)
 
@@ -75,15 +73,6 @@ export function FormFillPage() {
     [submission, definition]
   )
 
-  const subjectChoices = useMemo(() => {
-    const fromDef = definition?.subjectUnitIds ?? []
-    if (fromDef.length > 0) return units.filter(u => fromDef.includes(u.id))
-    if (submission?.subjectUnitId) {
-      return units.filter(u => u.id === submission.subjectUnitId)
-    }
-    return units
-  }, [definition, submission, units])
-
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -93,14 +82,6 @@ export function FormFillPage() {
         loadPrimaryUnitId(),
         loadAccessibleUnitIds()
       ])
-      setUnits(allUnits)
-
-      const defaultReporter =
-        primary ??
-        accessible[0] ??
-        allUnits[0]?.id ??
-        ''
-
       if (mode === 'edit' && localId) {
         const row = await getFormSubmission(localId)
         const sessionUserId = await getSessionUserId()
@@ -117,10 +98,10 @@ export function FormFillPage() {
         }
         setSubmission(row)
         setReporterUnitId(row.reporterUnitId)
-        setSubjectUnitId(row.subjectUnitId)
         form.reset(row.formData ?? {})
         const def = await getFormDefinition(row.formDefinitionId)
         setDefinition(def ?? null)
+        setUnits(formFilingUnits(allUnits, def?.subjectUnitIds ?? [], accessible, plantWide))
         await noteLookupGate(def?.requiredLookups)
       } else if (formId) {
         const def = await getFormDefinition(formId)
@@ -129,28 +110,12 @@ export function FormFillPage() {
           return
         }
         setDefinition(def)
-        const blocked = await noteLookupGate(def.requiredLookups)
-        if (blocked) return
-        const firstSubject = def.subjectUnitIds[0] ?? ''
-        setReporterUnitId(defaultReporter)
-        setSubjectUnitId(firstSubject)
+        setSubmission(null)
+        const choices = formFilingUnits(allUnits, def.subjectUnitIds, accessible, plantWide)
+        setUnits(choices)
+        setReporterUnitId(defaultFilingUnit(choices, primary))
         form.reset({})
-        // Create an empty local draft immediately so media fields have an owner key and the
-        // schema freeze matches the server's "first draft save" rule once sync lands.
-        if (defaultReporter && firstSubject) {
-          const created = await createLocalFormDraft({
-            formDefinitionId: def.id,
-            formCode: def.code,
-            formTitle: def.title,
-            reporterUnitId: defaultReporter,
-            subjectUnitId: firstSubject,
-            fieldDefinitionsSnapshot: def.fields,
-            formData: {}
-          })
-          setSubmission(created)
-          navigate(`/forms/${created.localId}`, { replace: true })
-          void syncManager.pushFormDraftsNow()
-        }
+        await noteLookupGate(def.requiredLookups)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'خطا در بارگذاری فرم')
@@ -199,22 +164,22 @@ export function FormFillPage() {
   }, [])
 
   const ensureDraft = async (values: Record<string, unknown>): Promise<LocalFormSubmission | null> => {
+    if (!units.some(unit => unit.id === reporterUnitId)) {
+      setError('واحد ثبت‌کنندهٔ مجاز را انتخاب کنید.')
+      return null
+    }
     if (submission) {
-      const saved = await saveLocalFormDraft(submission.localId, values)
+      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId)
       if (saved) setSubmission(saved)
       return saved ?? null
     }
     if (!definition) return null
-    if (!reporterUnitId || !subjectUnitId) {
-      setError(t.forms.pickSubject)
-      return null
-    }
     const created = await createLocalFormDraft({
       formDefinitionId: definition.id,
       formCode: definition.code,
       formTitle: definition.title,
       reporterUnitId,
-      subjectUnitId,
+      subjectUnitId: reporterUnitId,
       fieldDefinitionsSnapshot: definition.fields,
       formData: values
     })
@@ -334,50 +299,27 @@ export function FormFillPage() {
       )}
 
       {!readOnly && (
-        <Stack spacing={2} sx={{ mb: 2 }}>
-          <FormControl fullWidth size="small">
-            <InputLabel id="reporter-unit-label">{t.forms.reporterUnit}</InputLabel>
-            <Select
-              labelId="reporter-unit-label"
-              label={t.forms.reporterUnit}
-              value={reporterUnitId}
-              disabled={!!submission}
-              onChange={e => setReporterUnitId(String(e.target.value))}
-            >
-              {units.map(u => (
-                <MenuItem key={u.id} value={u.id}>
-                  {u.name} ({u.code})
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          <FormControl fullWidth size="small">
-            <InputLabel id="subject-unit-label">{t.forms.subjectUnit}</InputLabel>
-            <Select
-              labelId="subject-unit-label"
-              label={t.forms.subjectUnit}
-              value={subjectUnitId}
-              disabled={!!submission}
-              onChange={e => setSubjectUnitId(String(e.target.value))}
-            >
-              {subjectChoices.length === 0 ? (
-                <MenuItem value="" disabled>
-                  {t.forms.noUnits}
-                </MenuItem>
-              ) : (
-                subjectChoices.map(u => (
-                  <MenuItem key={u.id} value={u.id}>
-                    {u.name} ({u.code})
-                  </MenuItem>
-                ))
-              )}
-            </Select>
-          </FormControl>
-        </Stack>
+        <Box sx={{ mb: 2 }}>
+          <Autocomplete
+            options={units}
+            value={units.find(unit => unit.id === reporterUnitId) ?? null}
+            onChange={(_, unit) => setReporterUnitId(unit?.id ?? '')}
+            getOptionLabel={unit => `${unit.name} · ${unit.code}`}
+            isOptionEqualToValue={(a, b) => a.id === b.id}
+            noOptionsText="واحد مجازی برای ثبت این فرم در دسترس نیست."
+            disabled={busy}
+            renderInput={params => <TextField {...params} label={t.forms.reporterUnit} size="small" />}
+          />
+          {!submission && (
+            <Button sx={{ mt: 2 }} variant="contained" disabled={busy || !reporterUnitId || fillBlocked}
+              onClick={() => void handleSaveDraft()}>
+              شروع تکمیل فرم
+            </Button>
+          )}
+        </Box>
       )}
 
-      {fields.length === 0 ? (
+      {submission && (fields.length === 0 ? (
         <Alert severity="warning">فیلدی برای این فرم تعریف نشده است.</Alert>
       ) : (
         <DynamicClassForm
@@ -399,9 +341,9 @@ export function FormFillPage() {
           // draft or final submit.
           signatureContext={{ owner: FORM_OWNER }}
         />
-      )}
+      ))}
 
-      {!readOnly && (
+      {submission && !readOnly && (
         <Stack direction="row" spacing={1} sx={{ mt: 3 }} justifyContent="flex-end">
           <Button
             variant="outlined"

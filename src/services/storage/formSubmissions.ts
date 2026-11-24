@@ -152,7 +152,8 @@ export async function createLocalFormDraft(input: {
 
 export async function saveLocalFormDraft(
   localId: string,
-  formData: Record<string, unknown>
+  formData: Record<string, unknown>,
+  reporterUnitId?: string
 ): Promise<LocalFormSubmission | undefined> {
   return db.transaction('rw', db.formSubmissions, async () => {
     const existing = await getFormSubmission(localId)
@@ -161,6 +162,8 @@ export async function saveLocalFormDraft(
     const next: LocalFormSubmission = {
       ...existing,
       formData,
+      reporterUnitId: reporterUnitId ?? existing.reporterUnitId,
+      subjectUnitId: reporterUnitId ?? existing.reporterUnitId,
       locallyEditedAt: now,
       draftSyncStatus: 'pending',
       draftSyncError: undefined,

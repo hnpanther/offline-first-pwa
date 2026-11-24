@@ -285,4 +285,4 @@ acknowledgements and sync-status changes in Dexie read-write transactions. Read 
 must share that transaction: merging an old object with `put` can overwrite a concurrent
 save even when the acknowledgement compares edit stamps. Draft save stamps use the maximum
 of wall clock, previous edit + 1 and previous acknowledgement + 1. No store/schema upgrade
-is needed. Remote history merge atomicity is still tracked under F-01.
+is needed. Each remote history merge now reads/checks/writes in a per-submission read-write transaction too (F-01).
