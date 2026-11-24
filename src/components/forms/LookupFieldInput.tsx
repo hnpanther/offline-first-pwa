@@ -18,6 +18,23 @@ import {
   type LookupChoiceValue
 } from '@/utils/lookupValue'
 
+/** Title, then the code in parentheses in its own left-to-right run so a number in the title stays distinct. */
+function LookupChoiceLabel({ choice }: { choice: LookupChoiceValue }) {
+  const hasLabel = Boolean(choice.label && choice.label !== choice.code)
+  const note =
+    choice.state === 'INACTIVE' ? ' · غیرفعال'
+      : choice.state === 'UNKNOWN' ? ' · خارج از فهرست'
+        : !choice.state && !choice.label ? ' · بررسی هنگام ارسال'
+          : ''
+  return (
+    <span>
+      {hasLabel ? choice.label : choice.code}
+      {hasLabel ? <> <bdi dir="ltr">({choice.code})</bdi></> : null}
+      {note}
+    </span>
+  )
+}
+
 /**
  * A field that draws from a reference list (backend roadmap §31 Phase 2).
  *
@@ -212,7 +229,7 @@ export function LookupFieldInput({
       return (
         <li key={key ?? optionCode(o)} {...rest}>
           <div>
-            <div>{lookupChoiceText(o)}</div>
+            <div><LookupChoiceLabel choice={o} /></div>
             {'detail' in o && o.detail ? <small style={{ opacity: 0.7 }}>{o.detail}</small> : null}
           </div>
         </li>
@@ -264,7 +281,7 @@ export function LookupFieldInput({
               {...tagProps}
               size="small"
               color={'state' in choice && choice.state && choice.state !== 'ACTIVE' ? 'warning' : 'default'}
-              label={lookupChoiceText(choice)}
+              label={<LookupChoiceLabel choice={choice} />}
             />
           )
         })}

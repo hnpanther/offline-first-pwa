@@ -84,12 +84,16 @@ export function toLookupValue(choices: LookupChoiceValue[], multi: boolean): unk
 }
 
 /**
- * «علی رضایی (1234)», with the server's verdict beside it when it is not the ordinary case — and,
+ * «علی رضایی · 1234», with the server's verdict beside it when it is not the ordinary case — and,
  * for a bare code nobody has resolved yet (code-only entry, or «use this code»), a word saying the
  * server will look it up, so a typed code never reads as if it had been checked.
+ *
+ * A middle dot, not parentheses: this string is one run, and in RTL a parenthesised code mirrors
+ * and sits against a number already in the title. The picker draws the code in parentheses inside
+ * its own left-to-right run (`LookupChoiceLabel`).
  */
 export function lookupChoiceText(choice: LookupChoiceValue): string {
-  const base = choice.label && choice.label !== choice.code ? `${choice.label} (${choice.code})` : choice.code
+  const base = choice.label && choice.label !== choice.code ? `${choice.label} · ${choice.code}` : choice.code
   if (choice.state === 'INACTIVE') return `${base} · غیرفعال`
   if (choice.state === 'UNKNOWN') return `${base} · خارج از فهرست`
   if (!choice.state && !choice.label) return `${choice.code} · بررسی هنگام ارسال`

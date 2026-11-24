@@ -98,10 +98,10 @@ describe('lookup value', () => {
   })
 
   it('shows the recorded label with the server’s verdict', () => {
-    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'ACTIVE' })).toBe('علی (1)')
-    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'INACTIVE' })).toBe('علی (1) · غیرفعال')
+    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'ACTIVE' })).toBe('علی · 1')
+    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'INACTIVE' })).toBe('علی · 1 · غیرفعال')
     expect(lookupChoiceText({ code: '9', state: 'UNKNOWN' })).toBe('9 · خارج از فهرست')
-    expect(lookupDisplayValue([{ code: '1', label: 'الف' }, { code: '2', label: 'ب' }])).toBe('الف (1)، ب (2)')
+    expect(lookupDisplayValue([{ code: '1', label: 'الف' }, { code: '2', label: 'ب' }])).toBe('الف · 1، ب · 2')
   })
 
   it('a required lookup needs a code — an empty array or an object without one is blank', () => {
@@ -260,7 +260,7 @@ describe('a code the device copy does not have yet', () => {
 
   it('a bare code reads as not yet checked, never as a resolved choice', () => {
     expect(lookupChoiceText({ code: '1077' })).toBe('1077 · بررسی هنگام ارسال')
-    expect(lookupChoiceText({ code: '1077', label: 'حسین', state: 'ACTIVE' })).toBe('حسین (1077)')
+    expect(lookupChoiceText({ code: '1077', label: 'حسین', state: 'ACTIVE' })).toBe('حسین · 1077')
   })
 })
 
