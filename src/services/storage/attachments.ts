@@ -351,8 +351,10 @@ export async function getUnsentFormAttachments(
     .where('formSubmissionLocalId')
     .equals(formSubmissionLocalId)
     .toArray()
+  const form = await db.formSubmissions.where('localId').equals(formSubmissionLocalId).first()
   return rows.filter(
     r =>
+      form && r.blob != null && attachmentIdsOf(form.formData?.[r.fieldKey]).includes(r.id) &&
       !r.pendingDelete &&
       r.syncStatus !== 'synced'
   )

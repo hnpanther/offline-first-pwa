@@ -825,6 +825,7 @@ export interface CachedFormDefinition {
  * - `syncStatus` — delivery of a final submit; counted in the pending badge
  */
 export interface LocalFormSubmission {
+  lastSavedByName?: string
   serverUpdatedAt?: number
   schemaVersionId?: string
   id: string

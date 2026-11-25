@@ -255,12 +255,21 @@ export function AttachmentFieldInput({
   const captureGuard = useRef(createCaptureGuard())
 
   const ids = attachmentIdsOf(value)
+  const formIds = useRef(ids)
+  formIds.current = ids
+  const [available, setAvailable] = useState<LocalAttachment[]>([])
+  const editFormReference = (id: string, add: boolean) => {
+    const next = formIds.current.filter(existing => existing !== id)
+    if (add) next.push(id)
+    formIds.current = next
+    onChange(buildAttachmentRef(next))
+  }
   /** Only a trigger: a session binding mid-form must re-run {@link refresh}'s adoption. */
   const boundUserId = useAppStore(s => s.sessionUserId)
 
   const refresh = useCallback(async () => {
-    const rows = await getAttachmentsByIds(ids)
-    setItems(rows)
+    const rows = isFormOwner ? [] : await getAttachmentsByIds(ids)
+    if (!isFormOwner) setItems(rows)
 
     // Counted separately from what is displayed, because the two answer different questions.
     // The list shows what this form value references; the ceiling is enforced by the server
@@ -271,6 +280,17 @@ export function AttachmentFieldInput({
     const forField = await listForField(owner)
     const counted = new Set(rows.map(r => r.id))
     forField.forEach(r => counted.add(r.id))
+    if (isFormOwner) {
+      // A reopened form can reference files held only by the server. Preserve them until
+      // explicitly removed. Offer unreferenced local captures for deliberate recovery.
+      const selected = forField.filter(file => ids.includes(file.id))
+      setItems(selected)
+      setAvailable(forField.filter(file => !ids.includes(file.id)))
+      setFieldCount(ids.length)
+      const urls = await mediaUrls.current!.update(selected)
+      if (urls) setMediaSrc(urls)
+      return
+    }
     setFieldCount(counted.size)
 
     // A row this device holds for this field that the form value does not name is **adopted**
@@ -403,6 +423,7 @@ export function AttachmentFieldInput({
     // unowned row is handled by `isAttachmentOwnedByUser`'s legacy fallback.
     const capturedBy = await getSessionUserId()
     await saveAttachment(capturedBy ? { ...attachment, createdByUserId: capturedBy } : attachment)
+    if (isFormOwner) { editFormReference(attachment.id, true); return }
     const onDevice = await listForField(capturedBy)
     onChange(buildAttachmentRef(
       fieldReferenceForOwner(capturedBy, onDevice, ids, { add: attachment.id }).ids))
@@ -605,6 +626,7 @@ export function AttachmentFieldInput({
     // has. It queues the deletion when the server holds a copy — the sync pass then decides
     // whether to carry it there (sheet not yet submitted) or keep the server's copy as
     // delivered evidence (sheet submitted).
+    if (isFormOwner) { editFormReference(id, false); return }
     await removeAttachment(id)
     // Rebuilt from the device for the same reason as `persist`: subtracting from the id
     // list this render closed over means two deletes in quick succession disagree, and
@@ -780,6 +802,17 @@ export function AttachmentFieldInput({
       )}
 
       <Stack spacing={1}>
+        {isFormOwner && ids.filter(id => !items.some(item => item.id === id)).map(id => (
+          <Stack key={id} direction="row" spacing={1}>
+            <Typography variant="caption">پیوست بدون نسخهٔ محلی · {id}</Typography>
+            {!readOnly && <Button onClick={() => editFormReference(id, false)}>حذف از پاسخ</Button>}
+          </Stack>
+        ))}
+        {isFormOwner && !readOnly && available.map(file => (
+          <Button key={file.id} disabled={atLimit} onClick={() => editFormReference(file.id, true)}>
+            افزودن فایل محلی به پاسخ · {file.id}
+          </Button>
+        ))}
         {items.map(item => (
           <Box
             key={item.id}

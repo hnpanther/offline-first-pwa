@@ -1,6 +1,7 @@
 import { deleteRemoteAttachment, uploadAttachment } from '@/services/api'
 import { ApiError } from '@/services/api/client'
 import {
+  attachmentIdsOf,
   deleteAttachment,
   getPendingAttachmentDeletes,
   getPendingAttachments,
@@ -99,7 +100,8 @@ async function ownWork(
         forms.set(row.formSubmissionLocalId, await getFormSubmission(row.formSubmissionLocalId))
       }
       const form = forms.get(row.formSubmissionLocalId)
-      if (isFormAttachmentUploadableByUser(form, userId, row)) out.push(row)
+      if (isFormAttachmentUploadableByUser(form, userId, row) &&
+          attachmentIdsOf(form?.formData?.[row.fieldKey]).includes(row.id)) out.push(row)
       continue
     }
     if (!row.logSheetLocalId) continue
@@ -148,7 +150,9 @@ export async function syncPendingFormAttachments(
   signal?: AbortSignal
 ): Promise<'ok' | 'aborted'> {
   const userId = await getSessionUserId()
+  await drainPendingDeletes(userId, signal, formSubmissionLocalId)
   const rows = await db.attachments.where('formSubmissionLocalId').equals(formSubmissionLocalId).toArray()
+  if (rows.some(row => row.pendingDelete)) return 'aborted'
   const pending = rows.filter(
     r =>
       r.blob != null &&
@@ -217,9 +221,12 @@ export async function syncPendingAttachments(signal?: AbortSignal): Promise<Atta
  */
 async function drainPendingDeletes(
   userId: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  formLocalId?: string
 ): Promise<number> {
-  const rows = await getPendingAttachmentDeletes()
+  const rows = formLocalId
+    ? (await db.attachments.where('formSubmissionLocalId').equals(formLocalId).toArray()).filter(r => r.pendingDelete)
+    : await getPendingAttachmentDeletes()
   let removed = 0
 
   for (const row of rows) {
@@ -229,14 +236,16 @@ async function drainPendingDeletes(
     // evidence (mirror submitted log sheets) — drop the local row, leave the server copy.
     if (row.formSubmissionLocalId) {
       const form = await getFormSubmission(row.formSubmissionLocalId)
-      if (!form || form.status === 'submitted') {
+      const delivered = form?.serverStatus ? form.serverStatus !== 'DRAFT'
+        : form?.status === 'submitted' && form.syncStatus === 'synced'
+      if (!form || delivered) {
         await deleteAttachment(row.id)
         removed++
         continue
       }
-      if (!isFormAttachmentUploadableByUser(form, userId, row)) continue
+      if (!row.formSubmissionId || !isFormAttachmentUploadableByUser(form, userId, row)) continue
       try {
-        await deleteRemoteAttachment(row.id, signal)
+        await deleteRemoteAttachment(row.id, signal, { submissionId: row.formSubmissionId, fieldKey: row.fieldKey })
         await deleteAttachment(row.id)
         removed++
       } catch (err) {

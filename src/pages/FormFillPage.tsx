@@ -50,11 +50,13 @@ export function FormFillPage() {
   const { formId, localId } = useParams<{ formId?: string; localId?: string }>()
   const mode: Mode = localId ? 'edit' : 'new'
   const authSession = useAppStore(s => s.authSession)
+  const saverName = authSession?.fullName?.trim() || authSession?.username
   const plantWide = hasPlantWideScope(authSession)
 
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [validationAttempt, setValidationAttempt] = useState<{ recordedAt: number; final: boolean } | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [definition, setDefinition] = useState<CachedFormDefinition | null>(null)
   const [submission, setSubmission] = useState<LocalFormSubmission | null>(null)
@@ -75,8 +77,19 @@ export function FormFillPage() {
     [submission, definition]
   )
 
+  const issues = validationAttempt
+    ? findFormSubmitBlockingIssues(fields, form.watch(), validationAttempt.recordedAt, validationAttempt.final)
+    : []
+  const fieldErrors = {
+    ...form.formState.errors,
+    ...Object.fromEntries(issues.map(issue => [issue.fieldKey, {
+      type: 'manual', message: issue.problem ?? 'این فیلد الزامی است'
+    }]))
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
+    setValidationAttempt(null)
     setError(null)
     try {
       const [allUnits, primary, accessible] = await Promise.all([
@@ -171,13 +184,14 @@ export function FormFillPage() {
       return null
     }
     if (submission) {
-      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId, recordedAt)
+      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId, recordedAt, saverName)
       if (saved) setSubmission(saved)
       return saved ?? null
     }
     if (!definition) return null
     const created = await createLocalFormDraft({
       recordedAt,
+      lastSavedByName: saverName,
       formDefinitionId: definition.id,
       schemaVersionId: definition.schemaVersionId,
       formCode: definition.code,
@@ -200,8 +214,9 @@ export function FormFillPage() {
     try {
       const values = form.getValues()
       const recordedAt = serverNow()
-      const invalid = findFormSubmitBlockingIssues(fields, values, recordedAt).filter(issue => issue.problem)
-      if (invalid.length) { setError(describeFormSubmitBlockingIssues(invalid)); return }
+      const invalid = findFormSubmitBlockingIssues(fields, values, recordedAt, false)
+      setValidationAttempt(invalid.length ? { recordedAt, final: false } : null)
+      if (invalid.length) return
       const row = await ensureDraft(values, recordedAt)
       if (!row) return
       setInfo(t.forms.draftSaved)
@@ -221,10 +236,8 @@ export function FormFillPage() {
       const values = form.getValues()
       const recordedAt = serverNow()
       const issues = findFormSubmitBlockingIssues(fields, values, recordedAt)
-      if (issues.length > 0) {
-        setError(describeFormSubmitBlockingIssues(issues) || t.forms.validationBlocked)
-        return
-      }
+      setValidationAttempt(issues.length ? { recordedAt, final: true } : null)
+      if (issues.length) return
       const row = await ensureDraft(values, recordedAt)
       if (!row) return
       const finalised = await markFormSubmissionLocallyFinal(row.localId, values, recordedAt)
@@ -280,6 +293,9 @@ export function FormFillPage() {
         {title}
       </Typography>
 
+      {submission?.lastSavedByName && (
+        <Typography variant="body2" sx={{ mb: 2 }}>آخرین ذخیره‌کنندهٔ پاسخ‌ها: {submission.lastSavedByName}</Typography>
+      )}
       {!lookupsReady && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           {t.forms.offlineNotReady}
@@ -290,7 +306,11 @@ export function FormFillPage() {
           {t.forms.offlineReady}
         </Alert>
       )}
-      {error && (
+      {submission?.draftSyncError && <Alert severity="warning">{submission.draftSyncError}</Alert>}
+      {submission && !submission.schemaVersionId && definition && (submission.draftSyncError || submission.syncError) && (
+        <Button onClick={() => navigate(`/forms/new/${definition.id}`)}>شروع فرم جدید برای بازبینی پاسخ‌ها</Button>
+      )}
+      {error && (!submission || readOnly) && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
         </Alert>
@@ -347,7 +367,7 @@ export function FormFillPage() {
         <DynamicClassForm
           fields={fields}
           control={form.control}
-          errors={form.formState.errors}
+          errors={fieldErrors}
           readOnly={readOnly}
           readOnlyValues={readOnly ? (submission?.formData ?? {}) : undefined}
           attachmentContext={
@@ -365,6 +385,11 @@ export function FormFillPage() {
         />
       ))}
 
+      {submission && !readOnly && (error || issues.length > 0) && (
+        <Alert severity="error" sx={{ mt: 2 }}>
+          {error || describeFormSubmitBlockingIssues(issues)}
+        </Alert>
+      )}
       {submission && !readOnly && (
         <Stack direction="row" spacing={1} sx={{ mt: 3 }} justifyContent="flex-end">
           <Button

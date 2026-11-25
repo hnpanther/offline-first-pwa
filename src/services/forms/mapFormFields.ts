@@ -1,5 +1,6 @@
 import { toIdString } from '@/utils/ids'
 import type { FieldDefinition, FieldDataType } from '@/types/sync'
+import type { LocalFormSubmission } from '@/types'
 import type { RequiredLookup } from '@/services/api'
 
 /** Wire shape of a field on GET /api/forms and form submission snapshots. */
@@ -56,4 +57,16 @@ export function mapRequiredLookups(
       name: r.name ?? r.code,
       revision: typeof r.revision === 'number' ? r.revision : 0
     }))
+}
+
+/** Legacy devices kept the field definition but had no published version id. */
+export function formSchemaEvidence(row: Pick<LocalFormSubmission,
+  'schemaVersionId' | 'fieldDefinitionsSnapshot'>) {
+  if (row.schemaVersionId != null) return { schemaVersionId: row.schemaVersionId }
+  return { legacyFields: row.fieldDefinitionsSnapshot?.map(field => ({
+    id: /^\d+$/.test(field.id) ? field.id : undefined,
+    key: field.key, label: field.label, dataType: field.dataType,
+    unit: field.unit, required: field.required, validation: field.validation,
+    order: field.order, version: field.version
+  })) }
 }

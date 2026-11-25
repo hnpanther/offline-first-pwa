@@ -59,6 +59,7 @@ export function isEligibleForFormLocalPurge(
   // Refused final — same window as a failed round when the unsynced purge is enabled
   // (or the legacy 7-day window on a device that never received deviceRetention).
   if (row.syncStatus === 'failed') {
+    if (row.lastSubmitOutcome === 'VALIDATION_ERROR') return false
     return windows.failedMs != null && now - failedRetentionAnchor(row) > windows.failedMs
   }
 

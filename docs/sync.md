@@ -478,7 +478,7 @@ sheets; never blocks draft or final submit).
 **Local retention:** after a successful sync pass (and when coming online with a session),
 `cleanupLocalFormSubmissions` applies the same `deviceRetention` windows as rounds. Open drafts
 and pending finals are never purged. Synced `SUBMITTED` / `APPROVED` (and synced `VOIDED`) age
-out after `syncedRetentionHours`. Failed finals follow the unsynced purge switch.
+out after `syncedRetentionHours`. A validation refusal awaiting correction is kept. Other failed finals follow the unsynced purge switch.
 
 **An expired draft with edits is reported too, once (backend V25, issue P-01).** It used to be
 excluded — «a progress report is about a round still being walked» — and an operator who walked
@@ -1004,7 +1004,7 @@ it into the live round. Until the owner comes back, it stays.
 | A file the operator removed | at once if it never reached the server; otherwise kept as «to delete» until the server confirms the delete |
 | **NFC fault reports** | **never** — sent ones stay too; only a wipe or clearing the app's data removes them |
 | **Reference lists** (lookup, backend §31) | when the lease runs out — per list, `device_lease_hours` (default 24) counted from the last sync that refreshed it, checked at every start and sign-in **even offline**; when the device clock reads earlier than the server time it last saw for that list; when no assigned round **and** no FILL-able form needs the list any more (next `syncRequiredLookups`); when the server answers 403/404 for it; and at sign-out (`clearAllLookups`, form lists and round lists together) plus the `requiredFormLookups` key, the offline-session lock and a wipe — personal data. Drafts, queued finals and signature blobs are not in these stores |
-| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Failed finals: never; without a server-kept receipt this may be the only copy. A dirty draft and an unsynced final are also kept when history is merged |
+| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Finals awaiting validation correction: never. Other failed finals follow the unsynced retention setting. A dirty draft and an unsynced final are also kept when history is merged |
 | Plant reference data from round bundles (assets, classes, field definitions, locations, templates, units) | never removed; each bundle overwrites what it carries |
 | The inbox snapshot | replaced by every inbox pull; cleared at sign-out, the offline-session lock, a user switch and a wipe |
 | The session (`authSession`) | online: when the server says it ended (401), when its expiry passes on the server's clock, or when the device-status check finds this device revoked with enrolment on; offline: kept — until the offline-session lock, if the plant switched it on; sign-out and a wipe |
@@ -1740,7 +1740,7 @@ using the original action id. Closing the app during a request no longer strands
 After uploads, the lane reloads the form's answers as well as its server id: attachment id
 collision recovery can rewrite references during upload. Parked failures or missing local
 bytes are still unconfirmed media and block final delivery; upload retry eligibility is
-not proof of delivery. Correction UX and reference reconciliation remain open as F-05/F-06.
+not proof of delivery. See the F-05 correction and reference reconciliation contract below.
 No external assets or runtime internet dependency was added.
 
 Tests: `formSync.test.ts`, `formMediaOrder.test.ts`; review status: `docs/issue.md` F-01/F-03/F-05.
@@ -1755,8 +1755,8 @@ reporter. The preferred unit must be eligible. Start explicitly creates a local 
 media controls mount, preventing files without an owner and allowing a different eligible
 unit to be chosen. Saving an existing draft can correct its unit and mirrors subject too.
 
-Failed forms are never automatically purged, even with unsynced purge enabled or missing
-policy fallback: no server-kept receipt proves the answers exist elsewhere. Successfully
+Forms awaiting validation correction are kept even with unsynced purge enabled or a missing
+policy. Other failed finals use the configured failed retention window. Successfully
 delivered forms retain their configured cleanup window. See F-04/F-11 in `docs/issue.md`.
 
 
@@ -1777,7 +1777,7 @@ draft may accept server updates; a newer local edit may not.
 A failed VALIDATION_ERROR offers explicit correction. It keeps answers, files and pinned schema,
 clears the old final action, and waits for a deliberate save before sending again. Network and
 other ambiguous failures are never treated as safe-to-correct acknowledgements. Server-side
-replay receipts across reopen remain open (F-08), as does media correction UX (F-05).
+replay receipts across reopen remain open (F-08), while the F-05 correction flow is documented below.
 
 
 ## Form parent lookups and recording-time date windows (2026-11-25)
@@ -1802,3 +1802,45 @@ fields remain a final-submit rule; an answered out-of-window date is also blocke
 New definitions use these settings after catalog sync. Existing drafts retain their pinned schema.
 No external UI asset or new dependency was introduced. All selectors and date feedback work from
 bundled code and cached definitions/lists while offline, subject to the existing list lease policy.
+
+## Offline form recovery (F-02 and F-05)
+
+A new PWA filing normally carries the server-issued `schemaVersionId`. When a stored draft
+predates version IDs, the updated PWA sends `legacyFields` from the draft's own frozen fields
+on draft upsert and final submission. The server compares the complete definition, including
+field identity, label, units, validation, order and version. An existing filing uses its frozen
+snapshot. A first filing must match the current or a published definition of that same form.
+The server stores its own matching definition. Missing or unverifiable evidence on first mobile
+delivery produces a validation refusal. For example, a severity of 3 recorded on a five-point
+scale cannot silently become 3 on a ten-point scale. If the old definition was never published
+and has changed, open a new form and review the original answers manually. The original remains
+available on the device. Older apps without either version or evidence must upgrade for first delivery.
+
+The updated PWA requests `requireUploadedMedia: true` on final submission. The server checks
+each referenced image, recording, video and signature against stored uploads for the same
+filing, field and media kind before changing the filing to SUBMITTED. Existing API clients
+that omit this flag retain the late-upload contract. Deploy the backend before the PWA.
+An upload rejected as permanently invalid leaves the filing available for correction.
+Transient upload failures stay queued. Saving an explicit replacement records the answer and
+queues removal of the previous file in the same IndexedDB transaction. A file reference can
+survive a reload even when its bytes are only on the server.
+
+The form queue sends `DELETE /api/attachments/forms/{submissionId}/{id}?fieldKey=...` before
+uploading the replacement. It reuses the existing attachment-delete permission and draft edit
+scope. Missing files or a mismatched form or field are idempotent no-ops. Unreferenced local
+captures can be selected explicitly. Accepted finals follow the existing retention policy.
+A final awaiting correction after VALIDATION_ERROR stays on the device until the operator acts.
+
+## Date clearing, validation and last answer saver
+
+The Jalali date/time control offers a clear action for a populated editable value. It writes
+the existing null representation. Drafts may still be saved with required fields empty.
+A blocked save shows the summary beside the action buttons and marks the affected fields.
+The operator can correct the values in place. Date ranges are checked against recording time.
+
+Successful draft and final answer saves record the authenticated saver separately from the
+original reporter and approver. The panel detail header displays the saved name. The PWA stores
+the local saver with an offline edit and accepts the server's name with an imported filing.
+Review, void and reopen operations preserve the last answer saver. V35 recovers historical
+savers from submit actions and edits that superseded draft answers. Older records without an
+attributable save display an unknown saver in the panel.

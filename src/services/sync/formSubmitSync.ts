@@ -1,4 +1,5 @@
 import { submitFormFinal, upsertFormDraft, type FormSubmitResult } from '@/services/api'
+import { formSchemaEvidence } from '@/services/forms/mapFormFields'
 import { ApiError } from '@/services/api/client'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import {
@@ -56,6 +57,7 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
         transientError: 'ارتباط با سرور برقرار نشد'
       }
     }
+    if (ready === 'refused') { failed++; continue }
     if (ready === 'held') continue
 
     await setFormSubmissionSyncStatus(row.localId, 'syncing')
@@ -67,7 +69,8 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
         {
           submissionId: fresh.serverId ?? null,
           formDefinitionId: fresh.formDefinitionId,
-          schemaVersionId: fresh.schemaVersionId,
+          ...formSchemaEvidence(fresh),
+          requireUploadedMedia: true,
           reporterUnitId: fresh.reporterUnitId,
           subjectUnitId: fresh.subjectUnitId,
           localId: fresh.localId,
@@ -91,7 +94,7 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
       }
       failed++
       await applyFormFinalSyncResult(row.localId, {
-        outcome: 'DENIED',
+        outcome: isRejectedPayload(err) ? 'VALIDATION_ERROR' : 'DENIED',
         message: err instanceof Error ? err.message : 'خطا در ارسال فرم'
       })
     }
@@ -100,21 +103,28 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
   return { synced, failed }
 }
 
-type MediaGate = 'ready' | 'held' | 'transient'
+function isRejectedPayload(error: unknown): error is ApiError {
+  return error instanceof ApiError && [400, 413, 422].includes(error.status)
+}
+
+type MediaGate = 'ready' | 'held' | 'transient' | 'refused'
 
 /**
  * Makes sure the server still has a DRAFT, uploads this form's files, and refuses to
  * final-submit while any of them (signature included) is still unsent.
  *
- * Does not rewrite `formData`, delete attachment rows, or park a signature. A transport
- * failure stops the lane; any other miss leaves the final pending for the next pass.
+ * Transport failures are retryable. A definitive payload refusal preserves the answers and
+ * files and lets the operator correct the filing.
  */
 async function ensureDraftAndUploadMedia(
   row: LocalFormSubmission,
   signal?: AbortSignal
 ): Promise<MediaGate> {
   let unsent = await getUnsentFormAttachments(row.localId)
-  if (unsent.length === 0) return 'ready'
+  if (unsent.length === 0) {
+    if (row.serverId && await syncPendingFormAttachments(row.localId, signal) === 'aborted') return 'transient'
+    return 'ready'
+  }
 
   let serverId = row.serverId
   if (!serverId) {
@@ -123,7 +133,7 @@ async function ensureDraftAndUploadMedia(
         {
           submissionId: null,
           formDefinitionId: row.formDefinitionId,
-          schemaVersionId: row.schemaVersionId,
+          ...formSchemaEvidence(row),
           reporterUnitId: row.reporterUnitId,
           subjectUnitId: row.subjectUnitId,
           localId: row.localId,
@@ -133,7 +143,11 @@ async function ensureDraftAndUploadMedia(
         },
         signal
       )
-      if (drafted.outcome !== 'OK' || drafted.submissionId == null) return 'held'
+      if (drafted.outcome !== 'OK') {
+        await settleFinal(row, drafted)
+        return 'refused'
+      }
+      if (drafted.submissionId == null) return 'held'
       serverId = String(drafted.submissionId)
       // Local status stays `submitted`. Only the server id is stamped, so the draft lane
       // (which ignores submitted rows) cannot clear the signature on the way through.
@@ -143,6 +157,10 @@ async function ensureDraftAndUploadMedia(
       })
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) return 'transient'
+      if (isRejectedPayload(err)) {
+        await applyFormFinalSyncResult(row.localId, { outcome: 'VALIDATION_ERROR', message: err.message })
+        return 'refused'
+      }
       return 'held'
     }
   }
@@ -152,6 +170,14 @@ async function ensureDraftAndUploadMedia(
   if (uploaded === 'aborted') return 'transient'
 
   unsent = await getUnsentFormAttachments(row.localId)
+  const parked = unsent.find(file => file.permanentFailure)
+  if (parked) {
+    await applyFormFinalSyncResult(row.localId, {
+      outcome: 'VALIDATION_ERROR',
+      message: `پیوست فیلد «${parked.fieldKey}» ارسال نشد. ${parked.syncError ?? 'فایل را بررسی یا جایگزین کنید.'}`
+    })
+    return 'refused'
+  }
   return unsent.length === 0 ? 'ready' : 'held'
 }
 

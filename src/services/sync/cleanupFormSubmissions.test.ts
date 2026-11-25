@@ -124,6 +124,7 @@ describe('isEligibleForFormLocalPurge', () => {
       submittedAt: NOW - 6 * DAY
     })
     expect(isEligibleForFormLocalPurge(aged, NOW, LEGACY_RETENTION_WINDOWS)).toBe(true)
+    expect(isEligibleForFormLocalPurge({ ...aged, lastSubmitOutcome: 'VALIDATION_ERROR' }, NOW, LEGACY_RETENTION_WINDOWS)).toBe(false)
     expect(isEligibleForFormLocalPurge(young, NOW, LEGACY_RETENTION_WINDOWS)).toBe(false)
     // Switch off (server default): never purge failed forms.
     expect(

@@ -1,6 +1,6 @@
 import type { FieldDefinition } from '@/types/sync'
 import { dateTimeBoundsError } from '@/utils/dateTimeBounds'
-import { FormHelperText } from '@mui/material'
+import { Button, FormHelperText } from '@mui/material'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker'
 import { AdapterDateFnsJalali } from '@mui/x-date-pickers/AdapterDateFnsJalaliV3'
@@ -63,6 +63,11 @@ export function DateTimeFieldInput({
           }
         }}
       />
+      {selected && (
+        <Button type="button" size="small" onClick={() => onChange(null)} aria-label={`پاک کردن تاریخ و ساعت ${label}`}>
+          پاک کردن تاریخ و ساعت
+        </Button>
+      )}
       {!problem && <FormHelperText>تاریخ و ساعت شمسی</FormHelperText>}
     </LocalizationProvider>
   )

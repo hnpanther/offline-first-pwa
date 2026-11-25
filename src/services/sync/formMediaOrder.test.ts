@@ -4,10 +4,12 @@ import { ApiError } from '@/services/api/client'
 import { db } from '@/services/storage/db'
 import { saveAttachment, getAttachment } from '@/services/storage/attachments'
 import {
+  correctRejectedForm,
   createLocalFormDraft,
   markFormSubmissionLocallyFinal
 } from '@/services/storage/formSubmissions'
 import { pushPendingFormFinals } from '@/services/sync/formSubmitSync'
+import { mapFormFieldSnapshots, formSchemaEvidence } from '@/services/forms/mapFormFields'
 import { formCanStillCarryAttachmentReference } from '@/services/sync/attachmentIdTaken'
 import type { LocalAttachment } from '@/types'
 
@@ -175,7 +177,63 @@ describe('form final media failure recovery', () => {
     await pushPendingFormFinals()
     await pushPendingFormFinals()
     expect(submitFormFinal).not.toHaveBeenCalled()
-    expect((await db.formSubmissions.get(row.id))!.syncStatus).toBe('pending')
+    expect(await db.formSubmissions.get(row.id)).toMatchObject({syncStatus: 'failed', lastSubmitOutcome: 'VALIDATION_ERROR'})
     expect((await getAttachment('sig-1'))!.blob).toBeTruthy()
   })
+})
+
+
+it('recovers a refused photo, replaces it, and confirms only the new file on final', async () => {
+  const draft = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+  })
+  const original = { operatorSig: { type: 'attachment', ids: ['photo-A'] }, note: 'keep' }
+  await saveAttachment(signature(draft.localId, 'photo-A'))
+  await markFormSubmissionLocallyFinal(draft.localId, original)
+  uploadAttachment.mockRejectedValueOnce(new ApiError(413, 'too large'))
+  await pushPendingFormFinals()
+  const corrected = await correctRejectedForm(draft.localId)
+  expect(corrected?.formData).toEqual(original)
+  await saveAttachment(signature(draft.localId, 'photo-B', { formSubmissionId: '12' }))
+  const revised = { ...original, operatorSig: { type: 'attachment', ids: ['photo-B'] } }
+  await markFormSubmissionLocallyFinal(draft.localId, revised)
+  expect(await getAttachment('photo-A')).toMatchObject({pendingDelete: true})
+  expect((await pushPendingFormFinals()).synced).toBe(1)
+  expect(await getAttachment('photo-A')).toBeUndefined()
+  expect(await getAttachment('photo-B')).toMatchObject({syncStatus: 'synced'})
+  expect(submitFormFinal.mock.calls[0][0]).toMatchObject({ ...formSchemaEvidence(draft),
+    requireUploadedMedia: true, formData: revised })
+})
+
+it('queues a scoped removal for a server-only photo when the replacement is saved', async () => {
+  const draft = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1',
+    fieldDefinitionsSnapshot: mapFormFieldSnapshots([{ id: 2, key: 'photo', dataType: 'image', label: 'Photo' }]),
+    formData: { photo: { type: 'attachment', ids: ['remote'] } }
+  })
+  await db.formSubmissions.update(draft.id, { serverId: '12', serverStatus: 'DRAFT' })
+  await markFormSubmissionLocallyFinal(draft.localId, {})
+  expect(await getAttachment('remote')).toMatchObject({
+    pendingDelete: true, fieldKey: 'photo', formSubmissionId: '12', formSubmissionLocalId: draft.localId
+  })
+  expect((await pushPendingFormFinals()).synced).toBe(1)
+  expect(await getAttachment('remote')).toBeUndefined()
+})
+
+it('retains a legacy filing for correction when its draft request is definitively refused', async () => {
+  const draft = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1',
+    fieldDefinitionsSnapshot: mapFormFieldSnapshots([{ key: 'operatorSig', label: 'Photo', dataType: 'image' }])
+  })
+  const values = { operatorSig: { type: 'attachment', ids: ['photo-A'] } }
+  await saveAttachment(signature(draft.localId, 'photo-A'))
+  await markFormSubmissionLocallyFinal(draft.localId, values)
+  upsertFormDraft.mockRejectedValue(new ApiError(400, 'Invalid draft'))
+  await pushPendingFormFinals()
+  await pushPendingFormFinals()
+  expect(upsertFormDraft).toHaveBeenCalledTimes(1)
+  expect(upsertFormDraft.mock.calls[0][0].legacyFields[0].id).toBeUndefined()
+  expect(submitFormFinal).not.toHaveBeenCalled()
+  expect((await correctRejectedForm(draft.localId))?.formData).toEqual(values)
+  expect((await getAttachment('photo-A'))?.blob).toBeTruthy()
 })

@@ -73,6 +73,7 @@ export async function mergeOwnFormHistory(
           status: isDraft ? 'draft' : 'submitted',
           syncStatus: 'synced',
           serverUpdatedAt: dto.updatedAt,
+          lastSavedByName: dto.lastSavedByName === undefined ? existing.lastSavedByName : dto.lastSavedByName ?? undefined,
           reporterUnitId: toIdString(dto.reporterUnitId),
           subjectUnitId: toIdString(dto.subjectUnitId),
           ...(isDraft ? {
@@ -97,6 +98,7 @@ export async function mergeOwnFormHistory(
         serverId,
         serverUpdatedAt: dto.updatedAt,
         formDefinitionId: toIdString(dto.formDefinitionId),
+        lastSavedByName: dto.lastSavedByName ?? undefined,
         formTitle: named?.title,
         formCode: named?.code,
         reporterUnitId: toIdString(dto.reporterUnitId),

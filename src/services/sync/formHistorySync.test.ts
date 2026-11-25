@@ -20,6 +20,7 @@ function dto(overrides: Partial<FormSubmissionDto> = {}): FormSubmissionDto {
     formData: { note: 'from-server' },
     localId: 'remote-1',
     reportedByUserId: 'user-1',
+    lastSavedByName: 'Form editor',
     submittedAt: 50,
     ...overrides
   }
@@ -37,6 +38,7 @@ describe('form history merge', () => {
     expect(rows).toHaveLength(2)
     expect(rows.find(r => r.serverId === '12')).toMatchObject({
       serverStatus: 'APPROVED',
+      lastSavedByName: 'Form editor',
       status: 'submitted',
       syncStatus: 'synced',
       formTitle: 'HSE / گزارش تخلف'

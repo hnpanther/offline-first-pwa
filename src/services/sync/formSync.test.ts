@@ -158,7 +158,7 @@ describe('form final idempotency', () => {
     after = (await db.formSubmissions.get(row.id))!
     expect(after.syncStatus).toBe('failed')
     expect(after.formData).toEqual({ note: 'done' })
-    expect(await getPendingFormFinals('user-1')).toHaveLength(1)
+    expect(await getPendingFormFinals('user-1')).toHaveLength(0)
   })
 })
 
@@ -191,6 +191,16 @@ describe('lookup lease merge', () => {
 })
 
 describe('form final validation', () => {
+  it('keeps a cleared required date in a draft and identifies its field on final submit', () => {
+    const observed = { ...field(), key: 'observed', dataType: 'datetime' as const }
+    const cleared = { observed: null }
+    expect(findFormSubmitBlockingIssues([observed], cleared, 1000, false)).toEqual([])
+    expect(findFormSubmitBlockingIssues([observed], cleared, 1000)).toEqual([
+      { fieldKey: 'observed', fieldLabel: observed.label }
+    ])
+    expect(findFormSubmitBlockingIssues([{ ...observed, required: false }], cleared, 1000)).toEqual([])
+  })
+
   it('blocks missing required fields and describes them in Persian', () => {
     const issues = findFormSubmitBlockingIssues([field()], {})
     expect(issues).toHaveLength(1)

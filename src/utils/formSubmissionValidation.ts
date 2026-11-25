@@ -17,14 +17,15 @@ export interface FormFieldIssue {
 export function findFormSubmitBlockingIssues(
   fields: FieldDefinition[],
   formData: Record<string, unknown> | undefined,
-  recordedAt = serverNow()
+  recordedAt = serverNow(),
+  requireComplete = true
 ): FormFieldIssue[] {
   if (!fields.length) return []
   const issues: FormFieldIssue[] = []
   for (const def of fields) {
     if (def.deleted) continue
     const value = formData?.[def.key]
-    if (def.required && isFieldValueBlank(value, def.dataType)) {
+    if (requireComplete && def.required && isFieldValueBlank(value, def.dataType)) {
       issues.push({ fieldKey: def.key, fieldLabel: def.label || def.key })
       continue
     }

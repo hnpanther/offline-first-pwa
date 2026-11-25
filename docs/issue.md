@@ -631,10 +631,10 @@ No commit or branch is created. The companion repository tracks the same identif
 | Id | Severity | Finding | Status |
 |---|---|---|---|
 | F-01 | Critical | Local read/put race overwrites a newer answer | Fixed: local mutations and per-submission history merges are transactional |
-| F-02 | Critical | Offline schema differs from the first server snapshot | Partly fixed (V34): pinned server versions and unknown-key refusal; legacy unversioned drafts remain |
+| F-02 | Critical | Offline schema differs from the first server snapshot | Fixed: pinned versions and exact server-side recovery of legacy snapshots |
 | F-03 | High | Interrupted final remains syncing and is never retried | Fixed in working tree: interrupted finals remain retryable |
 | F-04 | High | PWA filing unit does not match server contract | Fixed: one searchable filing-unit picker, linked units intersect caller scope |
-| F-05 | High | Attachment remint submits stale ids; parked media bypasses delivery gate | Partly fixed: remint reload and parked-file gate; correction UX/reference reconciliation remains open |
+| F-05 | High | Attachment remint submits stale ids; parked media bypasses delivery gate | Fixed: correctable rejection, scoped replacement and server-confirmed final references |
 | F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Partly fixed: draft/reopen pull and explicit validation correction; unresolved old-action replay depends on F-08 |
 | F-07 | High | Server mutations have neither row lock nor optimistic version | Open |
 | F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Open |
@@ -809,3 +809,41 @@ session or production load test was performed; automated panel rendering and eve
 
 No commit, branch or deployment was made. Physical-device interaction and production load
 testing were not performed. The existing F-series items outside this follow-up remain open.
+
+## F-02 and F-05 recovery (2026-11-25)
+
+Legacy drafts send their frozen field definitions for an exact server-side match. Unverifiable
+drafts keep their original answers for manual review. A permanently refused attachment makes
+the filing correctable. Saving a replacement queues scoped removal and delivers the revised
+references. The updated PWA requests server verification of referenced uploads before final
+acceptance. No database migration or external UI asset is required.
+
+Practical verification included a fresh Edge profile with real IndexedDB, a page reload and an
+HTTP test fixture. The browser retained the old five-point answer and refused file, then sent
+only the replacement after correction. Separate backend integration tests use PostgreSQL and
+file storage to check the real schema-match, upload and final-submit decisions.
+
+### Form entry and last saver follow-up (2026-11-25)
+
+A populated Jalali date/time can be cleared. Missing required answers on final submission
+show inline feedback and a summary next to the action buttons. Partial draft saves remain
+available. The PWA and panel show the last answer saver separately from review actions.
+V35 backfills historical records where a save can be attributed. An Edge browser exercise
+cleared a date, saved an incomplete draft, reloaded it, checked the saver, then verified
+field-level and footer feedback before correcting the answer and submitting locally.
+
+### Final verification of form recovery and entry (2026-11-25)
+
+- `mvn clean package` passed all 3,019 tests, including Flyway/PostgreSQL, last saver and user
+  deletion integrity, scoped media removal, schema recovery and strict final delivery.
+- The packaged JAR was started against a separate temporary PostgreSQL 16 database. Real JWT
+  HTTP requests recovered a published five-point schema after changing the live form to ten,
+  rejected an unknown original schema, and kept a filing in draft while its photo was missing.
+  A multipart upload allowed final submission. Downloading the accepted photo returned the same
+  bytes. The detail API returned the original scale, recorded answer and last saver.
+- The PWA suite passed 1,619 tests; 14 pre-existing skips. ESLint passed on changed TypeScript
+  files. The Edge exercises used real IndexedDB and a reload; the UI case covered clear, draft,
+  required-field feedback, correction and local finalization.
+- `npm run build:apk` completed the mobile bundle, service worker, Capacitor sync and Gradle
+  debug build. APK SHA-256: `2A36C3D4D50545764CD653E68C2BA238F92B260803E98EA7F89257661AB99DCE`.
+  Hardware installation was outside this verification. Deploy backend V35 before the updated PWA.

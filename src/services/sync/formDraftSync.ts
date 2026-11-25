@@ -1,4 +1,5 @@
 import { upsertFormDraft, type FormSubmitResult } from '@/services/api'
+import { formSchemaEvidence } from '@/services/forms/mapFormFields'
 import { ApiError } from '@/services/api/client'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import {
@@ -33,7 +34,7 @@ export async function pushPendingFormDrafts(signal?: AbortSignal): Promise<FormD
         {
           submissionId: row.serverId ?? null,
           formDefinitionId: row.formDefinitionId,
-          schemaVersionId: row.schemaVersionId,
+          ...formSchemaEvidence(row),
           reporterUnitId: row.reporterUnitId,
           subjectUnitId: row.subjectUnitId,
           localId: row.localId,

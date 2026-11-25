@@ -558,8 +558,13 @@ export async function downloadAttachment(id: string, signal?: AbortSignal): Prom
   return apiClient.fetchBlob(`/api/attachments/${id}`, signal)
 }
 
-export async function deleteRemoteAttachment(id: string, signal?: AbortSignal): Promise<void> {
-  await apiClient.delete<void>(`/api/attachments/${id}`, signal)
+export async function deleteRemoteAttachment(
+  id: string, signal?: AbortSignal, form?: { submissionId: string; fieldKey: string }
+): Promise<void> {
+  const path = form
+    ? `/api/attachments/forms/${encodeURIComponent(form.submissionId)}/${encodeURIComponent(id)}?fieldKey=${encodeURIComponent(form.fieldKey)}`
+    : `/api/attachments/${encodeURIComponent(id)}`
+  await apiClient.delete<void>(path, signal)
 }
 
 // ===========================================================================
@@ -821,6 +826,7 @@ export interface FormSubmissionDto {
   fieldDefinitionsSnapshot?: FormDefinitionDto['fields']
   reportedByUserId?: number | string
   reportedByName?: string
+  lastSavedByName?: string | null
   source?: string
   localId?: string
   createdAt?: number
@@ -831,6 +837,7 @@ export interface FormSubmissionDto {
 }
 
 export interface FormDraftRequest {
+  legacyFields?: FormDefinitionDto['fields']
   schemaVersionId?: number | string
   submissionId?: number | string | null
   formDefinitionId: number | string
@@ -843,6 +850,8 @@ export interface FormDraftRequest {
 }
 
 export interface FormSubmitRequest {
+  legacyFields?: FormDefinitionDto['fields']
+  requireUploadedMedia?: boolean
   schemaVersionId?: number | string
   submissionId?: number | string | null
   formDefinitionId: number | string

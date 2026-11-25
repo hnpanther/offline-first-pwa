@@ -625,17 +625,20 @@ export function DynamicClassForm({
               control={control}
               rules={rules}
               render={({ field }) => (
-                <SignatureFieldWithVerdict
-                  def={def}
-                  fields={sorted}
-                  control={control}
-                  value={field.value}
-                  readOnly={false}
-                  attachmentContext={attachmentContext}
-                  signatureContext={signatureContext}
-                  label={def.label + (def.required ? ' *' : '')}
-                  onChange={field.onChange}
-                />
+                <Box aria-invalid={!!error} sx={error ? { border: 1, borderColor: 'error.main', borderRadius: 1, p: 1 } : undefined}>
+                  <SignatureFieldWithVerdict
+                    def={def}
+                    fields={sorted}
+                    control={control}
+                    value={field.value}
+                    readOnly={false}
+                    attachmentContext={attachmentContext}
+                    signatureContext={signatureContext}
+                    label={def.label + (def.required ? ' *' : '')}
+                    onChange={field.onChange}
+                  />
+                  {error && <Typography variant="caption" color="error">{error}</Typography>}
+                </Box>
               )}
             />
           )
@@ -650,18 +653,21 @@ export function DynamicClassForm({
               control={control}
               rules={rules}
               render={({ field }) => (
-                <AttachmentFieldInput
-                  kind={attachmentKind}
-                  label={def.label + (def.required ? ' *' : '')}
-                  value={field.value}
-                  logSheetLocalId={attachmentContext.logSheetLocalId}
-                  logSheetServerId={attachmentContext.logSheetServerId}
-                  formSubmissionLocalId={attachmentContext.formSubmissionLocalId}
-                  formSubmissionId={attachmentContext.formSubmissionId}
-                  assetId={attachmentContext.assetId}
-                  fieldKey={def.key}
-                  onChange={field.onChange}
-                />
+                <Box aria-invalid={!!error} sx={error ? { border: 1, borderColor: 'error.main', borderRadius: 1, p: 1 } : undefined}>
+                  <AttachmentFieldInput
+                    kind={attachmentKind}
+                    label={def.label + (def.required ? ' *' : '')}
+                    value={field.value}
+                    logSheetLocalId={attachmentContext.logSheetLocalId}
+                    logSheetServerId={attachmentContext.logSheetServerId}
+                    formSubmissionLocalId={attachmentContext.formSubmissionLocalId}
+                    formSubmissionId={attachmentContext.formSubmissionId}
+                    assetId={attachmentContext.assetId}
+                    fieldKey={def.key}
+                    onChange={field.onChange}
+                  />
+                  {error && <Typography variant="caption" color="error">{error}</Typography>}
+                </Box>
               )}
             />
           )

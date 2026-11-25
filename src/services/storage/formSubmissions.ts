@@ -1,3 +1,4 @@
+import { attachmentIdsOf, attachmentKindForDataType, removeAttachment } from './attachments'
 import { serverNow } from '@/services/clock/serverClock'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
@@ -40,11 +41,12 @@ export function isFormDraftOwnedByUser(
 
 /** Final-submit lane — finished work waiting for a server outcome. */
 export function isFormFinalOwnedByUser(
-  row: Pick<LocalFormSubmission, 'status' | 'syncStatus' | 'createdByUserId' | 'clientActionId'>,
+  row: Pick<LocalFormSubmission, 'status' | 'syncStatus' | 'lastSubmitOutcome' | 'createdByUserId' | 'clientActionId'>,
   userId: string | null
 ): boolean {
   if (!isFormSubmissionOutboundOwnedByUser(row, userId)) return false
   if (row.status !== 'submitted') return false
+  if (row.syncStatus === 'failed' && row.lastSubmitOutcome === 'VALIDATION_ERROR') return false
   // SyncManager serializes final passes; syncing may survive an interrupted attempt.
   if (!['pending', 'failed', 'syncing'].includes(row.syncStatus)) return false
   return true
@@ -116,6 +118,7 @@ export async function updateFormSubmission(
 }
 
 export async function createLocalFormDraft(input: {
+  lastSavedByName?: string
   recordedAt?: number
   schemaVersionId?: string
   formDefinitionId: string
@@ -134,6 +137,7 @@ export async function createLocalFormDraft(input: {
     localId,
     formDefinitionId: input.formDefinitionId,
     schemaVersionId: input.schemaVersionId,
+    lastSavedByName: input.lastSavedByName,
     formCode: input.formCode,
     formTitle: input.formTitle,
     reporterUnitId: input.reporterUnitId,
@@ -154,19 +158,49 @@ export async function createLocalFormDraft(input: {
   return row
 }
 
+/** Run inside the answer write transaction, including when a signature was cleared/replaced. */
+async function reconcileRemovedMedia(form: LocalFormSubmission, next: Record<string, unknown>) {
+  const local = await db.attachments.where('formSubmissionLocalId').equals(form.localId).toArray()
+  for (const file of local) {
+    if (file.pendingDelete || (file.createdByUserId && file.createdByUserId !== form.createdByUserId)) continue
+    const before = attachmentIdsOf(form.formData?.[file.fieldKey])
+    if (before.includes(file.id) && !attachmentIdsOf(next[file.fieldKey]).includes(file.id)) {
+      await removeAttachment(file.id)
+    }
+  }
+  // Reopened drafts can name server files that this tablet never downloaded.
+  if (!form.serverId) return
+  for (const field of form.fieldDefinitionsSnapshot ?? []) {
+    const kind = attachmentKindForDataType(field.dataType)
+    if (!kind) continue
+    const kept = attachmentIdsOf(next[field.key])
+    for (const id of attachmentIdsOf(form.formData[field.key])) {
+      if (kept.includes(id) || await db.attachments.get(id)) continue
+      await db.attachments.add({
+        id, fieldKey: field.key, kind, formSubmissionLocalId: form.localId,
+        formSubmissionId: form.serverId, createdByUserId: form.createdByUserId,
+        createdAt: Date.now(), syncStatus: 'synced', pendingDelete: true, sizeBytes: 0, mimeType: ''
+      })
+    }
+  }
+}
+
 export async function saveLocalFormDraft(
   localId: string,
   formData: Record<string, unknown>,
   reporterUnitId?: string,
-  recordedAt = serverNow()
+  recordedAt = serverNow(),
+  saverName?: string
 ): Promise<LocalFormSubmission | undefined> {
-  return db.transaction('rw', db.formSubmissions, async () => {
+  return db.transaction('rw', db.formSubmissions, db.attachments, async () => {
     const existing = await getFormSubmission(localId)
     if (!existing || existing.status !== 'draft') return existing
+    await reconcileRemovedMedia(existing, formData)
     const now = Math.max(Date.now(), (existing.locallyEditedAt ?? 0) + 1, (existing.draftSyncedAt ?? 0) + 1)
     const next: LocalFormSubmission = {
       ...existing,
       formData,
+      lastSavedByName: saverName ?? existing.lastSavedByName,
       reporterUnitId: reporterUnitId ?? existing.reporterUnitId,
       subjectUnitId: reporterUnitId ?? existing.reporterUnitId,
       locallyEditedAt: now,
@@ -189,9 +223,10 @@ export async function markFormSubmissionLocallyFinal(
   formData: Record<string, unknown>,
   recordedAt = serverNow()
 ): Promise<LocalFormSubmission | undefined> {
-  return db.transaction('rw', db.formSubmissions, async () => {
+  return db.transaction('rw', db.formSubmissions, db.attachments, async () => {
     const existing = await getFormSubmission(localId)
     if (!existing || existing.status !== 'draft') return existing
+    await reconcileRemovedMedia(existing, formData)
     const now = Date.now()
     const next: LocalFormSubmission = {
       ...existing,
