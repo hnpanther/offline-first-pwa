@@ -1,3 +1,4 @@
+import { serverNow } from '@/services/clock/serverClock'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/services/storage/db'
 import { getSessionUserId } from '@/services/auth/sessionContext'
@@ -115,6 +116,7 @@ export async function updateFormSubmission(
 }
 
 export async function createLocalFormDraft(input: {
+  recordedAt?: number
   schemaVersionId?: string
   formDefinitionId: string
   formCode?: string
@@ -145,7 +147,7 @@ export async function createLocalFormDraft(input: {
     draftSyncStatus: 'pending',
     createdAt: now,
     updatedAt: now,
-    deviceTimeAt: now,
+    deviceTimeAt: input.recordedAt ?? serverNow(),
     ...(createdByUserId ? { createdByUserId } : {})
   }
   await db.formSubmissions.add(row)
@@ -155,7 +157,8 @@ export async function createLocalFormDraft(input: {
 export async function saveLocalFormDraft(
   localId: string,
   formData: Record<string, unknown>,
-  reporterUnitId?: string
+  reporterUnitId?: string,
+  recordedAt = serverNow()
 ): Promise<LocalFormSubmission | undefined> {
   return db.transaction('rw', db.formSubmissions, async () => {
     const existing = await getFormSubmission(localId)
@@ -170,7 +173,7 @@ export async function saveLocalFormDraft(
       draftSyncStatus: 'pending',
       draftSyncError: undefined,
       updatedAt: now,
-      deviceTimeAt: now
+      deviceTimeAt: recordedAt
     }
     await db.formSubmissions.put(next)
     return next
@@ -183,7 +186,8 @@ export async function saveLocalFormDraft(
  */
 export async function markFormSubmissionLocallyFinal(
   localId: string,
-  formData: Record<string, unknown>
+  formData: Record<string, unknown>,
+  recordedAt = serverNow()
 ): Promise<LocalFormSubmission | undefined> {
   return db.transaction('rw', db.formSubmissions, async () => {
     const existing = await getFormSubmission(localId)
@@ -198,7 +202,7 @@ export async function markFormSubmissionLocallyFinal(
       syncError: undefined,
       submittedAt: now,
       updatedAt: now,
-      deviceTimeAt: now,
+      deviceTimeAt: recordedAt,
       // Final owns delivery from here; draft lane ignores submitted rows.
       locallyEditedAt: undefined,
       draftSyncStatus: existing.draftSyncStatus

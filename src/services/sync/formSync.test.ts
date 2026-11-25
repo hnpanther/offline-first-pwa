@@ -345,3 +345,24 @@ it('does not reopen an ambiguous failed request or another operator refusal', as
   await db.formSubmissions.update(draft.id, { createdByUserId: 'other', lastSubmitOutcome: 'VALIDATION_ERROR' })
   expect(await correctRejectedForm(draft.localId)).toBeUndefined()
 })
+
+
+describe('offline form recording time', () => {
+  it('persists the exact validation clock through draft, finalization and delivery', async () => {
+    const recordedAt = 1800000000000
+    const definitions = [field({ key: 'when', dataType: 'datetime',
+      validation: { dateTimeRelative: { beforeMinutes: 1, afterMinutes: 2 } } })]
+    const values = { when: { type: 'datetime', epochMs: recordedAt - 60000 } }
+    expect(findFormSubmitBlockingIssues(definitions, values, recordedAt)).toEqual([])
+    expect(findFormSubmitBlockingIssues(definitions, values, recordedAt + 1)).toHaveLength(1)
+    const row = await createLocalFormDraft({ formDefinitionId: '10', reporterUnitId: '1',
+      subjectUnitId: '1', fieldDefinitionsSnapshot: definitions, recordedAt, formData: values })
+    expect(row.deviceTimeAt).toBe(recordedAt)
+    const draft = await saveLocalFormDraft(row.localId, values, '1', recordedAt)
+    expect(draft?.deviceTimeAt).toBe(recordedAt)
+    const final = await markFormSubmissionLocallyFinal(row.localId, values, recordedAt)
+    expect(final?.deviceTimeAt).toBe(recordedAt)
+    await applyFormFinalSyncResult(row.localId, { outcome: 'OK', serverId: '100' })
+    expect((await db.formSubmissions.get(row.id))?.deviceTimeAt).toBe(recordedAt)
+  })
+})

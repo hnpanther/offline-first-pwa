@@ -63,6 +63,7 @@ function LookupChoiceLabel({ choice }: { choice: LookupChoiceValue }) {
 export interface LookupFieldInputProps {
   label: string
   listCode: string | undefined
+  parentCodes?: string[]
   multi: boolean
   value: unknown
   onChange: (value: unknown) => void
@@ -102,8 +103,19 @@ export function LookupFieldInput({
   onChange,
   error,
   disabled,
-  acceptsUnlistedCode = false
+  acceptsUnlistedCode = false,
+  parentCodes
 }: LookupFieldInputProps) {
+  const parentKey = parentCodes == null ? null : [...parentCodes].sort().join('\u0000')
+  const previousParent = useRef(parentKey)
+  useEffect(() => {
+    if (previousParent.current !== parentKey) {
+      previousParent.current = parentKey
+      onChange(null)
+      setInput('')
+      setOptions([])
+    }
+  }, [parentKey, onChange])
   const chosen = useMemo(() => lookupChoices(value), [value])
   // `pending` until the lease read returns. Starting at `absent` painted the long hint and then
   // removed it for every list that was actually ready — the field shortened, and a window
@@ -148,9 +160,10 @@ export function LookupFieldInput({
       return
     }
     const ticket = ++latest.current
+    let cancelled = false
     const timer = setTimeout(() => {
-      void searchList(listCode, input).then(found => {
-        if (ticket !== latest.current) return
+      void searchList(listCode, input, 30, Date.now(), parentKey == null ? undefined : parentKey ? parentKey.split('\u0000') : []).then(found => {
+        if (cancelled || ticket !== latest.current) return
         if (found == null) {
           // The copy stopped being usable between the two reads — its lease ended just now.
           setMode('expired')
@@ -160,8 +173,8 @@ export function LookupFieldInput({
         setOptions(found)
       })
     }, 150)
-    return () => clearTimeout(timer)
-  }, [mode, listCode, input, generation])
+    return () => { clearTimeout(timer); cancelled = true }
+  }, [mode, listCode, input, generation, parentKey])
 
   const searching = mode === 'ready'
   const unlistedCode = searching ? unlistedCodeFor(input, options.length, acceptsUnlistedCode) : null
@@ -199,7 +212,7 @@ export function LookupFieldInput({
     return out
   }
 
-  const helper = error
+  const helper = (parentCodes?.length === 0 ? 'ابتدا والد را انتخاب کنید.' : undefined) ?? error
     ?? problem
     ?? refreshNote
     ?? (showLookupAvailabilityHint(mode)
@@ -215,7 +228,7 @@ export function LookupFieldInput({
     isOptionEqualToValue: (a: Option, b: Option) => optionCode(a).toLowerCase() === optionCode(b).toLowerCase(),
     inputValue: input,
     onInputChange: (_: unknown, v: string) => setInput(v),
-    disabled,
+    disabled: disabled || parentCodes?.length === 0,
     noOptionsText: searching ? 'موردی پیدا نشد' : 'کد را بنویسید و Enter بزنید',
     renderOption: (props: HTMLAttributes<HTMLLIElement> & { key?: string }, o: Option) => {
       const { key, ...rest } = props

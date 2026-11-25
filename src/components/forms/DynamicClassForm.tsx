@@ -1,3 +1,4 @@
+import { lookupParentCodes } from '@/utils/lookupParent'
 /**
  * DynamicClassForm — renders a set of form fields driven by FieldDefinition[]
  * and wires up react-hook-form validation from FieldDefinition.validation.
@@ -37,6 +38,7 @@ import { LookupFieldInput } from './LookupFieldInput'
 import { isLookupDataType, isLookupMulti, lookupChoices, lookupDisplayValue } from '@/utils/lookupValue'
 import { scanFieldConfig } from '@/services/scan/scanFieldFill'
 import { formatCoordinate, parseCoordinate } from '@/services/device/geolocation'
+import { dateTimeBoundsError } from '@/utils/dateTimeBounds'
 import { DateTimeFieldInput } from './DateTimeFieldInput'
 import {
   isDateTimeDataType,
@@ -188,9 +190,10 @@ export function buildValidationRules(def: FieldDefinition): RegisterOptions {
   }
 
   if (isDateTimeDataType(def.dataType)) {
-    return def.required
-      ? { validate: value => isUsableDateTime(value) || 'این فیلد الزامی است' }
-      : {}
+    return { validate: value => {
+      if (def.required && !isUsableDateTime(value)) return 'این فیلد الزامی است'
+      return dateTimeBoundsError(value, def.validation) ?? true
+    } }
   }
 
   // A number's entry limit (backend roadmap §40) refuses the save, which is the whole point of
@@ -324,7 +327,7 @@ function SignatureFieldWithVerdict({
   label: string
   onChange: (value: unknown) => void
 }) {
-  const live = useWatch({ control, disabled: readOnly }) as Record<string, unknown> | undefined
+  const live = useWatch({ control, disabled: readOnly || !fields.some(f => f.validation?.lookupFilterByParent) }) as Record<string, unknown> | undefined
   const answers = readOnly ? readOnlyValues : live
   const ownKeys = useMemo(
     () => fields.filter(f => f.dataType !== 'signature').map(f => f.key),
@@ -383,6 +386,8 @@ export function DynamicClassForm({
   // names built from the gate plan, and react-hook-form keys its subscription effect on that
   // array by reference. A plan rebuilt on every render would tear down and re-create one
   // subscription per gated field on every keystroke in the form.
+  const liveAnswers = useWatch({ control, disabled: readOnly || !fields.some(f => f.validation?.lookupFilterByParent) }) as Record<string, unknown> | undefined
+  const answers = (fieldPrefix ? liveAnswers?.[fieldPrefix] : liveAnswers) as Record<string, unknown> | undefined
   const sorted = useMemo(() => [...fields].sort((a, b) => a.order - b.order), [fields])
   const gatePlans = useMemo(() => {
     const out = new Map<string, GateWatchPlan | undefined>()
@@ -555,6 +560,7 @@ export function DynamicClassForm({
                 <LookupFieldInput
                   label={def.label + (def.required ? ' *' : '')}
                   listCode={def.validation?.lookupList}
+                  parentCodes={lookupParentCodes(def, sorted, answers)}
                   acceptsUnlistedCode={def.validation?.lookupAcceptsUnlistedCode === true}
                   multi={isLookupMulti(def.dataType)}
                   value={f.value}
@@ -597,6 +603,7 @@ export function DynamicClassForm({
               rules={rules}
               render={({ field: f }) => (
                 <DateTimeFieldInput
+                  validation={def.validation}
                   label={def.label}
                   required={def.required}
                   value={f.value}

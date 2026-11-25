@@ -760,3 +760,52 @@ test. No CDN, dependency, commit or branch added. Next: legacy F-02 recovery, re
 F-07/F-08 together, then F-10 performance.
 
 Final verification: rerun passed 22 backend tests (11 submission integration, 9 panel render, 2 service), with zero failures/errors/skips. Backend and PWA diff checks passed. No live deployment performed.
+
+
+### Reference filters and date windows — completed implementation (2026-11-25)
+
+- R-01: numeric lookup titles and codes remain distinct. Panel/PWA options use isolated
+  parentheses; PWA plain text uses an explicit code label.
+- R-02: the form editor saves an optional parent filter. The panel and PWA filter child options
+  by selected sibling parent codes, clear stale child choices on parent changes, and preserve
+  answers on initial display. Independent mode remains available. The API supplies parentCode;
+  the offline cache upgrades/resumes without pretending a partial backfill is complete.
+- R-03: fixed min/max dates and relative before/after minutes apply together, inclusively, on
+  draft/final writes. The chosen policy is device recording time: one timestamp is captured for
+  validation/persistence and reused through sync retries. Late delivery alone cannot reject it.
+  Missing legacy timestamps use server time. Client time is not security/audit attestation.
+- R-04: filing-unit scope remains enforced in the service for every write. Crafted JSON tests
+  reject a foreign filing unit on creation and finalization, including create-on-submit, and
+  verify that refusal does not move an existing row. subjectUnitId cannot bypass this check.
+
+No dependency, CDN, database migration, commit or branch was added. The parent option filter
+does not change the established unknown/retired-code policy and is not an authorization boundary.
+Deploy the backend before the PWA; existing drafts retain their frozen definition. This follow-up
+does not close the unrelated remaining F-series concurrency/legacy/history items above.
+
+Verification: final PWA suite passed 1,615 tests (14 existing skips); 43 panel JavaScript tests
+passed. TypeScript and lint of the changed runtime files passed (the one cleanup warning was
+fixed and the affected file rechecked with --max-warnings 0). Full Maven package and APK build
+results are recorded in the final verification entry below. No physical tablet/browser end-to-end
+session or production load test was performed; automated panel rendering and event tests ran.
+
+### Final verification of reference/date follow-up (2026-11-25)
+
+- Backend: `.\mvnw.cmd clean package` completed with BUILD SUCCESS. All 3,015 tests passed;
+  zero failures, errors or skips. The clean run includes PostgreSQL/Flyway integration,
+  forged filing-unit JSON, delayed recording time, editor POST/render, parent device payload,
+  shared plant-timezone and CSP checks. Two failures found in the earlier full run were fixed:
+  the old contiguous label/code render expectation and a duplicated timezone literal.
+- PWA: final `npm test` passed 1,615 tests; 14 pre-existing skips. Changed runtime files
+  passed ESLint with --max-warnings 0. Parent changes now clear both the chosen child and the
+  previous suggestions immediately; cancelled requests cannot restore the old options.
+- Panel JavaScript: 43 tests passed.
+- Final `npm run build:apk` completed successfully, including TypeScript, mobile Vite build,
+  service-worker generation, Capacitor sync and Gradle assembleDebug. APK size is about 4.4 MiB.
+  Non-fatal Vite chunk-size and Gradle flatDir warnings remain; no build step was skipped.
+- Artifacts: backend `target/backend-offline-first-0.0.1-SNAPSHOT.jar`;
+  PWA `android/app/build/outputs/apk/debug/app-debug.apk`.
+  APK SHA-256: `7BDE573F56BBA2FE681784F703F83AEF3D970613EBF5096C4E348294B8727E98`.
+
+No commit, branch or deployment was made. Physical-device interaction and production load
+testing were not performed. The existing F-series items outside this follow-up remain open.

@@ -1778,3 +1778,27 @@ A failed VALIDATION_ERROR offers explicit correction. It keeps answers, files an
 clears the old final action, and waits for a deliberate save before sending again. Network and
 other ambiguous failures are never treated as safe-to-correct acknowledgements. Server-side
 replay receipts across reopen remain open (F-08), as does media correction UX (F-05).
+
+
+## Form parent lookups and recording-time date windows (2026-11-25)
+
+Deploy the matching backend before this PWA. Lookup item pages now carry optional parentCode.
+A dependent field stores `lookupFilterByParent` and `lookupParentList` in its frozen validation.
+The local picker offers children of the union of selected codes in matching sibling fields.
+No matching parent field means independent selection; an unanswered matching parent offers no
+children. Changing the parent clears the child and cancels stale searches. Existing saved values
+survive initial display. Filtering happens locally before the result limit. Unknown-code fallback
+and server verdicts retain their existing policy: this is a choice filter, not an access boundary.
+Titles and codes are separated with isolated parentheses in options/chips and `کد:` in plain text.
+
+Datetime validation supports inclusive fixed min/max epoch limits and relative before/after
+minutes. Both constraints apply when present. Draft/final handlers capture serverNow() once,
+use that instant to validate, and persist it as deviceTimeAt. Delivery retries reuse it: recording
+at 10:00 and syncing at 14:00 does not move the window. A deliberate later edit/finalization is
+revalidated at the new recording time. The clock uses the existing learned server offset when
+available; deviceTimeAt is client-claimed and is not proof for security/audit purposes. Required
+fields remain a final-submit rule; an answered out-of-window date is also blocked on draft save.
+
+New definitions use these settings after catalog sync. Existing drafts retain their pinned schema.
+No external UI asset or new dependency was introduced. All selectors and date feedback work from
+bundled code and cached definitions/lists while offline, subject to the existing list lease policy.

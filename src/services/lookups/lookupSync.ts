@@ -60,12 +60,14 @@ export async function syncRequiredLookups(
       const meta = await db.lookupLists.get(key)
       const halfLease = meta ? meta.leaseUntil - meta.leaseLengthMs / 2 : 0
       const due = !meta
+        || meta.parentMetadataVersion !== 1
         || !meta.complete
         || meta.revision < need.revision
         || now >= halfLease
       if (!due) continue
       try {
-        await fetchPass(need.code, meta?.cursorSince ?? 0, meta?.cursorAfterId ?? 0, now, fetchPage)
+        await fetchPass(need.code, meta?.parentMetadataVersion === 1 ? meta.cursorSince : 0,
+          meta?.parentMetadataVersion === 1 ? meta.cursorAfterId : 0, now, fetchPage)
         result.fetched.push(need.code)
       } catch (err) {
         if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
@@ -114,7 +116,8 @@ export async function refreshLookup(
 ): Promise<'fetched' | 'dropped' | 'failed'> {
   try {
     const meta = await db.lookupLists.get(listKey(code))
-    await fetchPass(code, meta?.cursorSince ?? 0, meta?.cursorAfterId ?? 0, now, fetchPage)
+    await fetchPass(code, meta?.parentMetadataVersion === 1 ? meta.cursorSince : 0,
+      meta?.parentMetadataVersion === 1 ? meta.cursorAfterId : 0, now, fetchPage)
     return 'fetched'
   } catch (err) {
     if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {

@@ -98,10 +98,10 @@ describe('lookup value', () => {
   })
 
   it('shows the recorded label with the server’s verdict', () => {
-    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'ACTIVE' })).toBe('علی · 1')
-    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'INACTIVE' })).toBe('علی · 1 · غیرفعال')
+    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'ACTIVE' })).toBe('علی · کد: 1')
+    expect(lookupChoiceText({ code: '1', label: 'علی', state: 'INACTIVE' })).toBe('علی · کد: 1 · غیرفعال')
     expect(lookupChoiceText({ code: '9', state: 'UNKNOWN' })).toBe('9 · خارج از فهرست')
-    expect(lookupDisplayValue([{ code: '1', label: 'الف' }, { code: '2', label: 'ب' }])).toBe('الف · 1، ب · 2')
+    expect(lookupDisplayValue([{ code: '1', label: 'الف' }, { code: '2', label: 'ب' }])).toBe('الف · کد: 1، ب · کد: 2')
   })
 
   it('a required lookup needs a code — an empty array or an object without one is blank', () => {
@@ -193,6 +193,28 @@ describe('lookup sync', () => {
     expect(await db.lookupItems.where('listId').equals('staff').count()).toBe(3)
   })
 
+  it('backfills old caches and resumes an interrupted parent metadata upgrade', async () => {
+    await applyPage(page(), 5, T0)
+    await db.lookupLists.update('staff', { parentMetadataVersion: undefined })
+    let calls = 0
+    const first = await syncRequiredLookups(need(), T0 + HOUR, async (_code, since, afterId) => {
+      calls++
+      if (calls === 1) {
+        expect([since, afterId]).toEqual([0, 0])
+        return page({ items: page().items.slice(0, 1), hasMore: true, nextSince: 10, nextAfterId: 1 })
+      }
+      throw new TypeError('offline')
+    })
+    expect(first.failed).toEqual(['STAFF'])
+    expect((await getListMeta('staff'))?.complete).toBe(false)
+    const resumed = await syncRequiredLookups(need(), T0 + HOUR, async (_code, since, afterId) => {
+      expect([since, afterId]).toEqual([10, 1])
+      return page({ items: page().items.slice(1) })
+    })
+    expect(resumed.fetched).toEqual(['STAFF'])
+    expect((await getListMeta('staff'))?.complete).toBe(true)
+  })
+
   it('does not fetch a current list until half its lease has passed; then fetches only what changed', async () => {
     await applyPage(page(), 5, T0)
     let calls = 0
@@ -260,7 +282,7 @@ describe('a code the device copy does not have yet', () => {
 
   it('a bare code reads as not yet checked, never as a resolved choice', () => {
     expect(lookupChoiceText({ code: '1077' })).toBe('1077 · بررسی هنگام ارسال')
-    expect(lookupChoiceText({ code: '1077', label: 'حسین', state: 'ACTIVE' })).toBe('حسین · 1077')
+    expect(lookupChoiceText({ code: '1077', label: 'حسین', state: 'ACTIVE' })).toBe('حسین · کد: 1077')
   })
 })
 
@@ -295,4 +317,16 @@ describe('refreshing one list from the field', () => {
     await refreshLookup('staff', T0 + HOUR, async () => page({ items: [] }))
     expect(await getListMeta('other')).toBeDefined()
   })
+})
+
+
+it('filters cached children by parent before limiting results, and leaves independent fields alone', async () => {
+  await applyPage(page({ items: [
+    { id: 11, code: 'x', label: '123', active: true, attributes: {}, updatedAt: 1, parentCode: 'A' },
+    { id: 12, code: 'y', label: '456', active: true, attributes: {}, updatedAt: 1, parentCode: 'B' }
+  ] }), 5, T0)
+  expect((await searchList('STAFF', '', 1, T0, ['b']))!.map(o => o.code)).toEqual(['y'])
+  expect(await searchList('STAFF', '', 30, T0, [])).toEqual([])
+  expect((await searchList('STAFF', '', 30, T0))!).toHaveLength(2)
+  expect(lookupChoiceText({ code: '12', label: '123' })).toBe('123 · کد: 12')
 })

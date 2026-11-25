@@ -69,7 +69,8 @@ export async function searchList(
   code: string,
   query: string,
   limit = 30,
-  now: number = Date.now()
+  now: number = Date.now(),
+  parentCodes?: string[]
 ): Promise<LookupOption[] | null> {
   if ((await availability(code, now)) !== 'ready') return null
   const meta = (await getListMeta(code))!
@@ -78,7 +79,8 @@ export async function searchList(
   const display = meta.columns.filter(c => c.display).map(c => c.key)
   const rows = await db.lookupItems.where('listId').equals(listKey(code)).toArray()
   return rows
-    .filter(r => r.active && (q === '' || r.search.includes(q)))
+    .filter(r => r.active && (q === '' || r.search.includes(q)) &&
+      (parentCodes == null || parentCodes.some(code => code.toLowerCase() === r.parentCode?.toLowerCase())))
     .sort((a, b) => a.label.localeCompare(b.label, 'fa'))
     .slice(0, limit)
     .map(r => ({
@@ -111,15 +113,17 @@ export async function applyPage(page: LookupDevicePage, passRevision: number, no
     label: item.label,
     active: item.active,
     attributes: item.attributes ?? {},
+    parentCode: item.parentCode,
     search: normalizeForSearch([item.code, item.label, ...searchable.map(k => item.attributes?.[k] ?? '')].join(' ')),
     updatedAt: item.updatedAt
   }))
   await db.transaction('rw', db.lookupLists, db.lookupItems, async () => {
     const before = await db.lookupLists.get(id)
     if (rows.length > 0) await db.lookupItems.bulkPut(rows)
-    const complete = (before?.complete ?? false) || !page.hasMore
+    const complete = (before?.parentMetadataVersion === 1 && before.complete) || !page.hasMore
     const meta: LookupListMeta = {
       id,
+      parentMetadataVersion: 1,
       code: page.code,
       name: page.name,
       revision: !page.hasMore ? passRevision : (before?.revision ?? -1),

@@ -1,3 +1,4 @@
+import { serverNow } from '@/services/clock/serverClock'
 import {
   Alert,
   Box,
@@ -164,18 +165,19 @@ export function FormFillPage() {
     }
   }, [])
 
-  const ensureDraft = async (values: Record<string, unknown>): Promise<LocalFormSubmission | null> => {
+  const ensureDraft = async (values: Record<string, unknown>, recordedAt: number): Promise<LocalFormSubmission | null> => {
     if (!units.some(unit => unit.id === reporterUnitId)) {
       setError('واحد ثبت‌کنندهٔ مجاز را انتخاب کنید.')
       return null
     }
     if (submission) {
-      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId)
+      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId, recordedAt)
       if (saved) setSubmission(saved)
       return saved ?? null
     }
     if (!definition) return null
     const created = await createLocalFormDraft({
+      recordedAt,
       formDefinitionId: definition.id,
       schemaVersionId: definition.schemaVersionId,
       formCode: definition.code,
@@ -197,7 +199,10 @@ export function FormFillPage() {
     setInfo(null)
     try {
       const values = form.getValues()
-      const row = await ensureDraft(values)
+      const recordedAt = serverNow()
+      const invalid = findFormSubmitBlockingIssues(fields, values, recordedAt).filter(issue => issue.problem)
+      if (invalid.length) { setError(describeFormSubmitBlockingIssues(invalid)); return }
+      const row = await ensureDraft(values, recordedAt)
       if (!row) return
       setInfo(t.forms.draftSaved)
       void syncManager.pushFormDraftsNow()
@@ -214,14 +219,15 @@ export function FormFillPage() {
     setInfo(null)
     try {
       const values = form.getValues()
-      const issues = findFormSubmitBlockingIssues(fields, values)
+      const recordedAt = serverNow()
+      const issues = findFormSubmitBlockingIssues(fields, values, recordedAt)
       if (issues.length > 0) {
         setError(describeFormSubmitBlockingIssues(issues) || t.forms.validationBlocked)
         return
       }
-      const row = await ensureDraft(values)
+      const row = await ensureDraft(values, recordedAt)
       if (!row) return
-      const finalised = await markFormSubmissionLocallyFinal(row.localId, values)
+      const finalised = await markFormSubmissionLocallyFinal(row.localId, values, recordedAt)
       if (finalised) setSubmission(finalised)
       setInfo(t.forms.submittedLocal)
       void syncManager.sync()

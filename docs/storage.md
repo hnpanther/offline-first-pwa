@@ -295,3 +295,18 @@ creation and preserved through saves/finalization/correction. LocalFormSubmissio
 records a received server revision timestamp to ignore older history responses; it is not a
 cross-device optimistic lock. Both additions are ordinary Dexie payload properties, unindexed,
 so no store migration is needed. Legacy rows with no version are not silently upgraded.
+
+
+### Parent metadata and recording time (2026-11-25)
+
+LookupItemRow adds optional parentCode; LookupListMeta adds parentMetadataVersion = 1. These
+are unindexed payload fields, so no Dexie schema-version change is needed. A cache without the
+metadata version is fetched from cursor (0,0), even if revision/lease is current. Page writes and
+cursor movement remain atomic. The first upgrade page marks complete=false when more pages
+remain; a failed pass must resume, not appear ready because the old cache used to be complete.
+The explicit refresh button uses the same backfill rule. No form answers are deleted on upgrade.
+
+A local form save/finalization stores the same recordedAt used for validation in deviceTimeAt;
+sync acknowledgements and retries preserve it. locallyEditedAt remains a separate monotonic
+stamp for conflict protection. Date limits and lookup parent settings travel inside the existing
+FieldDefinition validation snapshot. See [sync.md](sync.md) for semantics and deployment order.

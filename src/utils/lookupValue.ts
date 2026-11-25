@@ -93,7 +93,7 @@ export function toLookupValue(choices: LookupChoiceValue[], multi: boolean): unk
  * its own left-to-right run (`LookupChoiceLabel`).
  */
 export function lookupChoiceText(choice: LookupChoiceValue): string {
-  const base = choice.label && choice.label !== choice.code ? `${choice.label} · ${choice.code}` : choice.code
+  const base = choice.label && choice.label !== choice.code ? `${choice.label} · کد: ${choice.code}` : choice.code
   if (choice.state === 'INACTIVE') return `${base} · غیرفعال`
   if (choice.state === 'UNKNOWN') return `${base} · خارج از فهرست`
   if (!choice.state && !choice.label) return `${choice.code} · بررسی هنگام ارسال`

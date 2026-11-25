@@ -5,6 +5,7 @@
 
 /** One list the device keeps: where its sync stands and how long it may be kept. */
 export interface LookupListMeta {
+  parentMetadataVersion?: number
   /** The list's code lower-cased — the store key. Codes are matched ignoring case everywhere. */
   id: string
   /** The code as the server spells it. */
@@ -33,6 +34,7 @@ export interface LookupListMeta {
 
 /** One item, as the device stores it. */
 export interface LookupItemRow {
+  parentCode?: string | null
   /** The server's item id — unique across every list. */
   id: number
   /** The list's code lower-cased (`LookupListMeta.id`). */

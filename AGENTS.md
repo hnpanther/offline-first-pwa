@@ -1587,3 +1587,12 @@ to a server-owned snapshot. Missing ids on old drafts do not prove their answers
 definition. A DRAFT in history can be a supervisor reopen; clear the old local final action,
 but never replace dirty/unsent work. Correction after validation refusal must be explicit and
 must not auto-send the rejected payload. An ambiguous network error is not a validation refusal.
+
+
+### Parent-cache upgrades and date-window clocks (2026-11-25)
+
+An interrupted upgrade of an already-complete lookup cache must mark it incomplete until the
+backfill finishes. Otherwise the unchanged list revision and renewed lease suppress the next
+fetch and leave some children permanently without parentCode. Regression: lookups.test.ts.
+Form date validation and persistence must receive one recordedAt; never recalculate it while
+syncing. Even a millisecond difference can reject an inclusive boundary. Regression: formSync.test.ts.

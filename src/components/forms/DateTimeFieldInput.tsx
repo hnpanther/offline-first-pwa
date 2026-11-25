@@ -1,3 +1,5 @@
+import type { FieldDefinition } from '@/types/sync'
+import { dateTimeBoundsError } from '@/utils/dateTimeBounds'
 import { FormHelperText } from '@mui/material'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker'
@@ -10,6 +12,7 @@ import {
 } from '@/utils/dateTimeValue'
 
 interface DateTimeFieldInputProps {
+  validation?: FieldDefinition['validation']
   label: string
   required?: boolean
   value: unknown
@@ -30,8 +33,10 @@ export function DateTimeFieldInput({
   required,
   value,
   onChange,
-  error
+  error,
+  validation
 }: DateTimeFieldInputProps) {
+  const problem = error ?? dateTimeBoundsError(value, validation)
   const epoch = parseDateTimeEpoch(value)
   const selected = epoch == null ? null : new Date(epoch)
 
@@ -53,12 +58,12 @@ export function DateTimeFieldInput({
           textField: {
             fullWidth: true,
             size: 'medium',
-            error: !!error,
-            helperText: error
+            error: !!problem,
+            helperText: problem
           }
         }}
       />
-      {!error && <FormHelperText>تاریخ و ساعت شمسی</FormHelperText>}
+      {!problem && <FormHelperText>تاریخ و ساعت شمسی</FormHelperText>}
     </LocalizationProvider>
   )
 }

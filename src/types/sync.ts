@@ -229,6 +229,10 @@ export interface FieldValidation {
    * roadmap §31 Phase 2). The items are never in the definition: they arrive once per device
    * through `GET /api/lookups/{code}/items`, for the lists `context.requiredLookups` names.
    */
+  lookupFilterByParent?: boolean
+  lookupParentList?: string
+  dateTimeRange?: { min?: number; max?: number }
+  dateTimeRelative?: { beforeMinutes?: number; afterMinutes?: number }
   lookupList?: string
   /**
    * The picker may record a code its list does not offer (backend roadmap §31, «A code the device
@@ -328,6 +332,10 @@ export interface AssetFieldOverride {
    * own lookup already carries the list on its definition). Mirrored from the server's
    * override so `sheetFieldDefinitions.added` can build a picker that actually has a list.
    */
+  lookupFilterByParent?: boolean
+  lookupParentList?: string
+  dateTimeRange?: { min?: number; max?: number }
+  dateTimeRelative?: { beforeMinutes?: number; afterMinutes?: number }
   lookupList?: string
   /** Whether the picker offers «use this code» when search finds nothing (roadmap §31). */
   lookupAcceptsUnlistedCode?: boolean

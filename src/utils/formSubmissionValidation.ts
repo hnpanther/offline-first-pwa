@@ -1,3 +1,5 @@
+import { serverNow } from '@/services/clock/serverClock'
+import { dateTimeBoundsError } from './dateTimeBounds'
 import { isFieldValueBlank } from '@/utils/formDataValidation'
 import { entryLimitError } from '@/utils/fieldValidation'
 import type { FieldDefinition } from '@/types/sync'
@@ -14,7 +16,8 @@ export interface FormFieldIssue {
  */
 export function findFormSubmitBlockingIssues(
   fields: FieldDefinition[],
-  formData: Record<string, unknown> | undefined
+  formData: Record<string, unknown> | undefined,
+  recordedAt = serverNow()
 ): FormFieldIssue[] {
   if (!fields.length) return []
   const issues: FormFieldIssue[] = []
@@ -24,6 +27,10 @@ export function findFormSubmitBlockingIssues(
     if (def.required && isFieldValueBlank(value, def.dataType)) {
       issues.push({ fieldKey: def.key, fieldLabel: def.label || def.key })
       continue
+    }
+    if (def.dataType === 'datetime') {
+      const problem = dateTimeBoundsError(value, def.validation, recordedAt)
+      if (problem) issues.push({ fieldKey: def.key, fieldLabel: def.label || def.key, problem })
     }
     if (def.dataType === 'number' && isPlainNumber(value)) {
       const problem = entryLimitError(value, def.validation)

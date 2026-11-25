@@ -243,6 +243,7 @@ export interface LookupDevicePage {
     label: string
     active: boolean
     attributes: Record<string, string>
+    parentCode?: string | null
     updatedAt: number
   }>
   hasMore: boolean
