@@ -114,7 +114,7 @@ const formatDate = formatJalaliDateTime
 async function loadAssetClassesForEntries(
   entries: LogSheetEntryData[]
 ): Promise<AssetClass[]> {
-  const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
+  const classIds = sheet?.entrySchema ? [] : [...new Set(entries.map(e => toIdString(e.classId)))]
   const classes = await Promise.all(classIds.map(id => getAssetClass(id)))
   return classes.filter((c): c is AssetClass => c != null)
 }
@@ -182,12 +182,15 @@ function AssetFillDialog({
   // The shared per-class table is only the fallback: it holds whichever bundle merged last,
   // which for a device holding two sheets of the same class may not be this sheet's schema.
   const { fields: fallbackFields, loading: fieldsLoading, refresh: refreshFields } =
-    useFieldDefinitions(entry ? toIdString(entry.classId) : undefined)
+    useFieldDefinitions(entry && !logSheet?.entrySchema ? toIdString(entry.classId) : undefined)
   const fields = useMemo(
     // assetId, not only classId: a band may belong to this machine rather than to its class.
     () => sheetFieldDefinitions(logSheet, entry?.classId, fallbackFields, entry?.assetId),
     [logSheet, entry?.classId, entry?.assetId, fallbackFields]
   )
+  const issuedKeys = useMemo(() => logSheet?.entrySchema ? new Set(fields.map(f => f.key)) : null,
+    [logSheet?.entrySchema, fields])
+  const unissued = issuedKeys ? Object.keys(entry?.formData ?? {}).filter(key => !issuedKeys.has(key)) : []
   const {
     control,
     handleSubmit,
@@ -239,7 +242,9 @@ function AssetFillDialog({
 
   const onSubmit = async (values: Record<string, unknown>) => {
     if (!entry) return
-    await onSave(entry.assetId, values)
+    const answers = issuedKeys
+      ? Object.fromEntries(Object.entries(values).filter(([key]) => issuedKeys.has(key))) : values
+    await onSave(entry.assetId, answers)
   }
 
   return (
@@ -323,6 +328,9 @@ function AssetFillDialog({
                 void handleSubmit(onSubmit)()
               }}
             >
+            {unissued.length > 0 && !readOnly && (
+              <Alert severity="warning">با ذخیرهٔ فرم، پاسخ‌های خارج از تعریف صادرشده حذف می‌شوند: {unissued.join('، ')}</Alert>
+            )}
             {fieldsLoading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                 <CircularProgress />
@@ -587,7 +595,7 @@ export function LogSheetFillPage() {
     async (entries: LogSheetEntryData[], sheet?: LogSheet | null) => {
       // One read per class, as before — the shared table is the expensive part and an asset's
       // override is applied in memory on top of it.
-      const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
+      const classIds = sheet?.entrySchema ? [] : [...new Set(entries.map(e => toIdString(e.classId)))]
       const fallbackByClass = new Map(
         await Promise.all(
           classIds.map(async classId => [classId, await getFieldsForClass(classId)] as const)

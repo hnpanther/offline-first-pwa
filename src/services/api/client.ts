@@ -162,6 +162,7 @@ async function getBaseUrl(): Promise<string> {
 async function buildHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Entry-Schema': '1',
     Accept: 'application/json'
   }
   const token = await getAccessToken()

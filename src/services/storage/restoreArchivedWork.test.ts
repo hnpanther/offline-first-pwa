@@ -157,6 +157,15 @@ beforeEach(async () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('buildRestorePlan', () => {
+  it('restores only the answers selected on the issued equipment form', async () => {
+    await archivedAndCleared([entry('1', { temp: 42, retired: 7 })], [entry('1', {})], {
+      entrySchema: { version: 1, filtered: true, byAsset: { '1': 0 },
+        definitions: [[{ key: 'temp', classId: '2', label: 'Temperature' } as FieldDefinition]] }
+    })
+    await restoreArchivedEntries(SERVER_ID, OP1, ['1'])
+    expect(readings(await getLogSheetByServerId(SERVER_ID), '1')).toEqual({ temp: 42 })
+  })
+
   it('offers each asset the archive holds readings for', async () => {
     await archivedAndCleared([entry('1', { temp: 42 }), entry('2', { temp: 7 })])
 

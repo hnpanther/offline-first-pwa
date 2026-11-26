@@ -258,7 +258,15 @@ export interface FieldValidation {
  * with, so two sheets of the same class can legitimately disagree; the shared table here is the
  * fallback for sheets saved before that snapshot existed.
  */
+export interface IssuedEntrySchema {
+  version: 1
+  filtered: boolean
+  definitions: FieldDefinition[][]
+  byAsset: Record<string, number>
+}
+
 export interface FieldDefinition extends SyncableRecord {
+  bindingId?: string
   classId: string
   key: string           // machine key  — e.g. "temperature"
   label: string         // display label — e.g. "دمای خروجی"

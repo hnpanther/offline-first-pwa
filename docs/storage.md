@@ -310,3 +310,7 @@ A local form save/finalization stores the same recordedAt used for validation in
 sync acknowledgements and retries preserve it. locallyEditedAt remains a separate monotonic
 stamp for conflict protection. Date limits and lookup parent settings travel inside the existing
 FieldDefinition validation snapshot. See [sync.md](sync.md) for semantics and deployment order.
+
+## Issued equipment definitions
+
+Each local sheet keeps its own version 1 `entrySchema`. Its `byAsset` indexes into the ordered lists in `definitions`. An empty list is an issued form with no measurements. A metadata refresh preserves the saved dictionary. The fill dialog, completion checks and archive restoration use the equipment id on that sheet. Existing records continue to use their frozen class definitions and asset overrides.

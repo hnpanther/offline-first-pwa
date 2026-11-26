@@ -22,11 +22,20 @@ import { toIdString } from '@/utils/ids'
  * existed on the record, so nothing regresses for work already on a device.
  */
 export function sheetFieldDefinitions(
-  sheet: Pick<LogSheet, 'fieldDefinitions' | 'fieldOverridesSnapshot'> | null | undefined,
+  sheet: Pick<LogSheet, 'fieldDefinitions' | 'fieldOverridesSnapshot' | 'entrySchema'> | null | undefined,
   classId: string | number | undefined,
   fallback: FieldDefinition[] = [],
   assetId?: string | number
 ): FieldDefinition[] {
+  if (sheet?.entrySchema) {
+    if (assetId == null) return []
+    const schema = sheet.entrySchema
+    const index = schema.byAsset[toIdString(assetId)]
+    if (schema.version !== 1 || !Array.isArray(schema.definitions[index])) {
+      throw new Error('تعریف صادرشدهٔ پارامترهای این تجهیز ناقص است. لاگ‌شیت را دوباره دریافت کنید.')
+    }
+    return schema.definitions[index]
+  }
   const normalizedClassId = toIdString(classId)
   if (!normalizedClassId) return []
 
@@ -225,9 +234,9 @@ function added(key: string, override: AssetFieldOverride, classId: string): Fiel
 
 /** True when the sheet carries its own frozen schema (i.e. it is not a pre-upgrade record). */
 export function hasOwnFieldDefinitions(
-  sheet: Pick<LogSheet, 'fieldDefinitions'> | null | undefined
+  sheet: Pick<LogSheet, 'fieldDefinitions' | 'entrySchema'> | null | undefined
 ): boolean {
-  return (sheet?.fieldDefinitions?.length ?? 0) > 0
+  return !!sheet?.entrySchema || (sheet?.fieldDefinitions?.length ?? 0) > 0
 }
 
 function sortByDisplayOrder(fields: FieldDefinition[]): FieldDefinition[] {

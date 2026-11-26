@@ -24,7 +24,7 @@ import type {
   LogSheetAssignmentType,
   OperationalUnit
 } from '@/types'
-import type { AssetFieldOverrideSnapshot, FieldDefinition } from '@/types/sync'
+import type { AssetFieldOverrideSnapshot, FieldDefinition, IssuedEntrySchema } from '@/types/sync'
 import type { LoginRequest, LoginResponse } from '@/types/auth'
 import type { EnrollmentStateResponse, LoginChallengeResponse, WipeConfirmedResponse } from '@/types/device'
 import { measuredRequest } from '@/services/clock/serverClock'
@@ -150,6 +150,7 @@ export interface ServerLogSheet {
    * therefore drew every asset against its class's bands, which is the defect the column
    * exists to remove.
    */
+  entrySchema?: IssuedEntrySchema
   fieldOverridesSnapshot?: Record<string, AssetFieldOverrideSnapshot> | null
   /**
    * The round's OWN questions, frozen when this sheet was raised — asked once per sheet rather

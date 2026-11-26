@@ -1878,3 +1878,7 @@ The legacy history route still serves its newest-first array to older tablets. T
 reads and writes it in batches of 50. New PWA installations require the updated backend.
 The catalog loads linked units, active fields, latest schema versions and referenced lookup
 lists in batches. Only new or changed field definitions need a new schema version.
+
+## Filtered rounds
+
+The PWA advertises `X-Entry-Schema: 1` when requesting rounds. A filtered bundle carries final definitions including per-asset limits and stable binding ids. A missing mapping rejects the bundle before IndexedDB is updated. The server reports an unissued answer as `VALIDATION_ERROR` with its key. The operator can reopen the draft, review the indicated fields and save the corrected entry before retrying.

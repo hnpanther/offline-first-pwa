@@ -213,6 +213,12 @@ async function indexAttachments(logSheetLocalId: string): Promise<Map<string, Lo
  * <p>Starts from the live entry so that a field the archive says nothing about is left exactly as
  * it is, then applies the archived value field by field.
  */
+function issuedAnswers(sheet: LogSheet, entry: LogSheetEntryData, values: Record<string, unknown>) {
+  if (!sheet.entrySchema) return values
+  const allowed = new Set(sheetFieldDefinitions(sheet, entry.classId, [], entry.assetId).map(f => f.key))
+  return Object.fromEntries(Object.entries(values).filter(([key]) => allowed.has(key)))
+}
+
 function mergeEntry(
   mine: Record<string, unknown>,
   current: Record<string, unknown>,
@@ -289,13 +295,13 @@ export async function buildRestorePlan(
     const cached = resolvedCache.get(key)
     if (cached) return cached
     let classFields = classFieldsCache.get(id)
-    if (!classFields) {
+    if (!classFields && !live.entrySchema) {
       classFields = await getFieldsForClass(id)
       classFieldsCache.set(id, classFields)
     }
     // Same precedence as the fill page, so the dialog can never label a field differently from
     // the form the operator is about to open.
-    const resolved = sheetFieldDefinitions(live, id, classFields, assetId)
+    const resolved = sheetFieldDefinitions(live, id, classFields ?? [], assetId)
     resolvedCache.set(key, resolved)
     return resolved
   }
@@ -307,7 +313,7 @@ export async function buildRestorePlan(
     if (!archivedEntry || !hasEntryFormData(archivedEntry.formData)) continue
 
     const merged = mergeEntry(
-      archivedEntry.formData ?? {},
+      issuedAnswers(live, liveEntry, archivedEntry.formData ?? {}),
       liveEntry.formData ?? {},
       assetId,
       attachments
@@ -429,7 +435,7 @@ export async function restoreArchivedEntries(
 
     const archivedEntry = archivedByAsset.get(assetId)!
     const merged = mergeEntry(
-      archivedEntry.formData ?? {},
+      issuedAnswers(live, entry, archivedEntry.formData ?? {}),
       entry.formData ?? {},
       assetId,
       attachments

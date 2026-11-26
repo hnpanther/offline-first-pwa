@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '@/services/storage/db'
 import { getLogSheetByServerId } from '@/services/storage'
 import { applyLogSheetBundle } from '@/services/sync/logSheetSync'
+import { findSubmitBlockingIssues } from '@/utils/formDataValidation'
 import { sheetFieldDefinitions } from '@/utils/sheetFieldDefinitions'
 import type { LogSheetBundleDto } from '@/services/api'
 import type { FieldDefinition } from '@/types/sync'
@@ -80,6 +81,35 @@ describe('the per-asset delta on a synced sheet', () => {
     await db.logSheets.clear()
     await db.syncMeta.clear()
     await db.syncMeta.put({ key: 'sessionUserId', value: 7 })
+  })
+
+  it('keeps two issued selections for the same asset isolated through a thin refresh', async () => {
+    const daily = bundle()
+    daily.sheet.entrySchema = { version: 1, filtered: true, definitions: [[]], byAsset: { '11': 0 } }
+    await applyLogSheetBundle(daily)
+    const weekly = bundle()
+    weekly.sheet.id = 92
+    const vibration = { ...ampere(), key: 'vibration', required: true, bindingId: 'source-17' }
+    weekly.sheet.entrySchema = { version: 1, filtered: true, definitions: [[vibration]], byAsset: { '11': 0 } }
+    await applyLogSheetBundle(weekly)
+    await applyLogSheetBundle(bundle())
+    const empty = (await getLogSheetByServerId(SERVER_ID))!
+    const selected = (await getLogSheetByServerId('92'))!
+    expect(sheetFieldDefinitions(empty, CLASS_ID, [ampere()], ASSET_ID)).toEqual([])
+    expect(sheetFieldDefinitions(selected, CLASS_ID, [ampere()], ASSET_ID)).toMatchObject([
+      { key: 'vibration', bindingId: 'source-17', validation: vibration.validation }
+    ])
+    empty.entries[0].formData = { ampere: 12 }
+    expect(findSubmitBlockingIssues(empty)).toMatchObject([{ fieldLabel: 'ampere' }])
+  })
+
+  it('rejects a missing issued asset mapping before overwriting the local draft', async () => {
+    await applyLogSheetBundle(bundle())
+    const before = await getLogSheetByServerId(SERVER_ID)
+    const broken = bundle()
+    broken.sheet.entrySchema = { version: 1, filtered: true, definitions: [[]], byAsset: {} }
+    await expect(applyLogSheetBundle(broken)).rejects.toThrow('ناقص')
+    expect(await getLogSheetByServerId(SERVER_ID)).toEqual(before)
   })
 
   it('is stored on a sheet this device has never seen', async () => {

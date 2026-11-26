@@ -123,12 +123,19 @@ export interface SubmitBlockingIssue {
  * is wrong", not "guaranteed to be accepted".
  */
 export function findSubmitBlockingIssues(
-  sheet: Pick<LogSheet, 'entries' | 'fieldDefinitions' | 'fieldOverridesSnapshot'>,
+  sheet: Pick<LogSheet, 'entries' | 'fieldDefinitions' | 'fieldOverridesSnapshot' | 'entrySchema'>,
   fallbackDefs: FieldDefinition[] = []
 ): SubmitBlockingIssue[] {
   const issues: SubmitBlockingIssue[] = []
 
   for (const entry of sheet.entries ?? []) {
+    if (sheet.entrySchema && entry.formData) {
+      const allowed = new Set(sheetFieldDefinitions(sheet, entry.classId, [], entry.assetId).map(f => f.key))
+      for (const key of Object.keys(entry.formData)) {
+        if (!allowed.has(key)) issues.push({ assetId: entry.assetId, assetName: entry.assetName,
+          fieldLabel: key, problem: 'این پارامتر در تعریف صادرشده وجود ندارد.' })
+      }
+    }
     if (!hasMeaningfulFormData(entry.formData)) continue
 
     const defs = sheetFieldDefinitions(sheet as LogSheet, entry.classId, fallbackDefs, entry.assetId)

@@ -54,6 +54,18 @@ async function currentUserDisplayName(): Promise<string | undefined> {
 }
 
 export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<LogSheet> {
+  const issued = bundle.sheet.entrySchema
+  if (issued && (issued.version !== 1 || !Array.isArray(issued.definitions) || !issued.byAsset ||
+      !Object.values(issued.byAsset).every(i => Number.isInteger(i) && Array.isArray(issued.definitions[i])) ||
+      !(bundle.entries ?? []).every(entry => Object.prototype.hasOwnProperty.call(issued.byAsset, toIdString(entry.assetId))))) {
+    throw new Error('تعریف صادرشدهٔ پارامترهای این لاگ‌شیت ناقص است.')
+  }
+  const issuedPatch = issued ? { entrySchema: {
+    ...issued,
+    definitions: issued.definitions.map(fields => normalizeFieldDefinitions(fields.map(field => ({
+      ...field, id: field.id ?? field.bindingId ?? field.key, order: field.order ?? Number.MAX_SAFE_INTEGER
+    }))))
+  } } : {}
   await mergeBundleContextToDb(bundle.context)
 
   const serverSheet = bundle.sheet
@@ -140,6 +152,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
           entries,
           ...fieldDefinitionsPatch,
           ...fieldOverridesPatch,
+          ...issuedPatch,
           ...sheetFieldsPatch,
           ...requiredLookupsPatch,
           ...sheetFormPatch,
@@ -168,6 +181,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         ...serverSheetMetadataPatch(serverSheet, existing),
         ...fieldDefinitionsPatch,
         ...fieldOverridesPatch,
+        ...issuedPatch,
         ...sheetFieldsPatch,
         ...requiredLookupsPatch,
         ...sheetFormPatch,
@@ -215,6 +229,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
         entries: values.entries,
         ...fieldDefinitionsPatch,
         ...fieldOverridesPatch,
+        ...issuedPatch,
         ...sheetFieldsPatch,
         ...requiredLookupsPatch,
         ...values.sheetFormPatch,
@@ -252,6 +267,7 @@ export async function applyLogSheetBundle(bundle: LogSheetBundleDto): Promise<Lo
     entries,
     ...fieldDefinitionsPatch,
     ...fieldOverridesPatch,
+    ...issuedPatch,
     ...sheetFieldsPatch,
     ...requiredLookupsPatch,
     ...sheetFormPatch,

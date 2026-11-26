@@ -1,4 +1,4 @@
-import type { AssetFieldOverrideSnapshot, FieldDefinition } from './sync'
+import type { AssetFieldOverrideSnapshot, FieldDefinition, IssuedEntrySchema } from './sync'
 
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed'
 
@@ -577,6 +577,7 @@ export interface LogSheet {
    * asset overrides anything, which is the overwhelming majority. Plain, non-indexed
    * property: no Dexie version bump.
    */
+  entrySchema?: IssuedEntrySchema
   fieldOverridesSnapshot?: Record<string, AssetFieldOverrideSnapshot>
   /**
    * The round's **own** questions, frozen with this sheet — asked once per sheet rather than
