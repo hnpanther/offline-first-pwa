@@ -1211,9 +1211,7 @@ What the device does:
   unions that with the assigned rounds' `requiredLookups` before `syncRequiredLookups`. No other
   catalog is downloaded. Sign-out calls `clearAllLookups` (one pair of stores for form lists and
   round lists) and deletes the lease key. Drafts, queued finals and signature blobs stay.
-- History is `GET /api/form-submissions`, terminal statuses only, under سوابق فرم‌ها
-  (`/forms/history`), together with a final the server refused. A dirty draft and an unsynced
-  final are not overwritten. The title on screen is the Persian segment only
+- Own history uses the paged `GET /api/form-submissions/changes` feed. Reopened drafts return to active work. Finished filings and refused finals appear in the history view. Local pending edits and conflicts survive a pull. The title on screen is the Persian segment only
   (`persianFormTitle`); a code or an English segment is not shown.
 - The fill page scrolls the window. The end-of-form jump is kept off: `fixed` combobox popper,
   lookup hint after the lease read, signature bitmap in an aspect-ratio box, `overflow-anchor:

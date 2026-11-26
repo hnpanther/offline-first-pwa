@@ -445,8 +445,7 @@ closed until that form's own lists are on the device. Sign-out deletes those cop
 stores — and deletes the `requiredFormLookups` key. Drafts, queued finals and signature bytes
 stay.
 
-**History:** `GET /api/form-submissions` is merged into local rows the operator can already
-see. Submitted, approved and voided filings, and a final the server refused, are listed under سوابق فرم‌ها (`/forms/history`),
+**History:** The PWA merges pages from `GET /api/form-submissions/changes` and commits each page with its per-user checkpoint. Submitted, approved and voided filings, and a final the server refused, are listed under سوابق فرم‌ها (`/forms/history`),
 separate from open drafts. A draft with unsynced edits, and a final the server has not accepted,
 are not overwritten by that merge. The name on the card and on the fill page is
 `persianFormTitle`: the Persian segment of the stored title, with the code and any English
@@ -1004,7 +1003,7 @@ it into the live round. Until the owner comes back, it stays.
 | A file the operator removed | at once if it never reached the server; otherwise kept as «to delete» until the server confirms the delete |
 | **NFC fault reports** | **never** — sent ones stay too; only a wipe or clearing the app's data removes them |
 | **Reference lists** (lookup, backend §31) | when the lease runs out — per list, `device_lease_hours` (default 24) counted from the last sync that refreshed it, checked at every start and sign-in **even offline**; when the device clock reads earlier than the server time it last saw for that list; when no assigned round **and** no FILL-able form needs the list any more (next `syncRequiredLookups`); when the server answers 403/404 for it; and at sign-out (`clearAllLookups`, form lists and round lists together) plus the `requiredFormLookups` key, the offline-session lock and a wipe — personal data. Drafts, queued finals and signature blobs are not in these stores |
-| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Finals awaiting validation correction: never. Other failed finals follow the unsynced retention setting. A dirty draft and an unsynced final are also kept when history is merged |
+| **Ad-hoc form submissions** (`formSubmissions`) | open drafts and pending or syncing finals: never. Synced `SUBMITTED` / `APPROVED` / synced `VOIDED`: the synced window, same `deviceRetention` as a delivered round (`cleanupLocalFormSubmissions`). Finals awaiting validation correction: never. Conflicted rows stay on the device. Other failed finals follow the configured unsynced window or the legacy seven-day window when no policy was received. A dirty draft and an unsynced final are also kept when history is merged |
 | Plant reference data from round bundles (assets, classes, field definitions, locations, templates, units) | never removed; each bundle overwrites what it carries |
 | The inbox snapshot | replaced by every inbox pull; cleared at sign-out, the offline-session lock, a user switch and a wipe |
 | The session (`authSession`) | online: when the server says it ended (401), when its expiry passes on the server's clock, or when the device-status check finds this device revoked with enrolment on; offline: kept — until the offline-session lock, if the plant switched it on; sign-out and a wipe |

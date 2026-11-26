@@ -635,12 +635,12 @@ No commit or branch is created. The companion repository tracks the same identif
 | F-03 | High | Interrupted final remains syncing and is never retried | Fixed in working tree: interrupted finals remain retryable |
 | F-04 | High | PWA filing unit does not match server contract | Fixed: one searchable filing-unit picker, linked units intersect caller scope |
 | F-05 | High | Attachment remint submits stale ids; parked media bypasses delivery gate | Fixed: correctable rejection, scoped replacement and server-confirmed final references |
-| F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Partly fixed: draft/reopen pull and explicit validation correction; unresolved old-action replay depends on F-08 |
-| F-07 | High | Server mutations have neither row lock nor optimistic version | Open |
-| F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Open |
+| F-06 | High | Rejected finals cannot be corrected; reopened server drafts are ignored | Fixed: draft/reopen pull, explicit correction and durable final receipts |
+| F-07 | High | Server mutations have neither row lock nor optimistic version | Fixed: row lock, expected version and visible conflict recovery |
+| F-08 | High | Reopen erases deduplication history; duplicate lookup lacks owner binding | Fixed: V36 durable actor/filing/cycle receipts |
 | F-09 | High | Omitting reporterUnitId bypasses fill gate on an existing draft | Fixed in working tree: effective filing unit always checked |
-| F-10 | Medium | History is unbounded; catalog performs per-form queries | Open |
-| F-11 | High | Failed form retention may delete the only copy | **Product decision (2026-11-24):** failed forms follow the same `deviceRetention` windows as rounds; default switch-off still keeps them forever |
+| F-10 | Medium | History is unbounded; catalog performs per-form queries | Fixed: V37 owner cursor, paged writes and batched catalog |
+| F-11 | High | Failed form retention may delete the only copy | Implemented policy: conflicts and validation refusals stay on the device. Other failed finals follow the failed-retention window. |
 | F-12 | Medium | Rejected final may commit a changed filing unit | Fixed in working tree: unit mutation follows validation |
 
 ### F-01: Local read/put race overwrites a newer answer
@@ -685,11 +685,7 @@ Source: `FormApiController / formHistorySync.ts`. Remediation and acceptance: Cu
 
 ### F-11: Failed form retention may delete the only copy
 
-Source: `cleanupFormSubmissions.ts`. **Product decision (2026-11-24):** failed finals use the
-same unsynced / legacy windows as refused rounds (`isEligibleForFormLocalPurge`). Forms have no
-`kept` receipt, so the server default (`unsyncedPurgeEnabled: false`) is what keeps a refused
-final on the tablet; turning the switch on is an explicit administrator choice that aged
-failures may leave the device. Regression: `cleanupFormSubmissions.test.ts`.
+Open drafts, conflicts, pending or syncing finals, and validation refusals awaiting correction stay on the device. Delivered finals follow the synced retention window. Other failed finals stay while the configured unsynced purge is off. When enabled, they age out after the configured failed window. A device that never received a policy uses the legacy seven-day failed window. In those last two cases cleanup can remove the only copy of a refused final.
 
 ### F-12: Rejected final may commit a changed filing unit
 
@@ -847,3 +843,7 @@ field-level and footer feedback before correcting the answer and submitting loca
 - `npm run build:apk` completed the mobile bundle, service worker, Capacitor sync and Gradle
   debug build. APK SHA-256: `2A36C3D4D50545764CD653E68C2BA238F92B260803E98EA7F89257661AB99DCE`.
   Hardware installation was outside this verification. Deploy backend V35 before the updated PWA.
+
+## Current form release status
+
+F-06, F-07, F-08 and F-10 are complete. The current PWA uses the paged changes feed. For staging, physical tablet acceptance and rollout see the [shared release checklist](../../backend-offline-first/docs/issue.md#current-form-release-checklist).
