@@ -1844,3 +1844,38 @@ the local saver with an offline edit and accepts the server's name with an impor
 Review, void and reopen operations preserve the last answer saver. V35 recovers historical
 savers from submit actions and edits that superseded draft answers. Older records without an
 attributable save display an unknown saver in the panel.
+
+## Concurrent edits and incremental form history (V36–V37)
+
+The panel and tablet send the last acknowledged server `updatedAt` as `expectedUpdatedAt`.
+Zero identifies a first delivery. The server locks the filing, checks that version and stamps
+the next accepted edit or review with a strictly increasing value. A retry of the same draft
+save can recover its acknowledgement. At a conflict, the tablet keeps the operator's answers
+and pauses delivery, attachment removal and retention for that filing. After comparing the
+current server draft, the operator can explicitly save their answers against its version.
+A concurrent change during that comparison produces another conflict. A completed server
+filing remains visible for comparison and requires a supervisor to reopen it before editing.
+Older clients that omit the version retain their old draft-write contract.
+
+Each accepted final records its action key on the immutable SUBMIT entry. A retry from its
+actor for the same filing returns the existing result in that cycle. Reopen preserves the
+receipt and starts a new cycle. Replaying the old action returns a conflict, including after
+another final. Keys erased by reopen before V36 cannot be reconstructed. A mobile final
+without a version after reopen requires review on an updated client. A legacy key with no
+attributable final actor stays reserved.
+
+`GET /api/form-submissions/changes` uses the existing own-history authority. It returns
+`ownerId`, `items`, `next`, `through` and `hasMore`. The default page size is 50 and the
+maximum is 100. The first page fixes the upper bound for the pass. Send `after=next` and
+the same `through` on subsequent pages. Once the pass ends, omit `through` on the next
+poll. Drafts pass every bootstrap age filter. A fresh tablet requests terminal rows only
+within the delivered retention window. An upgraded tablet with previously mirrored open
+drafts runs one paged reconciliation of its old cache. Later polls request only changes.
+A terminal row that aged out locally is skipped on import, including after a later review.
+
+Each IndexedDB page merge and its per-user checkpoint commit together. Interruptions resume
+from the last committed page. A different signed-in user cannot apply an in-flight page.
+The legacy history route still serves its newest-first array to older tablets. The server
+reads and writes it in batches of 50. New PWA installations require the updated backend.
+The catalog loads linked units, active fields, latest schema versions and referenced lookup
+lists in batches. Only new or changed field definitions need a new schema version.

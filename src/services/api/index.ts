@@ -559,12 +559,13 @@ export async function downloadAttachment(id: string, signal?: AbortSignal): Prom
 }
 
 export async function deleteRemoteAttachment(
-  id: string, signal?: AbortSignal, form?: { submissionId: string; fieldKey: string }
+  id: string, signal?: AbortSignal, form?: { submissionId: string; fieldKey: string; expectedUpdatedAt?: number }
 ): Promise<void> {
   const path = form
     ? `/api/attachments/forms/${encodeURIComponent(form.submissionId)}/${encodeURIComponent(id)}?fieldKey=${encodeURIComponent(form.fieldKey)}`
     : `/api/attachments/${encodeURIComponent(id)}`
-  await apiClient.delete<void>(path, signal)
+  const version = form?.expectedUpdatedAt
+  await apiClient.delete<void>(version == null ? path : `${path}&expectedUpdatedAt=${version}`, signal)
 }
 
 // ===========================================================================
@@ -837,6 +838,7 @@ export interface FormSubmissionDto {
 }
 
 export interface FormDraftRequest {
+  expectedUpdatedAt?: number
   legacyFields?: FormDefinitionDto['fields']
   schemaVersionId?: number | string
   submissionId?: number | string | null
@@ -850,6 +852,7 @@ export interface FormDraftRequest {
 }
 
 export interface FormSubmitRequest {
+  expectedUpdatedAt?: number
   legacyFields?: FormDefinitionDto['fields']
   requireUploadedMedia?: boolean
   schemaVersionId?: number | string
@@ -872,6 +875,7 @@ export type FormSubmitOutcome =
   | string
 
 export interface FormSubmitResult {
+  updatedAt?: number
   submissionId?: number | string | null
   localId?: string | null
   outcome: FormSubmitOutcome
@@ -908,9 +912,20 @@ export async function submitFormFinal(
   return apiClient.post<FormSubmitResult>('/api/forms/submit', body, signal)
 }
 
-/** GET /api/form-submissions — caller's own drafts + submitted. */
-export async function fetchMyFormSubmissions(signal?: AbortSignal): Promise<FormSubmissionDto[]> {
-  return apiClient.get<FormSubmissionDto[]>('/api/form-submissions', signal)
+interface FormHistoryPage {
+  ownerId: number
+  next: number
+  through: number
+  hasMore: boolean
+  items: FormSubmissionDto[]
+}
+
+export async function fetchFormHistoryPage(
+  cursor: { after: number; since: number; through?: number }, signal?: AbortSignal
+): Promise<FormHistoryPage> {
+  const params = new URLSearchParams({ after: String(cursor.after), since: String(cursor.since) })
+  if (cursor.through != null) params.set('through', String(cursor.through))
+  return apiClient.get<FormHistoryPage>(`/api/form-submissions/changes?${params}`, signal)
 }
 
 /** GET /api/form-submissions/{id} */

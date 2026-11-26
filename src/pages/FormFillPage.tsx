@@ -1,3 +1,5 @@
+import { liveQuery } from 'dexie'
+import { fetchFormSubmission, type FormSubmissionDto } from '@/services/api'
 import { serverNow } from '@/services/clock/serverClock'
 import {
   Alert,
@@ -21,6 +23,7 @@ import { getFormDefinition } from '@/services/storage/formDefinitions'
 import {
   createLocalFormDraft,
   correctRejectedForm,
+  saveReviewedFormDraft,
   getFormSubmission,
   markFormSubmissionLocallyFinal,
   saveLocalFormDraft
@@ -60,6 +63,7 @@ export function FormFillPage() {
   const [info, setInfo] = useState<string | null>(null)
   const [definition, setDefinition] = useState<CachedFormDefinition | null>(null)
   const [submission, setSubmission] = useState<LocalFormSubmission | null>(null)
+  const [remote, setRemote] = useState<FormSubmissionDto | null>(null)
   const [units, setUnits] = useState<OperationalUnit[]>([])
   const [reporterUnitId, setReporterUnitId] = useState('')
   const [lookupsReady, setLookupsReady] = useState(true)
@@ -88,6 +92,7 @@ export function FormFillPage() {
   }
 
   const load = useCallback(async () => {
+    setRemote(null)
     setLoading(true)
     setValidationAttempt(null)
     setError(null)
@@ -178,13 +183,22 @@ export function FormFillPage() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!localId) return
+    const subscription = liveQuery(() => getFormSubmission(localId)).subscribe(row => {
+      if (row?.syncConflict) setSubmission(current =>
+        current?.localId === row.localId ? { ...current, syncConflict: true, serverId: row.serverId } : current)
+    })
+    return () => subscription.unsubscribe()
+  }, [localId])
+
   const ensureDraft = async (values: Record<string, unknown>, recordedAt: number): Promise<LocalFormSubmission | null> => {
     if (!units.some(unit => unit.id === reporterUnitId)) {
       setError('واحد ثبت‌کنندهٔ مجاز را انتخاب کنید.')
       return null
     }
     if (submission) {
-      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId, recordedAt, saverName)
+      const saved = await saveLocalFormDraft(submission.localId, values, reporterUnitId, recordedAt, saverName, submission)
       if (saved) setSubmission(saved)
       return saved ?? null
     }
@@ -239,7 +253,7 @@ export function FormFillPage() {
       setValidationAttempt(issues.length ? { recordedAt, final: true } : null)
       if (issues.length) return
       const row = await ensureDraft(values, recordedAt)
-      if (!row) return
+      if (!row || row.syncConflict) return
       const finalised = await markFormSubmissionLocallyFinal(row.localId, values, recordedAt)
       if (finalised) setSubmission(finalised)
       setInfo(t.forms.submittedLocal)
@@ -304,6 +318,40 @@ export function FormFillPage() {
       {lookupsReady && definition?.requiredLookups && definition.requiredLookups.length > 0 && (
         <Alert severity="success" sx={{ mb: 2 }}>
           {t.forms.offlineReady}
+        </Alert>
+      )}
+      {submission?.syncConflict && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          پاسخ‌های دستگاه محفوظ است. نسخهٔ سرور تغییر کرده است.
+          <Button disabled={busy || !submission.serverId} onClick={async () => {
+            setBusy(true)
+            try { setRemote(await fetchFormSubmission(submission.serverId!)) }
+            catch { setError('دریافت نسخهٔ سرور ممکن نشد. اتصال را بررسی کنید.') }
+            finally { setBusy(false) }
+          }}>مشاهدهٔ پاسخ‌های سرور</Button>
+          {remote && String(remote.id) === submission.serverId && (
+            <>
+              <DynamicClassForm fields={fields} control={form.control} readOnly readOnlyValues={remote.formData ?? {}} />
+              {remote.status === 'DRAFT' && <Button disabled={busy} onClick={async () => {
+                setBusy(true)
+                try {
+                  const values = form.getValues()
+                  const recordedAt = form.formState.isDirty ? serverNow() : submission.deviceTimeAt ?? serverNow()
+                  const problems = findFormSubmitBlockingIssues(fields, values, recordedAt, false)
+                  if (problems.length) {
+                    setValidationAttempt({ recordedAt, final: false })
+                    return
+                  }
+                  const saved = await saveReviewedFormDraft(submission.localId, remote, values, reporterUnitId, recordedAt, saverName)
+                  setSubmission(saved)
+                  setRemote(null)
+                  setInfo(t.forms.draftSaved)
+                  void syncManager.pushFormDraftsNow()
+                } catch (err) { setError(err instanceof Error ? err.message : 'ذخیره ممکن نشد.') }
+                finally { setBusy(false) }
+              }}>ذخیرهٔ پاسخ‌های دستگاه به‌جای این نسخهٔ سرور</Button>}
+            </>
+          )}
         </Alert>
       )}
       {submission?.draftSyncError && <Alert severity="warning">{submission.draftSyncError}</Alert>}

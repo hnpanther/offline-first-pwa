@@ -36,8 +36,9 @@ export function isTerminalFormServerStatus(
  * still waiting for the server. A delivered row may take the server's later review status.
  */
 export function formHistoryMustKeepLocal(
-  row: Pick<LocalFormSubmission, 'status' | 'syncStatus' | 'locallyEditedAt' | 'draftSyncedAt'>
+  row: Pick<LocalFormSubmission, 'status' | 'syncStatus' | 'locallyEditedAt' | 'draftSyncedAt' | 'syncConflict'>
 ): boolean {
+  if (row.syncConflict) return true
   if (row.status === 'draft' && row.locallyEditedAt != null &&
       (row.draftSyncedAt == null || row.locallyEditedAt > row.draftSyncedAt)) return true
   if (row.status === 'submitted' && row.syncStatus !== 'synced') return true

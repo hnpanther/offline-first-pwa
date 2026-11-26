@@ -35,6 +35,7 @@ export async function pushPendingFormDrafts(signal?: AbortSignal): Promise<FormD
           submissionId: row.serverId ?? null,
           formDefinitionId: row.formDefinitionId,
           ...formSchemaEvidence(row),
+          expectedUpdatedAt: row.serverUpdatedAt ?? 0,
           reporterUnitId: row.reporterUnitId,
           subjectUnitId: row.subjectUnitId,
           localId: row.localId,
@@ -72,6 +73,7 @@ async function settleDraft(
     outcome: result.outcome,
     status: result.status ?? undefined,
     message: result.message,
+    updatedAt: result.updatedAt,
     editedAt
   })
   // Once the server has a draft id, form-owned media finally has somewhere to go.

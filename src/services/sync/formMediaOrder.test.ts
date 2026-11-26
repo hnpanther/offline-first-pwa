@@ -5,6 +5,7 @@ import { db } from '@/services/storage/db'
 import { saveAttachment, getAttachment } from '@/services/storage/attachments'
 import {
   correctRejectedForm,
+  saveReviewedFormDraft,
   createLocalFormDraft,
   markFormSubmissionLocallyFinal
 } from '@/services/storage/formSubmissions'
@@ -236,4 +237,27 @@ it('retains a legacy filing for correction when its draft request is definitivel
   expect(submitFormFinal).not.toHaveBeenCalled()
   expect((await correctRejectedForm(draft.localId))?.formData).toEqual(values)
   expect((await getAttachment('photo-A'))?.blob).toBeTruthy()
+})
+
+it('preserves a stale final until the operator reviews the server draft', async () => {
+  const draft = await createLocalFormDraft({
+    formDefinitionId: '10', reporterUnitId: '1', subjectUnitId: '1', fieldDefinitionsSnapshot: []
+  })
+  await db.formSubmissions.update(draft.id, { serverId: '12', serverUpdatedAt: 10 })
+  await markFormSubmissionLocallyFinal(draft.localId, { note: 'offline' })
+  submitFormFinal.mockResolvedValueOnce({ submissionId: 12, outcome: 'CONFLICT' })
+  await pushPendingFormFinals()
+  await pushPendingFormFinals()
+  expect(submitFormFinal).toHaveBeenCalledTimes(1)
+  expect(submitFormFinal.mock.calls[0][0].expectedUpdatedAt).toBe(10)
+  expect(await db.formSubmissions.get(draft.id)).toMatchObject({
+    formData: { note: 'offline' }, syncConflict: true, serverUpdatedAt: 10
+  })
+  const remote = { id: 12, formDefinitionId: 10, reporterUnitId: 1, subjectUnitId: 1,
+    status: 'DRAFT', formData: { note: 'from panel' }, updatedAt: 20 }
+  const reviewed = await saveReviewedFormDraft(draft.localId, remote, { note: 'compared' }, '1')
+  expect(reviewed).toMatchObject({ syncConflict: false, status: 'draft', serverUpdatedAt: 20 })
+  await markFormSubmissionLocallyFinal(draft.localId, reviewed.formData)
+  await pushPendingFormFinals()
+  expect(submitFormFinal.mock.calls[1][0]).toMatchObject({ expectedUpdatedAt: 20, formData: { note: 'compared' } })
 })

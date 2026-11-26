@@ -11,7 +11,7 @@ import {
 } from '@/services/storage/attachments'
 import { db } from '@/services/storage/db'
 import { getLogSheet, getLogSheetByServerId } from '@/services/storage'
-import { getFormSubmission } from '@/services/storage/formSubmissions'
+import { getFormSubmission, updateFormSubmission } from '@/services/storage/formSubmissions'
 import { getSessionUserId } from '@/services/auth/sessionContext'
 import { isAttachmentUploadableByUser, isVoidedSubmission } from '@/utils/attachmentOwnership'
 import { isFormSubmissionOutboundOwnedByUser } from '@/services/storage/formSubmissions'
@@ -122,7 +122,7 @@ function isFormAttachmentUploadableByUser(
   userId: string | null,
   attachment: Pick<LocalAttachment, 'createdByUserId'>
 ): boolean {
-  if (!userId || !form) return false
+  if (!userId || !form || form.syncConflict) return false
   if (!isFormSubmissionOutboundOwnedByUser(form, userId)) return false
   // Row-level owner (shared tablet) — same rule as sheet media.
   if (attachment.createdByUserId && attachment.createdByUserId !== userId) return false
@@ -245,10 +245,16 @@ async function drainPendingDeletes(
       }
       if (!row.formSubmissionId || !isFormAttachmentUploadableByUser(form, userId, row)) continue
       try {
-        await deleteRemoteAttachment(row.id, signal, { submissionId: row.formSubmissionId, fieldKey: row.fieldKey })
+        await deleteRemoteAttachment(row.id, signal, {
+          submissionId: row.formSubmissionId, fieldKey: row.fieldKey, expectedUpdatedAt: form.serverUpdatedAt ?? 0
+        })
         await deleteAttachment(row.id)
         removed++
       } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          await updateFormSubmission(form.localId, { syncConflict: true })
+          continue
+        }
         if (err instanceof ApiError && err.status === 404) {
           await deleteAttachment(row.id)
           removed++

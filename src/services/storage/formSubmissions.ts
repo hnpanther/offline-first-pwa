@@ -1,3 +1,4 @@
+import type { FormSubmissionDto } from '@/services/api'
 import { attachmentIdsOf, attachmentKindForDataType, removeAttachment } from './attachments'
 import { serverNow } from '@/services/clock/serverClock'
 import { v4 as uuidv4 } from 'uuid'
@@ -28,11 +29,11 @@ export function isFormSubmissionOutboundOwnedByUser(
 
 /** Draft upsert lane — open drafts this operator dirtied, not yet mirrored / remirrored. */
 export function isFormDraftOwnedByUser(
-  row: Pick<LocalFormSubmission, 'status' | 'createdByUserId' | 'locallyEditedAt' | 'draftSyncedAt'>,
+  row: Pick<LocalFormSubmission, 'status' | 'createdByUserId' | 'locallyEditedAt' | 'draftSyncedAt' | 'syncConflict'>,
   userId: string | null
 ): boolean {
   if (!isFormSubmissionOutboundOwnedByUser(row, userId)) return false
-  if (row.status !== 'draft') return false
+  if (row.status !== 'draft' || row.syncConflict) return false
   if (row.locallyEditedAt == null) return false
   // Already mirrored at this exact edit stamp — wait for a newer save.
   if (row.draftSyncedAt != null && row.draftSyncedAt >= row.locallyEditedAt) return false
@@ -41,11 +42,11 @@ export function isFormDraftOwnedByUser(
 
 /** Final-submit lane — finished work waiting for a server outcome. */
 export function isFormFinalOwnedByUser(
-  row: Pick<LocalFormSubmission, 'status' | 'syncStatus' | 'lastSubmitOutcome' | 'createdByUserId' | 'clientActionId'>,
+  row: Pick<LocalFormSubmission, 'status' | 'syncStatus' | 'lastSubmitOutcome' | 'createdByUserId' | 'clientActionId' | 'syncConflict'>,
   userId: string | null
 ): boolean {
   if (!isFormSubmissionOutboundOwnedByUser(row, userId)) return false
-  if (row.status !== 'submitted') return false
+  if (row.status !== 'submitted' || row.syncConflict) return false
   if (row.syncStatus === 'failed' && row.lastSubmitOutcome === 'VALIDATION_ERROR') return false
   // SyncManager serializes final passes; syncing may survive an interrupted attempt.
   if (!['pending', 'failed', 'syncing'].includes(row.syncStatus)) return false
@@ -162,7 +163,13 @@ export async function createLocalFormDraft(input: {
 async function reconcileRemovedMedia(form: LocalFormSubmission, next: Record<string, unknown>) {
   const local = await db.attachments.where('formSubmissionLocalId').equals(form.localId).toArray()
   for (const file of local) {
-    if (file.pendingDelete || (file.createdByUserId && file.createdByUserId !== form.createdByUserId)) continue
+    if (file.createdByUserId && file.createdByUserId !== form.createdByUserId) continue
+    if (file.pendingDelete) {
+      if (attachmentIdsOf(next[file.fieldKey]).includes(file.id)) {
+        await db.attachments.update(file.id, { pendingDelete: false })
+      }
+      continue
+    }
     const before = attachmentIdsOf(form.formData?.[file.fieldKey])
     if (before.includes(file.id) && !attachmentIdsOf(next[file.fieldKey]).includes(file.id)) {
       await removeAttachment(file.id)
@@ -190,16 +197,27 @@ export async function saveLocalFormDraft(
   formData: Record<string, unknown>,
   reporterUnitId?: string,
   recordedAt = serverNow(),
-  saverName?: string
+  saverName?: string,
+  displayed?: LocalFormSubmission
 ): Promise<LocalFormSubmission | undefined> {
   return db.transaction('rw', db.formSubmissions, db.attachments, async () => {
     const existing = await getFormSubmission(localId)
-    if (!existing || existing.status !== 'draft') return existing
-    await reconcileRemovedMedia(existing, formData)
+    if (!existing) return
+    const finalizedWhileOpen = displayed?.status === 'draft' && existing.status === 'submitted' &&
+      existing.syncStatus === 'synced'
+    if (existing.status !== 'draft' && !finalizedWhileOpen) return existing
+    // A clean draft can be refreshed from history while its editor still displays older answers.
+    const changedBehindEditor = finalizedWhileOpen || (displayed && existing.serverUpdatedAt !== displayed.serverUpdatedAt &&
+      (existing.reporterUnitId !== displayed.reporterUnitId ||
+        JSON.stringify(existing.formData) !== JSON.stringify(displayed.formData)))
+    if (!changedBehindEditor && !existing.syncConflict) await reconcileRemovedMedia(existing, formData)
     const now = Math.max(Date.now(), (existing.locallyEditedAt ?? 0) + 1, (existing.draftSyncedAt ?? 0) + 1)
     const next: LocalFormSubmission = {
       ...existing,
       formData,
+      draftClientActionId: uuidv4(),
+      status: 'draft',
+      syncConflict: existing.syncConflict || !!changedBehindEditor,
       lastSavedByName: saverName ?? existing.lastSavedByName,
       reporterUnitId: reporterUnitId ?? existing.reporterUnitId,
       subjectUnitId: reporterUnitId ?? existing.reporterUnitId,
@@ -225,7 +243,7 @@ export async function markFormSubmissionLocallyFinal(
 ): Promise<LocalFormSubmission | undefined> {
   return db.transaction('rw', db.formSubmissions, db.attachments, async () => {
     const existing = await getFormSubmission(localId)
-    if (!existing || existing.status !== 'draft') return existing
+    if (!existing || existing.status !== 'draft' || existing.syncConflict) return existing
     await reconcileRemovedMedia(existing, formData)
     const now = Date.now()
     const next: LocalFormSubmission = {
@@ -254,12 +272,22 @@ export async function applyFormDraftSyncResult(
     outcome: string
     status?: string
     message?: string | null
+    updatedAt?: number
     editedAt?: number
   }
 ): Promise<void> {
   return db.transaction('rw', db.formSubmissions, async () => {
     const existing = await getFormSubmission(localId)
-    if (!existing || existing.status !== 'draft') return
+    if (!existing) return
+    if (existing.syncConflict || (result.updatedAt != null && result.updatedAt < (existing.serverUpdatedAt ?? 0))) return
+    if (existing.status !== 'draft') {
+      // A local final can be queued while its draft HTTP acknowledgement is in flight.
+      if (result.outcome === 'OK' && existing.syncStatus !== 'synced' && result.updatedAt != null &&
+          result.updatedAt >= (existing.serverUpdatedAt ?? 0)) {
+        await db.formSubmissions.update(existing.id, { serverId: result.serverId, serverUpdatedAt: result.updatedAt })
+      }
+      return
+    }
 
     if (result.outcome === 'OK') {
       // Conditional clear: only clear dirty if no newer edit landed while the request flew.
@@ -271,6 +299,7 @@ export async function applyFormDraftSyncResult(
         ...existing,
         serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
         serverStatus: 'DRAFT',
+        serverUpdatedAt: result.updatedAt ?? existing.serverUpdatedAt,
         draftSyncStatus: 'synced',
         draftSyncedAt: stillSameEdit ? existing.locallyEditedAt : existing.draftSyncedAt,
         draftSyncError: undefined,
@@ -281,6 +310,8 @@ export async function applyFormDraftSyncResult(
 
     await db.formSubmissions.put({
       ...existing,
+      serverId: result.serverId ?? existing.serverId,
+      syncConflict: result.outcome === 'CONFLICT' || existing.syncConflict,
       draftSyncStatus: 'failed',
       draftSyncError: result.message ?? result.outcome,
       updatedAt: Date.now()
@@ -291,6 +322,8 @@ export async function applyFormDraftSyncResult(
 export async function applyFormFinalSyncResult(
   localId: string,
   result: {
+    actionId?: string
+    updatedAt?: number
     serverId?: string
     outcome: string
     status?: string
@@ -301,6 +334,8 @@ export async function applyFormFinalSyncResult(
     const existing = await getFormSubmission(localId)
     if (!existing) return
 
+    if (existing.syncConflict || (result.actionId && result.actionId !== existing.clientActionId) ||
+        (result.updatedAt != null && result.updatedAt < (existing.serverUpdatedAt ?? 0))) return
     const accepted = result.outcome === 'OK' || result.outcome === 'DUPLICATE'
     if (accepted) {
       // Prefer the server's status when present (SUBMITTED today; APPROVED/VOIDED later)
@@ -313,6 +348,7 @@ export async function applyFormFinalSyncResult(
         ...existing,
         serverId: result.serverId != null ? String(result.serverId) : existing.serverId,
         serverStatus,
+        serverUpdatedAt: result.updatedAt ?? existing.serverUpdatedAt,
         status: 'submitted',
         syncStatus: 'synced',
         syncedAt: Date.now(),
@@ -328,6 +364,8 @@ export async function applyFormFinalSyncResult(
       ...existing,
       syncStatus: 'failed',
       lastSubmitOutcome: result.outcome,
+      serverId: result.serverId ?? existing.serverId,
+      syncConflict: result.outcome === 'CONFLICT' || existing.syncConflict,
       syncError: result.message ?? result.outcome,
       updatedAt: Date.now()
     })
@@ -342,6 +380,7 @@ export async function setFormSubmissionSyncStatus(
   return db.transaction('rw', db.formSubmissions, async () => {
     const existing = await getFormSubmission(localId)
     if (!existing) return
+    if (existing.syncConflict) return
     await db.formSubmissions.put({ ...existing, syncStatus, ...extra, updatedAt: Date.now() })
   })
 }
@@ -361,6 +400,33 @@ export async function correctRejectedForm(localId: string): Promise<LocalFormSub
       // Correction alone must not send the rejected payload again. A deliberate save dirties it.
       locallyEditedAt: undefined, draftSyncedAt: undefined,
       draftSyncStatus: undefined, draftSyncError: undefined, updatedAt: Date.now()
+    }
+    await db.formSubmissions.put(next)
+    return next
+  })
+}
+
+/** The operator compared the server's answers and chose to save their local answers as a draft. */
+export async function saveReviewedFormDraft(localId: string, remote: FormSubmissionDto,
+  values: Record<string, unknown>, reporterUnitId: string, recordedAt?: number, saverName?: string): Promise<LocalFormSubmission> {
+  const userId = await getSessionUserId()
+  return db.transaction('rw', db.formSubmissions, db.attachments, async () => {
+    const row = await getFormSubmission(localId)
+    if (!row?.syncConflict || !isFormSubmissionOutboundOwnedByUser(row, userId) ||
+        row.serverId !== String(remote.id) || String(remote.formDefinitionId) !== row.formDefinitionId ||
+        remote.status !== 'DRAFT' || remote.updatedAt == null) {
+      throw new Error('این نسخه برای اصلاح پیش‌نویس در دسترس نیست.')
+    }
+    await reconcileRemovedMedia(row, values)
+    await reconcileRemovedMedia({ ...row, formData: remote.formData ?? {} }, values)
+    const next: LocalFormSubmission = {
+      ...row, formData: values, reporterUnitId, subjectUnitId: reporterUnitId,
+      deviceTimeAt: recordedAt ?? row.deviceTimeAt, lastSavedByName: saverName ?? row.lastSavedByName,
+      status: 'draft', serverStatus: 'DRAFT', syncStatus: 'pending', syncConflict: false,
+      draftSyncStatus: 'pending', serverUpdatedAt: remote.updatedAt, locallyEditedAt: Date.now(),
+      draftSyncedAt: undefined, syncError: undefined, draftSyncError: undefined,
+      lastSubmitOutcome: undefined, clientActionId: undefined, submittedAt: undefined,
+      draftClientActionId: uuidv4(), updatedAt: Date.now()
     }
     await db.formSubmissions.put(next)
     return next

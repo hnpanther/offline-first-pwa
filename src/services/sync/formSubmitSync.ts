@@ -63,13 +63,14 @@ export async function pushPendingFormFinals(signal?: AbortSignal): Promise<FormS
     await setFormSubmissionSyncStatus(row.localId, 'syncing')
     // Upload may have re-minted a file and rewritten the stored answers.
     const fresh = await getFormSubmission(row.localId)
-    if (!fresh || fresh.status !== 'submitted' || !fresh.clientActionId) continue
+    if (!fresh || fresh.syncConflict || fresh.status !== 'submitted' || !fresh.clientActionId) continue
     try {
       const result = await submitFormFinal(
         {
           submissionId: fresh.serverId ?? null,
           formDefinitionId: fresh.formDefinitionId,
           ...formSchemaEvidence(fresh),
+          expectedUpdatedAt: fresh.serverUpdatedAt ?? 0,
           requireUploadedMedia: true,
           reporterUnitId: fresh.reporterUnitId,
           subjectUnitId: fresh.subjectUnitId,
@@ -134,6 +135,7 @@ async function ensureDraftAndUploadMedia(
           submissionId: null,
           formDefinitionId: row.formDefinitionId,
           ...formSchemaEvidence(row),
+          expectedUpdatedAt: row.serverUpdatedAt ?? 0,
           reporterUnitId: row.reporterUnitId,
           subjectUnitId: row.subjectUnitId,
           localId: row.localId,
@@ -153,6 +155,7 @@ async function ensureDraftAndUploadMedia(
       // (which ignores submitted rows) cannot clear the signature on the way through.
       await updateFormSubmission(row.localId, {
         serverId,
+        serverUpdatedAt: drafted.updatedAt,
         serverStatus: row.serverStatus ?? 'DRAFT'
       })
     } catch (err) {
@@ -185,7 +188,9 @@ async function settleFinal(row: LocalFormSubmission, result: FormSubmitResult): 
   const serverId =
     result.submissionId != null ? String(result.submissionId) : undefined
   await applyFormFinalSyncResult(row.localId, {
+    actionId: row.clientActionId,
     serverId,
+    updatedAt: result.updatedAt,
     outcome: result.outcome,
     status: result.status ?? undefined,
     message: result.message

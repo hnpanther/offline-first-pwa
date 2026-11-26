@@ -98,6 +98,16 @@ it('downloads a server draft on a fresh device without queuing an empty overwrit
   expect(row?.locallyEditedAt).toBeUndefined()
 })
 
+it('keeps typed answers when a clean open draft is finalized by the server before save', async () => {
+  await mergeOwnFormHistory([dto({ status: 'DRAFT', updatedAt: 100 })], new Map(), 'user-1')
+  const displayed = await db.formSubmissions.get('remote-1')
+  await mergeOwnFormHistory([dto({ status: 'SUBMITTED', updatedAt: 200 })], new Map(), 'user-1')
+  const saved = await saveLocalFormDraft('remote-1', { note: 'typed offline' }, '1', 300, 'Editor', displayed)
+  expect(saved).toMatchObject({ status: 'draft', syncConflict: true, formData: { note: 'typed offline' } })
+  await mergeOwnFormHistory([dto({ status: 'APPROVED', updatedAt: 400 })], new Map(), 'user-1')
+  expect(await db.formSubmissions.get('remote-1')).toMatchObject({ formData: { note: 'typed offline' } })
+})
+
 it('does not import another operator history', async () => {
   await mergeOwnFormHistory([dto({ reportedByUserId: 'user-2' })], new Map(), 'user-1')
   expect(await db.formSubmissions.count()).toBe(0)

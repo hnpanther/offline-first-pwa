@@ -37,7 +37,7 @@ export function isEligibleForFormLocalPurge(
   windows: RetentionWindows
 ): boolean {
   // Open draft — never, whatever the settings.
-  if (row.status === 'draft') return false
+  if (row.status === 'draft' || row.syncConflict) return false
 
   // Final still waiting to sync — never.
   if (row.syncStatus === 'pending' || row.syncStatus === 'syncing') return false
