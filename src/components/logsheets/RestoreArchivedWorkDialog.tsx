@@ -178,6 +178,11 @@ export default function RestoreArchivedWorkDialog({
           {t.restoreArchived.intro}
         </Typography>
 
+        {!!plan?.incompatible.length && (
+          <Alert severity="warning" sx={{ mb: 1.5 }}>
+            این پاسخ‌ها با تعریف صادرشده سازگار نیستند و در نسخهٔ بایگانی می‌مانند: {plan.incompatible.join(' / ')}
+          </Alert>
+        )}
         {conflicts > 0 && (
           <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 1.5 }}>
             {fill(t.restoreArchived.conflictWarning, conflicts)}

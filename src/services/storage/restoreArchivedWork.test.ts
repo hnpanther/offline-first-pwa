@@ -162,7 +162,9 @@ describe('buildRestorePlan', () => {
       entrySchema: { version: 1, filtered: true, byAsset: { '1': 0 },
         definitions: [[{ key: 'temp', classId: '2', label: 'Temperature' } as FieldDefinition]] }
     })
-    await restoreArchivedEntries(SERVER_ID, OP1, ['1'])
+    expect((await buildRestorePlan(SERVER_ID, OP1))?.incompatible.join(' ')).toContain('retired')
+    const result = await restoreArchivedEntries(SERVER_ID, OP1, ['1'])
+    expect(result.archiveCleared).toBe(false)
     expect(readings(await getLogSheetByServerId(SERVER_ID), '1')).toEqual({ temp: 42 })
   })
 

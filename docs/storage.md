@@ -313,4 +313,4 @@ FieldDefinition validation snapshot. See [sync.md](sync.md) for semantics and de
 
 ## Issued equipment definitions
 
-Each local sheet keeps its own version 1 `entrySchema`. Its `byAsset` indexes into the ordered lists in `definitions`. An empty list is an issued form with no measurements. A metadata refresh preserves the saved dictionary. The fill dialog, completion checks and archive restoration use the equipment id on that sheet. Existing records continue to use their frozen class definitions and asset overrides.
+Each local sheet keeps its own version 1 `entrySchema`. Its `byAsset` indexes into the ordered lists in `definitions`. An empty list is an issued form with no measurements. A metadata refresh preserves the saved dictionary. The fill dialog, completion checks and archive restoration use the equipment id on that sheet. When both the archive and the live sheet have issued schemas, restore also checks the source binding of each key. The restore dialog lists incompatible answers and keeps the archive after its compatible answers are restored. Existing records continue to use their frozen class definitions and asset overrides.

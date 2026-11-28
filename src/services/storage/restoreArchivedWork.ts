@@ -100,6 +100,7 @@ export interface RestorePlan {
   /** The live row's local id — what the caller navigates to afterwards. */
   liveLocalId: string
   assets: RestorableAsset[]
+  incompatible: string[]
 }
 
 /**
@@ -213,10 +214,14 @@ async function indexAttachments(logSheetLocalId: string): Promise<Map<string, Lo
  * <p>Starts from the live entry so that a field the archive says nothing about is left exactly as
  * it is, then applies the archived value field by field.
  */
-function issuedAnswers(sheet: LogSheet, entry: LogSheetEntryData, values: Record<string, unknown>) {
+function issuedAnswers(sheet: LogSheet, archived: LogSheet, entry: LogSheetEntryData, values: Record<string, unknown>) {
   if (!sheet.entrySchema) return values
-  const allowed = new Set(sheetFieldDefinitions(sheet, entry.classId, [], entry.assetId).map(f => f.key))
-  return Object.fromEntries(Object.entries(values).filter(([key]) => allowed.has(key)))
+  const allowed = new Map(sheetFieldDefinitions(sheet, entry.classId, [], entry.assetId).map(f => [f.key, f.bindingId]))
+  const original = archived.entrySchema
+    ? new Map(sheetFieldDefinitions(archived, entry.classId, [], entry.assetId).map(f => [f.key, f.bindingId]))
+    : null
+  return Object.fromEntries(Object.entries(values).filter(([key]) =>
+    allowed.has(key) && (!original || (original.has(key) && original.get(key) === allowed.get(key)))))
 }
 
 function mergeEntry(
@@ -306,14 +311,18 @@ export async function buildRestorePlan(
     return resolved
   }
 
+  const incompatible: string[] = []
   const assets: RestorableAsset[] = []
   for (const liveEntry of live.entries) {
     const assetId = toIdString(liveEntry.assetId)
     const archivedEntry = archivedByAsset.get(assetId)
     if (!archivedEntry || !hasEntryFormData(archivedEntry.formData)) continue
 
+    const compatible = issuedAnswers(live, archiveRow.sheet, liveEntry, archivedEntry.formData ?? {})
+    const skipped = Object.keys(archivedEntry.formData ?? {}).filter(key => !(key in compatible))
+    if (skipped.length) incompatible.push((liveEntry.assetName || assetId) + ' · ' + skipped.join('، '))
     const merged = mergeEntry(
-      issuedAnswers(live, liveEntry, archivedEntry.formData ?? {}),
+      compatible,
       liveEntry.formData ?? {},
       assetId,
       attachments
@@ -341,8 +350,8 @@ export async function buildRestorePlan(
   const round = roundRestorable(archiveRow.sheet, live, attachments)
   if (round) assets.unshift(round)
 
-  if (assets.length === 0) return null
-  return { serverId: toIdString(serverId), userId, liveLocalId: live.localId, assets }
+  if (assets.length === 0 && incompatible.length === 0) return null
+  return { serverId: toIdString(serverId), userId, liveLocalId: live.localId, assets, incompatible }
 }
 
 /**
@@ -435,7 +444,7 @@ export async function restoreArchivedEntries(
 
     const archivedEntry = archivedByAsset.get(assetId)!
     const merged = mergeEntry(
-      issuedAnswers(live, entry, archivedEntry.formData ?? {}),
+      issuedAnswers(live, archiveRow.sheet, entry, archivedEntry.formData ?? {}),
       entry.formData ?? {},
       assetId,
       attachments
@@ -472,7 +481,7 @@ export async function restoreArchivedEntries(
 
   // The archive is dropped only when nothing restorable is left behind, so a partial restore
   // keeps the rest reachable instead of stranding it the way the original bug did.
-  const archiveCleared = wanted.size === plan.assets.length
+  const archiveCleared = wanted.size === plan.assets.length && plan.incompatible.length === 0
   if (archiveCleared) await removeArchivedLogSheet(toIdString(serverId), userId)
 
   return { restoredAssetIds, archiveCleared }

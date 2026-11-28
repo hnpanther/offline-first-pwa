@@ -114,7 +114,7 @@ const formatDate = formatJalaliDateTime
 async function loadAssetClassesForEntries(
   entries: LogSheetEntryData[]
 ): Promise<AssetClass[]> {
-  const classIds = sheet?.entrySchema ? [] : [...new Set(entries.map(e => toIdString(e.classId)))]
+  const classIds = [...new Set(entries.map(e => toIdString(e.classId)))]
   const classes = await Promise.all(classIds.map(id => getAssetClass(id)))
   return classes.filter((c): c is AssetClass => c != null)
 }
